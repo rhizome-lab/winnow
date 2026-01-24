@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: Siphon
+  name: Resurrect
   text: Legacy software lifting framework
   tagline: Extract and transform applications from obsolete runtimes into modern web equivalents
   actions:

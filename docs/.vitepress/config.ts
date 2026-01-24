@@ -8,16 +8,16 @@ export default withMermaid(
         include: ['mermaid'],
       },
     },
-    title: 'Siphon',
+    title: 'Resurrect',
     description: 'Legacy software lifting framework',
 
-    base: '/siphon/',
+    base: '/resurrect/',
 
     themeConfig: {
       nav: [
         { text: 'Guide', link: '/introduction' },
         { text: 'Targets', link: '/targets/' },
-        { text: 'Rhizome', link: 'https://rhizome-lab.github.io/' },
+        { text: 'RHI', link: 'https://rhi-zone.github.io/' },
       ],
 
       sidebar: {
@@ -51,7 +51,7 @@ export default withMermaid(
       },
 
       socialLinks: [
-        { icon: 'github', link: 'https://github.com/rhizome-lab/siphon' }
+        { icon: 'github', link: 'https://github.com/rhi-zone/resurrect' }
       ],
 
       search: {
@@ -59,7 +59,7 @@ export default withMermaid(
       },
 
       editLink: {
-        pattern: 'https://github.com/rhizome-lab/siphon/edit/master/docs/:path',
+        pattern: 'https://github.com/rhi-zone/resurrect/edit/master/docs/:path',
         text: 'Edit this page on GitHub'
       },
     },

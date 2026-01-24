@@ -4,7 +4,7 @@ Behavioral rules for Claude Code in this repository.
 
 ## Overview
 
-Siphon is a legacy software lifting framework. It extracts and transforms applications from obsolete runtimes (Flash, Director, VB6, HyperCard, RPG Maker, etc.) into modern web-based equivalents.
+Resurrect is a legacy software lifting framework. It extracts and transforms applications from obsolete runtimes (Flash, Director, VB6, HyperCard, RPG Maker, etc.) into modern web-based equivalents.
 
 ### Key Components
 
@@ -18,7 +18,7 @@ Siphon is a legacy software lifting framework. It extracts and transforms applic
 
 ### Supported Targets
 
-Siphon works on **bytecode and script**, not native code:
+Resurrect works on **bytecode and script**, not native code:
 - Flash (ABC bytecode)
 - Director/Shockwave (Lingo)
 - VB6 (P-Code)
@@ -90,9 +90,9 @@ Do not:
 
 ## Crate Structure
 
-All crates use the `rhizome-siphon-` prefix:
-- `rhizome-siphon-core` - Core types and traits
-- `rhizome-siphon-cli` - CLI binary (named `siphon`)
-- `rhizome-siphon-flash` - Flash/SWF support
-- `rhizome-siphon-director` - Director/Shockwave support
+All crates use the `rhi-resurrect-` prefix:
+- `rhi-resurrect-core` - Core types and traits
+- `rhi-resurrect-cli` - CLI binary (named `resurrect`)
+- `rhi-resurrect-flash` - Flash/SWF support
+- `rhi-resurrect-director` - Director/Shockwave support
 - etc.
