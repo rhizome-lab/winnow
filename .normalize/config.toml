@@ -1,0 +1,15 @@
+# Moss configuration
+# See: https://github.com/pterror/moss
+
+[daemon]
+# enabled = true
+# auto_start = true
+
+[analyze]
+# clones = true
+
+# [analyze.weights]
+# health = 1.0
+# complexity = 0.5
+# security = 2.0
+# clones = 0.3
