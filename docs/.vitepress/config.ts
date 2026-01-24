@@ -17,7 +17,7 @@ export default withMermaid(
       nav: [
         { text: 'Guide', link: '/introduction' },
         { text: 'Targets', link: '/targets/' },
-        { text: 'RHI', link: 'https://rhi-zone.github.io/' },
+        { text: 'RHI', link: 'https://docs.rhi.zone/' },
       ],
 
       sidebar: {
