@@ -3,8 +3,9 @@
 
 set -e
 
-echo "Running cargo fmt check..."
-cargo fmt --check
+echo "Running cargo fmt..."
+cargo fmt
+git add -u
 
 echo "Running cargo clippy..."
 cargo clippy --all-targets --all-features -- -D warnings 2>/dev/null || {
