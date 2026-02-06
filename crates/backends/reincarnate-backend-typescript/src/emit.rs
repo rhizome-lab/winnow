@@ -39,16 +39,13 @@ pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
 // ---------------------------------------------------------------------------
 
 /// Scan all functions in a module for `SystemCall` ops and collect the unique
-/// system names that match known runtime systems.
+/// system names.
 fn collect_system_names(module: &Module) -> BTreeSet<String> {
-    let known: BTreeSet<&str> = SYSTEM_NAMES.iter().copied().collect();
     let mut used = BTreeSet::new();
     for (_id, func) in module.functions.iter() {
         for (_inst_id, inst) in func.insts.iter() {
             if let Op::SystemCall { system, .. } = &inst.op {
-                if known.contains(system.as_str()) {
-                    used.insert(system.clone());
-                }
+                used.insert(system.clone());
             }
         }
     }
@@ -60,13 +57,39 @@ fn emit_runtime_imports(module: &Module, out: &mut String) {
     if systems.is_empty() {
         return;
     }
-    let names: Vec<&str> = systems.iter().map(|s| s.as_str()).collect();
-    let _ = writeln!(
-        out,
-        "import {{ {} }} from \"./runtime\";",
-        names.join(", ")
-    );
-    out.push('\n');
+    // Partition into generic runtime systems and Flash-specific ones.
+    let known: BTreeSet<&str> = SYSTEM_NAMES.iter().copied().collect();
+    let mut generic: Vec<&str> = Vec::new();
+    let mut flash: Vec<String> = Vec::new();
+    for sys in &systems {
+        if known.contains(sys.as_str()) {
+            generic.push(sys.as_str());
+        } else {
+            flash.push(system_to_ident(sys));
+        }
+    }
+    if !generic.is_empty() {
+        let _ = writeln!(
+            out,
+            "import {{ {} }} from \"./runtime\";",
+            generic.join(", ")
+        );
+    }
+    if !flash.is_empty() {
+        let _ = writeln!(
+            out,
+            "import {{ {} }} from \"./runtime/flash\";",
+            flash.join(", ")
+        );
+    }
+    if !generic.is_empty() || !flash.is_empty() {
+        out.push('\n');
+    }
+}
+
+/// Convert a system name to a valid JS identifier (e.g., `Flash.Object` → `Flash_Object`).
+fn system_to_ident(system: &str) -> String {
+    system.replace('.', "_")
 }
 
 // ---------------------------------------------------------------------------
@@ -471,14 +494,15 @@ fn emit_inst(
             args,
         } => {
             let args_str = args.iter().map(|a| val(*a)).collect::<Vec<_>>().join(", ");
+            let sys_ident = system_to_ident(system);
             if let Some(r) = result {
                 let _ = writeln!(
                     out,
-                    "{indent}{} = {system}.{method}({args_str});",
+                    "{indent}{} = {sys_ident}.{method}({args_str});",
                     val(r)
                 );
             } else {
-                let _ = writeln!(out, "{indent}{system}.{method}({args_str});");
+                let _ = writeln!(out, "{indent}{sys_ident}.{method}({args_str});");
             }
         }
 
