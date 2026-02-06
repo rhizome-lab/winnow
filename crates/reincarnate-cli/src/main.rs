@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
-use reincarnate_core::pipeline::{Frontend, FrontendInput};
+use reincarnate_core::pipeline::{Frontend, FrontendInput, Transform};
 use reincarnate_core::project::{EngineOrigin, ProjectManifest};
+use reincarnate_core::transforms::TypeInference;
 
 #[derive(Parser)]
 #[command(name = "reincarnate", about = "Legacy software lifting framework")]
@@ -91,7 +92,11 @@ fn cmd_extract(manifest_path: &PathBuf) -> Result<()> {
         .extract(input)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    for module in &output.modules {
+    let type_infer = TypeInference;
+    for module in output.modules {
+        let module = type_infer
+            .apply(module)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         println!("{module}");
     }
     Ok(())

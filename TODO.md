@@ -9,7 +9,7 @@
 
 ## Future
 
-- [ ] Type inference pass (flow-sensitive, constraint-based, `Dynamic` fallback)
+- [x] Type inference pass (flow-sensitive, constraint-based, `Dynamic` fallback)
 - [ ] Coroutine lowering transform (IR coroutine ops → state machines)
 - [ ] Rust codegen backend (emit `.rs` files from typed IR)
 - [ ] TypeScript codegen backend
