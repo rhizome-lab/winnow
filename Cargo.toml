@@ -22,3 +22,6 @@ clap = { version = "4", features = ["derive"] }
 
 # Async
 tokio = { version = "1", features = ["full"] }
+
+# Flash/SWF parsing
+swf = "0.2"

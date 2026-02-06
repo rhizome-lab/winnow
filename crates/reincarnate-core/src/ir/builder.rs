@@ -135,8 +135,25 @@ impl FunctionBuilder {
         self.func.blocks[self.current_block].insts.push(inst_id);
     }
 
+    /// Add parameters to an existing block. Returns `ValueId`s for each new parameter.
+    ///
+    /// Useful when translating stack-based bytecode where merge-point types
+    /// are discovered during translation, not before block creation.
+    pub fn add_block_params(&mut self, block: BlockId, types: &[Type]) -> Vec<ValueId> {
+        let mut values = Vec::with_capacity(types.len());
+        for ty in types {
+            let value = self.func.value_types.push(ty.clone());
+            self.func.blocks[block].params.push(BlockParam {
+                value,
+                ty: ty.clone(),
+            });
+            values.push(value);
+        }
+        values
+    }
+
     /// Look up the type of a value.
-    fn value_type(&self, value: ValueId) -> Type {
+    pub fn value_type(&self, value: ValueId) -> Type {
         self.func.value_types[value].clone()
     }
 

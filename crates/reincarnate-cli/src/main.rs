@@ -44,9 +44,11 @@ fn load_manifest(path: &PathBuf) -> Result<ProjectManifest> {
     Ok(manifest)
 }
 
-fn find_frontend(_engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
-    // Future frontends slot in here as match arms on `_engine`.
-    None
+fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
+    match engine {
+        EngineOrigin::Flash => Some(Box::new(reincarnate_flash::FlashFrontend)),
+        _ => None,
+    }
 }
 
 fn cmd_info(manifest_path: &PathBuf) -> Result<()> {
