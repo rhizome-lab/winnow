@@ -24,6 +24,18 @@ impl Backend for TypeScriptBackend {
             emit::emit_module(module, &input.output_dir)?;
         }
 
+        // Write extracted assets to disk.
+        for asset in &input.assets.assets {
+            if asset.data.is_empty() {
+                continue;
+            }
+            let path = input.output_dir.join(&asset.path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, &asset.data)?;
+        }
+
         Ok(())
     }
 }

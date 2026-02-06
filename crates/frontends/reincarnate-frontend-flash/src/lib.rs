@@ -5,6 +5,7 @@
 //! reincarnate IR.
 
 pub mod abc;
+pub mod assets;
 pub mod class;
 pub mod multiname;
 pub mod scope;
@@ -14,7 +15,7 @@ use std::fs;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::pipeline::{Frontend, FrontendInput, FrontendOutput};
-use reincarnate_core::project::{AssetCatalog, EngineOrigin};
+use reincarnate_core::project::EngineOrigin;
 
 use swf::avm2::read::Reader;
 
@@ -40,7 +41,7 @@ impl Frontend for FlashFrontend {
         })?;
 
         let mut modules = Vec::new();
-        let assets = AssetCatalog::new();
+        let assets = assets::extract_assets(&swf.tags);
 
         // Extract ABC bytecode from DoAbc / DoAbc2 tags.
         for (tag_idx, tag) in swf.tags.iter().enumerate() {

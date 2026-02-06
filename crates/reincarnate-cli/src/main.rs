@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
 use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig};
-use reincarnate_core::project::{AssetCatalog, EngineOrigin, ProjectManifest, TargetBackend};
+use reincarnate_core::project::{EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
 #[derive(Parser)]
@@ -165,7 +165,7 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String]) -> Result<()> {
 
         let input = BackendInput {
             modules: modules.clone(),
-            assets: AssetCatalog::default(),
+            assets: output.assets.clone(),
             output_dir: target.output_dir.clone(),
         };
         backend

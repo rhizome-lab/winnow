@@ -18,6 +18,6 @@
 - [x] CFG simplification pass (merge redundant blocks, thread jumps)
 - [x] Transform pipeline fixpoint iteration (re-run until no changes)
 - [x] Cross-module linking pass (resolve string imports, build global symbol table)
-- [ ] Asset extraction pipeline (images, audio, fonts from SWF/etc.)
+- [x] Asset extraction pipeline (images, audio, fonts from SWF/etc.)
 - [ ] wgpu + winit renderer system implementation
 - [ ] Web Audio system implementation

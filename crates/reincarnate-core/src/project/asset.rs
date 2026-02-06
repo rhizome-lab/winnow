@@ -23,10 +23,14 @@ pub struct Asset {
     pub kind: AssetKind,
     /// Original name/path in the source binary.
     pub original_name: String,
-    /// Path to the extracted file on disk.
+    /// Relative path for the extracted file (e.g., `assets/image_1.jpg`).
     pub path: PathBuf,
     /// Size in bytes.
     pub size: u64,
+    /// Raw asset data. Skipped during serialization — only present in memory
+    /// between frontend extraction and backend emission.
+    #[serde(skip)]
+    pub data: Vec<u8>,
 }
 
 /// Catalog of all assets extracted from a project.
