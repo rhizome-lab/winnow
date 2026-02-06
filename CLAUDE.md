@@ -111,6 +111,6 @@ Do not:
 All crates use the `reincarnate-` prefix:
 - `reincarnate-core` - Core types and traits
 - `reincarnate-cli` - CLI binary (named `reincarnate`)
-- `reincarnate-flash` - Flash/SWF support
-- `reincarnate-director` - Director/Shockwave support
+- `reincarnate-frontend-flash` - Flash/SWF frontend (in `crates/frontends/`)
+- `reincarnate-frontend-director` - Director/Shockwave frontend (in `crates/frontends/`)
 - etc.

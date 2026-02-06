@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = [
+    "crates/reincarnate-core",
+    "crates/reincarnate-cli",
+    "crates/frontends/reincarnate-frontend-flash",
+]
 
 [workspace.package]
 version = "0.1.0"

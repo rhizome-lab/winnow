@@ -344,7 +344,7 @@ dependencies = [
  "anyhow",
  "clap",
  "reincarnate-core",
- "reincarnate-flash",
+ "reincarnate-frontend-flash",
  "serde_json",
 ]
 
@@ -358,7 +358,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "reincarnate-flash"
+name = "reincarnate-frontend-flash"
 version = "0.1.0"
 dependencies = [
  "reincarnate-core",
