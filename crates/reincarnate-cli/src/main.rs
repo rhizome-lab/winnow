@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
-use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, PassConfig};
+use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig};
 use reincarnate_core::project::{AssetCatalog, EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
@@ -150,6 +150,12 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String]) -> Result<()> {
         let module = pipeline.run(module).map_err(|e| anyhow::anyhow!("{e}"))?;
         modules.push(module);
     }
+
+    // Cross-module linking: validate all imports resolve.
+    Linker::link(&modules).map_err(|errors| {
+        let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+        anyhow::anyhow!("linking failed:\n  {}", msgs.join("\n  "))
+    })?;
 
     for target in &manifest.targets {
         let backend = find_backend(&target.backend);
