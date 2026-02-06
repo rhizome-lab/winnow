@@ -1,0 +1,10 @@
+[package]
+name = "reincarnate-backend-typescript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "TypeScript codegen backend for Reincarnate"
+
+[dependencies]
+reincarnate-core = { path = "../../reincarnate-core" }

@@ -338,11 +338,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "reincarnate-backend-typescript"
+version = "0.1.0"
+dependencies = [
+ "reincarnate-core",
+]
+
+[[package]]
 name = "reincarnate-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "reincarnate-backend-typescript",
  "reincarnate-core",
  "reincarnate-frontend-flash",
  "serde_json",

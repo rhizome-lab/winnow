@@ -4,6 +4,7 @@ members = [
     "crates/reincarnate-core",
     "crates/reincarnate-cli",
     "crates/frontends/reincarnate-frontend-flash",
+    "crates/backends/reincarnate-backend-typescript",
 ]
 
 [workspace.package]

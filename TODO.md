@@ -12,7 +12,7 @@
 - [x] Type inference pass (flow-sensitive, constraint-based, `Dynamic` fallback)
 - [x] Coroutine lowering transform (IR coroutine ops → state machines)
 - [ ] Rust codegen backend (emit `.rs` files from typed IR)
-- [ ] TypeScript codegen backend
+- [x] TypeScript codegen backend
 - [x] Dead code elimination pass
 - [x] Constant folding pass
 - [x] CFG simplification pass (merge redundant blocks, thread jumps)
