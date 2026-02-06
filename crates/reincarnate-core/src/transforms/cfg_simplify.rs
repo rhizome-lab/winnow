@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::CoreError;
 use crate::ir::{BlockId, Function, Module, Op, ValueId};
-use crate::pipeline::Transform;
+use crate::pipeline::{Transform, TransformResult};
 
 /// CFG simplification transform — removes redundant blocks and simplifies control flow.
 ///
@@ -560,7 +560,9 @@ fn cleanup_unreachable(func: &mut Function) -> bool {
 }
 
 /// Run CFG simplification on a single function.
-fn simplify_cfg(func: &mut Function) {
+/// Returns true if any changes were made.
+fn simplify_cfg(func: &mut Function) -> bool {
+    let mut any_changed = false;
     loop {
         let mut changed = false;
         changed |= forward_empty_blocks(func);
@@ -569,7 +571,9 @@ fn simplify_cfg(func: &mut Function) {
         if !changed {
             break;
         }
+        any_changed = true;
     }
+    any_changed
 }
 
 impl Transform for CfgSimplify {
@@ -577,11 +581,15 @@ impl Transform for CfgSimplify {
         "cfg-simplify"
     }
 
-    fn apply(&self, mut module: Module) -> Result<Module, CoreError> {
+    fn apply(&self, mut module: Module) -> Result<TransformResult, CoreError> {
+        let mut changed = false;
         for func_id in module.functions.keys().collect::<Vec<_>>() {
-            simplify_cfg(&mut module.functions[func_id]);
+            changed |= simplify_cfg(&mut module.functions[func_id]);
         }
-        Ok(module)
+        Ok(TransformResult {
+            module,
+            changed,
+        })
     }
 }
 
@@ -597,8 +605,8 @@ mod tests {
         let mut mb = ModuleBuilder::new("test");
         mb.add_function(func);
         let module = mb.build();
-        let module = CfgSimplify.apply(module).unwrap();
-        module.functions[FuncId::new(0)].clone()
+        let result = CfgSimplify.apply(module).unwrap();
+        result.module.functions[FuncId::new(0)].clone()
     }
 
     /// Empty block forwarded (no params): entry → B → C becomes entry → C,

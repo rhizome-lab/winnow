@@ -8,6 +8,8 @@ pub struct PassConfig {
     pub constant_folding: bool,
     pub cfg_simplify: bool,
     pub dead_code_elimination: bool,
+    /// When enabled, the pipeline repeats all passes until none report changes.
+    pub fixpoint: bool,
 }
 
 impl Default for PassConfig {
@@ -17,6 +19,7 @@ impl Default for PassConfig {
             constant_folding: true,
             cfg_simplify: true,
             dead_code_elimination: true,
+            fixpoint: false,
         }
     }
 }
@@ -29,6 +32,7 @@ impl PassConfig {
     /// - `"constant-folding"`
     /// - `"cfg-simplify"`
     /// - `"dead-code-elimination"`
+    /// - `"fixpoint"` — toggles pipeline fixpoint iteration
     pub fn from_skip_list(skip: &[&str]) -> Self {
         let mut config = Self::default();
         for name in skip {
@@ -37,6 +41,7 @@ impl PassConfig {
                 "constant-folding" => config.constant_folding = false,
                 "cfg-simplify" => config.cfg_simplify = false,
                 "dead-code-elimination" => config.dead_code_elimination = false,
+                "fixpoint" => config.fixpoint = false,
                 _ => {}
             }
         }
@@ -55,6 +60,7 @@ mod tests {
         assert!(config.constant_folding);
         assert!(config.cfg_simplify);
         assert!(config.dead_code_elimination);
+        assert!(!config.fixpoint);
     }
 
     #[test]
@@ -73,11 +79,13 @@ mod tests {
             "constant-folding",
             "cfg-simplify",
             "dead-code-elimination",
+            "fixpoint",
         ]);
         assert!(!config.type_inference);
         assert!(!config.constant_folding);
         assert!(!config.cfg_simplify);
         assert!(!config.dead_code_elimination);
+        assert!(!config.fixpoint);
     }
 
     #[test]

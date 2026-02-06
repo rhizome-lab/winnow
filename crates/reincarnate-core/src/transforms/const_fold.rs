@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::error::CoreError;
 use crate::ir::inst::CmpKind;
 use crate::ir::{Constant, Function, InstId, Module, Op, Type, ValueId};
-use crate::pipeline::Transform;
+use crate::pipeline::{Transform, TransformResult};
 
 /// Constant folding transform — evaluates operations with all-constant operands
 /// at compile time, replacing them with `Op::Const(result)`.
@@ -240,11 +240,15 @@ impl Transform for ConstantFolding {
         "constant-folding"
     }
 
-    fn apply(&self, mut module: Module) -> Result<Module, CoreError> {
+    fn apply(&self, mut module: Module) -> Result<TransformResult, CoreError> {
+        let mut changed = false;
         for func_id in module.functions.keys().collect::<Vec<_>>() {
-            fold_function(&mut module.functions[func_id]);
+            changed |= fold_function(&mut module.functions[func_id]);
         }
-        Ok(module)
+        Ok(TransformResult {
+            module,
+            changed,
+        })
     }
 }
 
@@ -260,8 +264,8 @@ mod tests {
         let mut mb = ModuleBuilder::new("test");
         mb.add_function(func);
         let module = mb.build();
-        let module = ConstantFolding.apply(module).unwrap();
-        module.functions[FuncId::new(0)].clone()
+        let result = ConstantFolding.apply(module).unwrap();
+        result.module.functions[FuncId::new(0)].clone()
     }
 
     /// Find the instruction that produces a given value.

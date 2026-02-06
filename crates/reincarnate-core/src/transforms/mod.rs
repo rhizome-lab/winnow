@@ -25,5 +25,6 @@ pub fn default_pipeline(config: &PassConfig) -> TransformPipeline {
     if config.dead_code_elimination {
         pipeline.add(Box::new(DeadCodeElimination));
     }
+    pipeline.set_fixpoint(config.fixpoint);
     pipeline
 }

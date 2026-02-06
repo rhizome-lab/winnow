@@ -16,7 +16,7 @@
 - [x] Dead code elimination pass
 - [x] Constant folding pass
 - [x] CFG simplification pass (merge redundant blocks, thread jumps)
-- [ ] Transform pipeline fixpoint iteration (re-run until no changes)
+- [x] Transform pipeline fixpoint iteration (re-run until no changes)
 - [ ] Cross-module linking pass (resolve string imports, build global symbol table)
 - [ ] Asset extraction pipeline (images, audio, fonts from SWF/etc.)
 - [ ] wgpu + winit renderer system implementation

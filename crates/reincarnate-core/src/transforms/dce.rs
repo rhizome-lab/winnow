@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::CoreError;
 use crate::ir::{BlockId, Constant, Function, InstId, Module, Op, ValueId};
-use crate::pipeline::Transform;
+use crate::pipeline::{Transform, TransformResult};
 
 /// Dead code elimination transform — removes unused instructions and unreachable blocks.
 ///
@@ -232,7 +232,8 @@ fn value_operands(op: &Op) -> Vec<ValueId> {
 }
 
 /// Phase 3 & 4: Mark live instructions and rewrite the function.
-fn eliminate_dead_code(func: &mut Function) {
+/// Returns true if any changes were made.
+fn eliminate_dead_code(func: &mut Function) -> bool {
     // Phase 1: Simplify constant branches.
     simplify_constant_branches(func);
 
@@ -277,16 +278,27 @@ fn eliminate_dead_code(func: &mut Function) {
     }
 
     // Phase 4: Rewrite — filter instructions in reachable blocks, clear unreachable blocks.
+    let mut changed = false;
     for block_id in func.blocks.keys().collect::<Vec<_>>() {
         if reachable.contains(&block_id) {
+            let before = func.blocks[block_id].insts.len();
             func.blocks[block_id]
                 .insts
                 .retain(|inst_id| live.contains(inst_id));
+            if func.blocks[block_id].insts.len() != before {
+                changed = true;
+            }
         } else {
+            if !func.blocks[block_id].insts.is_empty()
+                || !func.blocks[block_id].params.is_empty()
+            {
+                changed = true;
+            }
             func.blocks[block_id].insts.clear();
             func.blocks[block_id].params.clear();
         }
     }
+    changed
 }
 
 impl Transform for DeadCodeElimination {
@@ -294,11 +306,15 @@ impl Transform for DeadCodeElimination {
         "dead-code-elimination"
     }
 
-    fn apply(&self, mut module: Module) -> Result<Module, CoreError> {
+    fn apply(&self, mut module: Module) -> Result<TransformResult, CoreError> {
+        let mut changed = false;
         for func_id in module.functions.keys().collect::<Vec<_>>() {
-            eliminate_dead_code(&mut module.functions[func_id]);
+            changed |= eliminate_dead_code(&mut module.functions[func_id]);
         }
-        Ok(module)
+        Ok(TransformResult {
+            module,
+            changed,
+        })
     }
 }
 
@@ -314,8 +330,8 @@ mod tests {
         let mut mb = ModuleBuilder::new("test");
         mb.add_function(func);
         let module = mb.build();
-        let module = DeadCodeElimination.apply(module).unwrap();
-        module.functions[FuncId::new(0)].clone()
+        let result = DeadCodeElimination.apply(module).unwrap();
+        result.module.functions[FuncId::new(0)].clone()
     }
 
     /// Count non-empty instructions in a block.

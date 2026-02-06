@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::error::CoreError;
 use crate::ir::{BlockId, Function, Inst, Module, Op, Type, ValueId};
-use crate::pipeline::Transform;
+use crate::pipeline::{Transform, TransformResult};
 
 /// Type inference transform — refines `Dynamic` types to concrete types
 /// by forward dataflow analysis with fixed-point iteration.
@@ -247,8 +247,10 @@ fn infer_common_type<'a>(mut types: impl Iterator<Item = &'a Type>) -> Type {
 }
 
 /// Run type inference on a single function within the given module context.
-fn infer_function(func: &mut Function, ctx: &ModuleContext) {
+/// Returns true if any types were refined.
+fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
     let max_iters = func.value_types.len().max(1);
+    let mut any_changed = false;
 
     for _ in 0..max_iters {
         let mut changed = false;
@@ -290,6 +292,7 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) {
         if !changed {
             break;
         }
+        any_changed = true;
     }
 
     // Sync BlockParam.ty fields with value_types.
@@ -309,8 +312,11 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) {
             .collect();
         for (i, ty) in param_vals {
             func.blocks[block].params[i].ty = ty;
+            any_changed = true;
         }
     }
+
+    any_changed
 }
 
 impl Transform for TypeInference {
@@ -318,12 +324,16 @@ impl Transform for TypeInference {
         "type-inference"
     }
 
-    fn apply(&self, mut module: Module) -> Result<Module, CoreError> {
+    fn apply(&self, mut module: Module) -> Result<TransformResult, CoreError> {
         let ctx = ModuleContext::from_module(&module);
+        let mut changed = false;
         for func in module.functions.keys().collect::<Vec<_>>() {
-            infer_function(&mut module.functions[func], &ctx);
+            changed |= infer_function(&mut module.functions[func], &ctx);
         }
-        Ok(module)
+        Ok(TransformResult {
+            module,
+            changed,
+        })
     }
 }
 
@@ -358,7 +368,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[sum], Type::Int(64));
@@ -384,7 +394,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[loaded], Type::Int(64)); // Constant::Int is always Int(64).
@@ -421,7 +431,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let caller_func = &module.functions[FuncId::new(1)];
         assert_eq!(caller_func.value_types[result], Type::String);
@@ -458,7 +468,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[x], Type::Int(64));
@@ -499,7 +509,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         // Both branches send Int(64), so the merge param should be Int(64).
@@ -542,7 +552,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         // Different types → stays Dynamic.
@@ -572,7 +582,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[g], Type::Int(64));
@@ -600,7 +610,7 @@ mod tests {
         let module = mb.build();
 
         let transform = TypeInference;
-        let module = transform.apply(module).unwrap();
+        let module = transform.apply(module).unwrap().module;
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[cmp], Type::Bool);
