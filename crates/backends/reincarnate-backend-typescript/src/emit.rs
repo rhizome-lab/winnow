@@ -382,6 +382,11 @@ fn collect_class_references(group: &ClassGroup<'_>, registry: &ClassRegistry) ->
         }
     }
 
+    // Struct fields (class instance fields).
+    for (_name, ty) in &group.struct_def.fields {
+        collect_type_ref(ty, self_name, registry, &mut refs);
+    }
+
     // Scan all method bodies for type references.
     for (_fid, func) in &group.methods {
         collect_type_refs_from_function(func, self_name, registry, &mut refs);
