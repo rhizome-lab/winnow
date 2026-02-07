@@ -13,7 +13,7 @@
 - [x] Receiver-aware method resolution (class hierarchy walk, unique bare name fallback)
 - [x] Redundant cast elimination pass (`Cast(v, ty)` → `Copy(v)` when types match)
 - [x] Coroutine lowering transform (IR coroutine ops → state machines)
-- [ ] Rust codegen backend (emit `.rs` files from typed IR — **blocked on constraint-based inference**)
+- [ ] Rust codegen backend (emit `.rs` files from typed IR — **blocked on alloc type refinement + multi-typed locals**)
 - [x] TypeScript codegen backend
 - [x] Dead code elimination pass
 - [x] Constant folding pass
@@ -45,11 +45,11 @@ value needs a concrete type. This isn't a polish pass; it's a prerequisite.
 - [x] Redundant cast elimination
 
 ### What's needed
-- [ ] **Constraint-based solving** — generate type constraints from operations
-  (e.g., `Add(a, b)` → `a: Numeric, b: Numeric, result: Numeric`), solve via
-  unification. Replaces the ad-hoc forward propagation with a principled system
-  that handles backward flow (e.g., argument used as `number` constrains the
-  caller's variable).
+- [x] **Constraint-based solving** — `ConstraintSolve` pass generates equality
+  constraints from operations and solves via union-find unification. Runs after
+  forward `TypeInference` to propagate types backward (e.g., call argument used
+  as `number` constrains the caller's variable). Reduced `:any` in Flash test
+  output from 454 → 445.
 - [ ] **Flow-sensitive narrowing** — narrow types after guards
   (`if (x instanceof Foo)` → `x: Foo` in then-branch). Requires per-block type
   environments rather than the current single `value_types` map. SSA form helps
@@ -62,6 +62,44 @@ value needs a concrete type. This isn't a polish pass; it's a prerequisite.
 - [x] **Flash frontend: extract local variable names** — Done. Extracts from
   `MethodParam.name` and `Op::Debug` opcodes. Names propagate through Mem2Reg
   and appear in TypeScript output.
+- [ ] **Alloc type refinement** — The single biggest remaining `:any` source
+  (~390 of 445). The Flash frontend creates `alloc dyn` for all locals. Even
+  when every Store to an alloc writes the same concrete type (e.g. `Function`,
+  `f64`), the alloc's own value_type stays `Dynamic`. The emitter declares
+  locals using the alloc's type. Fix: if all stores to an `alloc dyn` agree on
+  type, refine the alloc value_type to that type. Could live in the forward
+  pass (`build_alloc_types` already computes the info but only uses it for Load
+  refinement) or as a dedicated micro-pass.
 - [ ] **Untyped frontend validation** — test the inference pipeline against a
   fully-untyped IR (simulating Lingo/HyperCard) to verify it can reconstruct
   useful types from usage patterns alone.
+
+### Remaining `:any` analysis (Flash test, 445 total)
+
+Measured on CoC.ts (36k lines) after TypeInference + ConstraintSolve.
+
+| Category | Count | Root cause |
+|----------|-------|------------|
+| `const` locals | ~390 | Multi-store `alloc dyn` — alloc value_type stays Dynamic even when all stores agree. Emitter uses alloc type for declaration. |
+| `let` locals | ~34 | Same as above but for Mem2Reg-promoted block params where incoming args don't all agree yet. |
+| `any[]` arrays | 6 | Array element type unknown because elements are Dynamic (cascading from alloc issue). |
+| Struct fields | 4 | Empty struct definitions (e.g. `struct Camp {}`) — fields accessed via GetField have no type info. Flash frontend doesn't populate all struct fields. |
+| Multi-typed locals | ~5 | Genuinely different types assigned in different branches (e.g. `race = 0.0` then `race = "human"`). See Known Issues below. |
+
+### Known Issues
+
+- **Multi-typed locals** — Some Flash locals are assigned different types in
+  different branches (e.g. `race` initialized to `0.0` as a sentinel, then
+  assigned `this.player.race()` which returns `string`). These correctly stay
+  `Dynamic` / `:any` today. For TypeScript this is ugly but functional. For
+  Rust emit this is a hard blocker — Rust has no `any` type. Options:
+  - **Split into separate variables** — SSA already distinguishes the defs, but
+    the emitter coalesces them back into one mutable local. Could emit separate
+    variables for each SSA def when types disagree.
+  - **Enum wrapper** — generate a `Value2<A, B>` or tagged union for the
+    specific types observed. Heavy, but correct.
+  - **Sentinel elimination** — many cases are `0` or `null` sentinels followed
+    by the real value. A pass that recognizes sentinel-then-overwrite patterns
+    could use `Option<T>` instead of a union.
+  - For TypeScript, the pragmatic fix is to emit a union type annotation
+    (`number | string`) instead of `any`, which at least preserves type safety.
