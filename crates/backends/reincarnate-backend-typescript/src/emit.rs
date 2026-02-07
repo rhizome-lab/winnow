@@ -1452,26 +1452,37 @@ fn emit_inst(
                         sanitize_ident(method)
                     )
                 }
-            } else {
-                // Unqualified call: strip scope-lookup first arg if present
-                let has_scope_receiver =
-                    !args.is_empty() && ctx.scope_lookups.contains(&args[0]);
-                let effective_args: Vec<_> = if has_scope_receiver {
-                    args[1..].iter().map(|a| ctx.val(*a)).collect()
-                } else {
-                    args.iter().map(|a| ctx.val(*a)).collect()
-                };
-                let args_str = effective_args.join(", ");
+            } else if !args.is_empty() && ctx.scope_lookups.contains(&args[0]) {
+                // Scope-lookup receiver — strip it; emit as this.method() or
+                // bare global depending on whether fname is in the class hierarchy.
+                let rest_args = args[1..]
+                    .iter()
+                    .map(|a| ctx.val(*a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let safe_name = sanitize_ident(fname);
-                if has_scope_receiver
-                    && ctx.self_value.is_some()
-                    && ctx.method_names.contains(fname)
-                {
-                    // Inherited method call — resolve to this.method()
-                    format!("this.{safe_name}({args_str})")
+                if ctx.self_value.is_some() && ctx.method_names.contains(fname) {
+                    format!("this.{safe_name}({rest_args})")
                 } else {
-                    format!("{safe_name}({args_str})")
+                    format!("{safe_name}({rest_args})")
                 }
+            } else if !args.is_empty() {
+                // Unqualified call with a real receiver (callproperty pattern):
+                // args[0] is the receiver, args[1..] are the arguments.
+                let receiver = args[0];
+                let rest_args = args[1..]
+                    .iter()
+                    .map(|a| ctx.val(*a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{}.{}({rest_args})",
+                    ctx.operand(receiver),
+                    sanitize_ident(fname)
+                )
+            } else {
+                // No args at all — bare function call.
+                format!("{}()", sanitize_ident(fname))
             };
             if let Some(r) = result {
                 emit_or_inline(ctx, r, expr, false, out, indent);
@@ -3414,8 +3425,9 @@ mod tests {
     }
 
     #[test]
-    fn call_non_scope_first_arg_unchanged() {
-        // Normal call without scope lookup — all args preserved
+    fn call_unqualified_non_scope_emits_method_dispatch() {
+        // Unqualified call without scope lookup → receiver.method(rest) pattern
+        // (matches AVM2 callproperty semantics where args[0] is the receiver).
         let out = build_and_emit(|mb| {
             let sig = FunctionSig {
                 params: vec![Type::Int(64), Type::Int(64)],
@@ -3430,8 +3442,8 @@ mod tests {
         });
 
         assert!(
-            out.contains("add(v0, v1)"),
-            "Should preserve all args for non-scope call:\n{out}"
+            out.contains("v0.add(v1)"),
+            "Should emit receiver.method(rest) for non-scope unqualified call:\n{out}"
         );
     }
 
@@ -3490,8 +3502,9 @@ mod tests {
 
     #[test]
     fn scope_lookup_call_resolves_to_this_for_inherited_method() {
-        // In a method context, an unqualified call whose name matches a method
-        // in the class hierarchy should emit this.method() instead of method().
+        // In a method context, an unqualified call with scope-lookup receiver
+        // whose name matches a method in the class hierarchy should emit
+        // this.method() instead of method().
         let mut mb = ModuleBuilder::new("test");
 
         mb.add_struct(StructDef {
@@ -3562,6 +3575,28 @@ mod tests {
         assert!(
             !out.contains("findPropStrict"),
             "findPropStrict should be resolved away:\n{out}"
+        );
+    }
+
+    #[test]
+    fn unqualified_callproperty_emits_receiver_dot_method() {
+        // AVM2 callproperty pattern: call "isNaga"(player) → player.isNaga()
+        // No findPropStrict — args[0] is the real receiver.
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Bool,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let player = fb.param(0);
+            let result = fb.call("isNaga", &[player], Type::Bool);
+            fb.ret(Some(result));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("v0.isNaga()"),
+            "Should emit receiver.method() for callproperty pattern:\n{out}"
         );
     }
 
