@@ -24,6 +24,7 @@ pub fn translate_method_body(
     body: &MethodBody,
     func_name: &str,
     sig: FunctionSig,
+    param_names: &[Option<String>],
 ) -> Result<Function, String> {
     let ops = parse_bytecode(&body.code)?;
     let offset_map = offset_to_index_map(&ops);
@@ -83,6 +84,16 @@ pub fn translate_method_body(
             fb.store(slot, param_val);
         }
         locals.push(slot);
+    }
+
+    // Name parameters from debug info (MethodParam.name).
+    for (i, name) in param_names.iter().enumerate() {
+        if let Some(n) = name {
+            if i < num_params {
+                let param_val = fb.param(i);
+                fb.name_value(param_val, n.clone());
+            }
+        }
     }
 
     let mut stack: Vec<ValueId> = Vec::new();
@@ -1626,8 +1637,22 @@ fn translate_op(
         // ====================================================================
         // Debug / no-ops
         // ====================================================================
-        Op::Debug { .. }
-        | Op::DebugFile { .. }
+        Op::Debug {
+            is_local_register,
+            register_name,
+            register,
+        } => {
+            if *is_local_register {
+                let name = pool_string(pool, register_name);
+                if !name.is_empty() {
+                    let idx = *register as usize;
+                    if idx < locals.len() {
+                        fb.name_value(locals[idx], name);
+                    }
+                }
+            }
+        }
+        Op::DebugFile { .. }
         | Op::Bkpt
         | Op::BkptLine { .. }
         | Op::Timestamp
@@ -1787,7 +1812,7 @@ mod tests {
             return_ty: Type::Void,
         };
 
-        let func = translate_method_body(&abc, &body, "test", sig).unwrap();
+        let func = translate_method_body(&abc, &body, "test", sig, &[]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("return"), "expected return in:\n{output}");
     }
@@ -1820,7 +1845,7 @@ mod tests {
             return_ty: Type::Int(32),
         };
 
-        let func = translate_method_body(&abc, &body, "answer", sig).unwrap();
+        let func = translate_method_body(&abc, &body, "answer", sig, &[]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("const 42"), "expected const 42 in:\n{output}");
         assert!(output.contains("return"), "expected return in:\n{output}");
@@ -1854,7 +1879,7 @@ mod tests {
             return_ty: Type::Dynamic,
         };
 
-        let func = translate_method_body(&abc, &body, "add_test", sig).unwrap();
+        let func = translate_method_body(&abc, &body, "add_test", sig, &[]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("const 3"), "expected const 3 in:\n{output}");
         assert!(output.contains("const 4"), "expected const 4 in:\n{output}");
@@ -1890,7 +1915,7 @@ mod tests {
             return_ty: Type::Dynamic,
         };
 
-        let func = translate_method_body(&abc, &body, "local_test", sig).unwrap();
+        let func = translate_method_body(&abc, &body, "local_test", sig, &[]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("store"), "expected store in:\n{output}");
         assert!(output.contains("load"), "expected load in:\n{output}");

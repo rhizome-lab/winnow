@@ -5,7 +5,7 @@ use reincarnate_core::ir::{
 };
 use swf::avm2::types::{AbcFile, ConstantPool, Index, Trait, TraitKind};
 
-use crate::multiname::{resolve_multiname_index, resolve_multiname_structured, resolve_type, NsKind};
+use crate::multiname::{pool_string, resolve_multiname_index, resolve_multiname_structured, resolve_type, NsKind};
 use crate::translate::translate_method_body;
 
 /// Information about a translated class.
@@ -262,17 +262,21 @@ fn translate_class_method(
         return Ok(None); // Native method, no body
     };
 
-    // Build parameter types
+    // Build parameter types and extract parameter names.
     let mut param_types = Vec::new();
+    let mut param_names: Vec<Option<String>> = Vec::new();
     if has_self {
         if let Some(name) = class_name {
             param_types.push(Type::Struct(name.to_string()));
         } else {
             param_types.push(Type::Dynamic);
         }
+        param_names.push(None); // `this` — backend handles via self_value
     }
     for param in &method.params {
         param_types.push(resolve_type(pool, &param.kind));
+        let name = param.name.as_ref().map(|idx| pool_string(pool, idx)).filter(|s| !s.is_empty());
+        param_names.push(name);
     }
 
     let return_type = resolve_type(pool, &method.return_type);
@@ -282,7 +286,7 @@ fn translate_class_method(
         return_ty: return_type,
     };
 
-    let func = translate_method_body(abc, body, func_name, sig)?;
+    let func = translate_method_body(abc, body, func_name, sig, &param_names)?;
     Ok(Some(func))
 }
 
@@ -329,7 +333,7 @@ pub fn translate_abc_to_module(abc: &AbcFile, module_name: &str) -> Result<Modul
                     params: vec![],
                     return_ty: return_type,
                 };
-                let func = translate_method_body(abc, body, &func_name, sig)?;
+                let func = translate_method_body(abc, body, &func_name, sig, &[])?;
                 mb.add_function(func);
             }
         }
