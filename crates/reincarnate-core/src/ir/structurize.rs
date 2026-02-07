@@ -36,8 +36,10 @@ pub enum Shape {
         cond: ValueId,
         then_assigns: Vec<BlockArgAssign>,
         then_body: Box<Shape>,
+        then_trailing_assigns: Vec<BlockArgAssign>,
         else_assigns: Vec<BlockArgAssign>,
         else_body: Box<Shape>,
+        else_trailing_assigns: Vec<BlockArgAssign>,
     },
     /// `while (cond) { body }`
     WhileLoop {
@@ -66,6 +68,24 @@ pub enum Shape {
     Continue,
     /// `break` to an outer loop, `depth` levels up (0 = innermost).
     LabeledBreak { depth: usize },
+    /// Short-circuit OR: `phi = cond || rhs`
+    /// `rhs_body` executes only when `cond` is falsy.
+    LogicalOr {
+        block: BlockId,
+        cond: ValueId,
+        phi: ValueId,
+        rhs_body: Box<Shape>,
+        rhs: ValueId,
+    },
+    /// Short-circuit AND: `phi = cond && rhs`
+    /// `rhs_body` executes only when `cond` is truthy.
+    LogicalAnd {
+        block: BlockId,
+        cond: ValueId,
+        phi: ValueId,
+        rhs_body: Box<Shape>,
+        rhs: ValueId,
+    },
     /// Fallback dispatch for irreducible CFG subgraphs.
     Dispatch {
         blocks: Vec<BlockId>,
@@ -565,8 +585,8 @@ impl<'a> Structurizer<'a> {
                 let then_args = then_args.clone();
                 let else_args = else_args.clone();
 
-                let mut then_assigns = self.branch_assigns(then_target, &then_args);
-                let mut else_assigns = self.branch_assigns(else_target, &else_args);
+                let then_assigns = self.branch_assigns(then_target, &then_args);
+                let else_assigns = self.branch_assigns(else_target, &else_args);
 
                 // Check if inside a loop and branches target header/exit.
                 if let Some(lb) = loop_body {
@@ -588,8 +608,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(Shape::Continue),
+                            else_trailing_assigns: vec![],
                         };
                     }
 
@@ -600,8 +622,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(Shape::Break),
+                            else_trailing_assigns: vec![],
                         };
                     }
 
@@ -614,8 +638,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(else_body_shape),
+                            else_trailing_assigns: vec![],
                         };
                     }
 
@@ -628,8 +654,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(Shape::Break),
+                            else_trailing_assigns: vec![],
                         };
                     }
 
@@ -642,8 +670,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(else_body_shape),
+                            else_trailing_assigns: vec![],
                         };
                     }
                     if else_is_header {
@@ -654,8 +684,10 @@ impl<'a> Structurizer<'a> {
                             cond,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
+                            then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(Shape::Continue),
+                            else_trailing_assigns: vec![],
                         };
                     }
                 }
@@ -686,19 +718,27 @@ impl<'a> Structurizer<'a> {
 
                 // Recover trailing assigns from Br-to-merge that the
                 // structurizer drops when it stops at the merge boundary.
-                if let Some(merge_block) = merge {
-                    then_assigns.extend(self.trailing_merge_assigns(&then_body, merge_block));
-                    else_assigns.extend(self.trailing_merge_assigns(&else_body, merge_block));
-                }
+                let (then_trailing_assigns, else_trailing_assigns) =
+                    if let Some(merge_block) = merge {
+                        (
+                            self.trailing_merge_assigns(&then_body, merge_block),
+                            self.trailing_merge_assigns(&else_body, merge_block),
+                        )
+                    } else {
+                        (vec![], vec![])
+                    };
 
                 let if_shape = Shape::IfElse {
                     block,
                     cond,
                     then_assigns,
                     then_body: Box::new(then_body),
+                    then_trailing_assigns,
                     else_assigns,
                     else_body: Box::new(else_body),
+                    else_trailing_assigns,
                 };
+                let if_shape = self.try_logical_op(if_shape);
 
                 if let Some(merge_block) = merge {
                     if Some(merge_block) != until {
@@ -1080,6 +1120,75 @@ impl<'a> Structurizer<'a> {
             }
         }
         None
+    }
+
+    /// Try to upgrade an IfElse into a LogicalOr or LogicalAnd.
+    ///
+    /// **OR:** `then_assigns == [{phi, cond}]`, `then_body` empty,
+    /// `then_trailing` empty, `else_assigns` empty,
+    /// `else_trailing == [{phi, rhs}]`
+    /// → `LogicalOr { block, cond, phi, rhs_body: else_body, rhs }`
+    ///
+    /// **AND:** `else_assigns == [{phi, cond}]`, `else_body` empty,
+    /// `else_trailing` empty, `then_assigns` empty,
+    /// `then_trailing == [{phi, rhs}]`
+    /// → `LogicalAnd { block, cond, phi, rhs_body: then_body, rhs }`
+    fn try_logical_op(&self, shape: Shape) -> Shape {
+        let Shape::IfElse {
+            block,
+            cond,
+            ref then_assigns,
+            ref then_body,
+            ref then_trailing_assigns,
+            ref else_assigns,
+            ref else_body,
+            ref else_trailing_assigns,
+        } = shape
+        else {
+            return shape;
+        };
+
+        // OR: then directly assigns phi=cond, else computes rhs
+        if then_assigns.len() == 1
+            && then_assigns[0].src == cond
+            && **then_body == Shape::Seq(vec![])
+            && then_trailing_assigns.is_empty()
+            && else_assigns.is_empty()
+            && else_trailing_assigns.len() == 1
+            && else_trailing_assigns[0].dst == then_assigns[0].dst
+        {
+            let phi = then_assigns[0].dst;
+            let rhs = else_trailing_assigns[0].src;
+            return Shape::LogicalOr {
+                block,
+                cond,
+                phi,
+                rhs_body: else_body.clone(),
+                rhs,
+            };
+        }
+
+        // AND: else directly assigns phi=cond, then computes rhs
+        if else_assigns.len() == 1
+            && else_assigns[0].src == cond
+            && **else_body == Shape::Seq(vec![])
+            && else_trailing_assigns.is_empty()
+            && then_assigns.is_empty()
+            && then_trailing_assigns.len() == 1
+            && then_trailing_assigns[0].dst == else_assigns[0].dst
+        {
+            let phi = else_assigns[0].dst;
+            let rhs = then_trailing_assigns[0].src;
+            return Shape::LogicalAnd {
+                block,
+                cond,
+                phi,
+                rhs_body: then_body.clone(),
+                rhs,
+            };
+        }
+
+        shape
     }
 
     /// Structurize a general loop (while(true) with break/continue).
@@ -1490,15 +1599,13 @@ mod tests {
     }
 
     #[test]
-    fn test_if_else_trailing_merge_assigns() {
-        // entry: br_if cond, then_block(cond), else_mid()
-        // then_block: ... (directly targets merge via BrIf args)
-        // else_mid: v_cmp = cmp.gt ...; br merge(v_cmp)  ← trailing assign
-        // merge(v_phi): return
+    fn test_logical_or_trailing_merge_assigns() {
+        // entry: br_if cond, merge(cond), else_mid()
+        // else_mid: v_cmp = cmp.gt ...; br merge(v_cmp)
+        // merge(v_phi): return v_phi
         //
-        // The else branch goes through an intermediate block that Br's to
-        // merge with args. The trailing assign (v_phi = v_cmp) must be
-        // captured in else_assigns.
+        // This is the short-circuit OR pattern: v_phi = cond || v_cmp.
+        // The structurizer should upgrade the IfElse to LogicalOr.
         let sig = FunctionSig {
             params: vec![Type::Bool, Type::Int(64), Type::Int(64)],
             return_ty: Type::Bool,
@@ -1527,33 +1634,26 @@ mod tests {
         let func = fb.build();
         let shape = structurize(&func);
 
-        // Find the IfElse and check assigns.
-        fn find_if_else(shape: &Shape) -> Option<&Shape> {
+        // Should produce LogicalOr.
+        fn find_logical_or(shape: &Shape) -> Option<&Shape> {
             match shape {
-                s @ Shape::IfElse { .. } => Some(s),
-                Shape::Seq(parts) => parts.iter().find_map(find_if_else),
+                s @ Shape::LogicalOr { .. } => Some(s),
+                Shape::Seq(parts) => parts.iter().find_map(find_logical_or),
                 _ => None,
             }
         }
 
-        let ie = find_if_else(&shape).expect("Expected IfElse in shape");
-        if let Shape::IfElse {
-            then_assigns,
-            else_assigns,
+        let lo = find_logical_or(&shape).expect("Expected LogicalOr in shape");
+        if let Shape::LogicalOr {
+            cond: lo_cond,
+            phi,
+            rhs,
             ..
-        } = ie
+        } = lo
         {
-            // then branch: direct to merge with cond → then_assigns has v_phi=cond
-            assert_eq!(then_assigns.len(), 1, "then_assigns: {then_assigns:?}");
-            assert_eq!(then_assigns[0].dst, v_phi);
-            assert_eq!(then_assigns[0].src, cond);
-
-            // else branch: goes through else_mid which Br's to merge with v_cmp
-            // The trailing assign v_phi=v_cmp must be captured.
-            assert!(
-                else_assigns.iter().any(|a| a.dst == v_phi && a.src == v_cmp),
-                "else_assigns should contain v_phi=v_cmp, got: {else_assigns:?}"
-            );
+            assert_eq!(*lo_cond, cond);
+            assert_eq!(*phi, v_phi);
+            assert_eq!(*rhs, v_cmp);
         } else {
             unreachable!();
         }
@@ -1606,18 +1706,132 @@ mod tests {
 
         let ie = find_if_else(&shape).expect("Expected IfElse in shape");
         if let Shape::IfElse {
-            then_assigns,
-            else_assigns,
+            then_trailing_assigns,
+            else_trailing_assigns,
             ..
         } = ie
         {
             assert!(
-                then_assigns.iter().any(|a| a.dst == v_phi && a.src == v1),
-                "then_assigns should contain v_phi=v1, got: {then_assigns:?}"
+                then_trailing_assigns
+                    .iter()
+                    .any(|a| a.dst == v_phi && a.src == v1),
+                "then_trailing_assigns should contain v_phi=v1, got: {then_trailing_assigns:?}"
             );
             assert!(
-                else_assigns.iter().any(|a| a.dst == v_phi && a.src == v2),
-                "else_assigns should contain v_phi=v2, got: {else_assigns:?}"
+                else_trailing_assigns
+                    .iter()
+                    .any(|a| a.dst == v_phi && a.src == v2),
+                "else_trailing_assigns should contain v_phi=v2, got: {else_trailing_assigns:?}"
+            );
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn test_logical_and() {
+        // entry: br_if cond, then_mid(), merge(cond)
+        // then_mid: v_cmp = cmp.lt ...; br merge(v_cmp)
+        // merge(v_phi): return v_phi
+        //
+        // Short-circuit AND: v_phi = cond && v_cmp.
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64), Type::Int(64)],
+            return_ty: Type::Bool,
+        };
+        let mut fb = FunctionBuilder::new("logical_and", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let a = fb.param(1);
+        let b = fb.param(2);
+
+        let then_mid = fb.create_block();
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Bool]);
+
+        // entry: br_if cond → then_mid(), merge(cond)
+        fb.br_if(cond, then_mid, &[], merge, &[cond]);
+
+        // then_mid: v_cmp = a < b; br merge(v_cmp)
+        fb.switch_to_block(then_mid);
+        let v_cmp = fb.cmp(CmpKind::Lt, a, b);
+        fb.br(merge, &[v_cmp]);
+
+        // merge(v_phi): return v_phi
+        fb.switch_to_block(merge);
+        let v_phi = merge_vals[0];
+        fb.ret(Some(v_phi));
+
+        let func = fb.build();
+        let shape = structurize(&func);
+
+        fn find_logical_and(shape: &Shape) -> Option<&Shape> {
+            match shape {
+                s @ Shape::LogicalAnd { .. } => Some(s),
+                Shape::Seq(parts) => parts.iter().find_map(find_logical_and),
+                _ => None,
+            }
+        }
+
+        let la = find_logical_and(&shape).expect("Expected LogicalAnd in shape");
+        if let Shape::LogicalAnd {
+            cond: la_cond,
+            phi,
+            rhs,
+            ..
+        } = la
+        {
+            assert_eq!(*la_cond, cond);
+            assert_eq!(*phi, v_phi);
+            assert_eq!(*rhs, v_cmp);
+        } else {
+            unreachable!();
+        }
+    }
+
+    #[test]
+    fn test_logical_or_with_empty_body() {
+        // entry: br_if cond, merge(cond), else_block()
+        // else_block: br merge(other)   ← no intermediate computation
+        // merge(v_phi): return v_phi
+        //
+        // Simplest OR: v_phi = cond || other (rhs_body is empty).
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Bool],
+            return_ty: Type::Bool,
+        };
+        let mut fb = FunctionBuilder::new("or_simple", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let other = fb.param(1);
+
+        let else_block = fb.create_block();
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Bool]);
+
+        fb.br_if(cond, merge, &[cond], else_block, &[]);
+
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[other]);
+
+        fb.switch_to_block(merge);
+        let v_phi = merge_vals[0];
+        fb.ret(Some(v_phi));
+
+        let func = fb.build();
+        let shape = structurize(&func);
+
+        fn find_logical_or(shape: &Shape) -> Option<&Shape> {
+            match shape {
+                s @ Shape::LogicalOr { .. } => Some(s),
+                Shape::Seq(parts) => parts.iter().find_map(find_logical_or),
+                _ => None,
+            }
+        }
+
+        let lo = find_logical_or(&shape).expect("Expected LogicalOr in shape");
+        if let Shape::LogicalOr { rhs_body, .. } = lo {
+            // The rhs_body should contain only Block(else_block) which
+            // has no non-terminator instructions.
+            assert!(
+                matches!(**rhs_body, Shape::Block(_)),
+                "Expected Block in rhs_body, got: {rhs_body:?}"
             );
         } else {
             unreachable!();

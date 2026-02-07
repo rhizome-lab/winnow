@@ -439,15 +439,97 @@ fn compute_needs_let(func: &Function) -> HashSet<ValueId> {
     needs_let
 }
 
-/// Count how many times each value is used as an operand across all instructions.
+/// Count how many times each value is used as an operand across live instructions.
+///
+/// Only counts instructions that are actually in blocks — orphaned instructions
+/// left in the arena by transforms (e.g. dead Copies from Mem2Reg) are excluded.
 fn compute_use_counts(func: &Function) -> HashMap<ValueId, usize> {
     let mut counts = HashMap::new();
-    for (_id, inst) in func.insts.iter() {
-        for v in value_operands(&inst.op) {
-            *counts.entry(v).or_insert(0) += 1;
+    for (_block_id, block) in func.blocks.iter() {
+        for &inst_id in &block.insts {
+            for v in value_operands(&func.insts[inst_id].op) {
+                *counts.entry(v).or_insert(0) += 1;
+            }
         }
     }
     counts
+}
+
+/// Adjust use counts for LogicalOr/LogicalAnd shapes.
+///
+/// In the IR, a BrIf uses `cond` twice (as condition + branch arg).
+/// After folding into `cond || rhs` or `cond && rhs`, `cond` appears
+/// only once. Decrement by 1 so the inline system can fold single-use
+/// values through the `||`/`&&` expression.
+///
+/// Only adjusts when rhs_body will emit empty (clean `||`/`&&` path).
+fn adjust_use_counts_for_logical_ops(ctx: &mut EmitCtx, func: &Function, shape: &Shape) {
+    match shape {
+        Shape::LogicalOr {
+            cond, rhs_body, ..
+        }
+        | Shape::LogicalAnd {
+            cond, rhs_body, ..
+        } => {
+            if logical_rhs_body_emits_empty(ctx, func, rhs_body) {
+                if let Some(count) = ctx.use_counts.get_mut(cond) {
+                    *count = count.saturating_sub(1);
+                }
+            }
+            adjust_use_counts_for_logical_ops(ctx, func, rhs_body);
+        }
+        Shape::Seq(parts) => {
+            for part in parts {
+                adjust_use_counts_for_logical_ops(ctx, func, part);
+            }
+        }
+        Shape::IfElse {
+            then_body,
+            else_body,
+            ..
+        } => {
+            adjust_use_counts_for_logical_ops(ctx, func, then_body);
+            adjust_use_counts_for_logical_ops(ctx, func, else_body);
+        }
+        Shape::WhileLoop { body, .. }
+        | Shape::ForLoop { body, .. }
+        | Shape::Loop { body, .. } => {
+            adjust_use_counts_for_logical_ops(ctx, func, body);
+        }
+        _ => {}
+    }
+}
+
+/// Check if a LogicalOr/LogicalAnd rhs_body will produce no visible output.
+///
+/// True when every non-terminator instruction in the body would be inlined
+/// (single-use result) or the block is empty.
+fn logical_rhs_body_emits_empty(ctx: &EmitCtx, func: &Function, shape: &Shape) -> bool {
+    match shape {
+        Shape::Seq(parts) => parts
+            .iter()
+            .all(|p| logical_rhs_body_emits_empty(ctx, func, p)),
+        Shape::Block(b) => {
+            let block = &func.blocks[*b];
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id];
+                match &inst.op {
+                    Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => break,
+                    _ => {
+                        if let Some(r) = inst.result {
+                            if !ctx.should_inline(r) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +954,7 @@ fn emit_function(
         emit_block_param_declarations(&ctx, func, out);
 
         let shape = structurize::structurize(func);
+        adjust_use_counts_for_logical_ops(&mut ctx, func, &shape);
         emit_shape_strip_trailing_return(&mut ctx, func, &shape, out, "  ")?;
     }
 
@@ -921,8 +1004,10 @@ fn emit_shape(
             cond,
             then_assigns,
             then_body,
+            then_trailing_assigns,
             else_assigns,
             else_body,
+            else_trailing_assigns,
         } => {
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
@@ -932,10 +1017,12 @@ fn emit_shape(
             let mut then_buf = String::new();
             emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
             emit_shape(ctx, func, then_body, &mut then_buf, &inner)?;
+            emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
 
             let mut else_buf = String::new();
             emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
             emit_shape(ctx, func, else_body, &mut else_buf, &inner)?;
+            emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
 
             let then_empty = then_buf.trim().is_empty();
             let else_empty = else_buf.trim().is_empty();
@@ -1037,6 +1124,54 @@ fn emit_shape(
             let _ = writeln!(out, "{indent}break L{depth};");
         }
 
+        Shape::LogicalOr {
+            block,
+            cond,
+            phi,
+            rhs_body,
+            rhs,
+        } => {
+            emit_block_instructions(ctx, func, *block, out, indent)?;
+            let inner = format!("{indent}  ");
+            let mut body_buf = String::new();
+            emit_shape(ctx, func, rhs_body, &mut body_buf, &inner)?;
+            if body_buf.trim().is_empty() {
+                let expr = format!("{} || {}", ctx.operand(*cond), ctx.operand(*rhs));
+                emit_or_inline(ctx, *phi, expr, true, out, indent);
+            } else {
+                let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                let _ = writeln!(out, "{inner}{} = {};", ctx.val(*phi), ctx.val(*cond));
+                let _ = writeln!(out, "{indent}}} else {{");
+                out.push_str(&body_buf);
+                let _ = writeln!(out, "{inner}{} = {};", ctx.val(*phi), ctx.val(*rhs));
+                let _ = writeln!(out, "{indent}}}");
+            }
+        }
+
+        Shape::LogicalAnd {
+            block,
+            cond,
+            phi,
+            rhs_body,
+            rhs,
+        } => {
+            emit_block_instructions(ctx, func, *block, out, indent)?;
+            let inner = format!("{indent}  ");
+            let mut body_buf = String::new();
+            emit_shape(ctx, func, rhs_body, &mut body_buf, &inner)?;
+            if body_buf.trim().is_empty() {
+                let expr = format!("{} && {}", ctx.operand(*cond), ctx.operand(*rhs));
+                emit_or_inline(ctx, *phi, expr, true, out, indent);
+            } else {
+                let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                out.push_str(&body_buf);
+                let _ = writeln!(out, "{inner}{} = {};", ctx.val(*phi), ctx.val(*rhs));
+                let _ = writeln!(out, "{indent}}} else {{");
+                let _ = writeln!(out, "{inner}{} = {};", ctx.val(*phi), ctx.val(*cond));
+                let _ = writeln!(out, "{indent}}}");
+            }
+        }
+
         Shape::Dispatch { blocks, entry } => {
             // Fallback dispatch loop.
             let _ = writeln!(out, "{indent}let $block = {};", entry.index());
@@ -1132,8 +1267,10 @@ fn emit_shape_strip_trailing_return(
             cond,
             then_assigns,
             then_body,
+            then_trailing_assigns,
             else_assigns,
             else_body,
+            else_trailing_assigns,
         } => {
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
@@ -1143,10 +1280,12 @@ fn emit_shape_strip_trailing_return(
             let mut then_buf = String::new();
             emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
             emit_shape_strip_trailing_return(ctx, func, then_body, &mut then_buf, &inner)?;
+            emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
 
             let mut else_buf = String::new();
             emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
             emit_shape_strip_trailing_return(ctx, func, else_body, &mut else_buf, &inner)?;
+            emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
 
             let then_empty = then_buf.trim().is_empty();
             let else_empty = else_buf.trim().is_empty();
@@ -2004,6 +2143,7 @@ fn emit_class_method(
     } else {
         emit_block_param_declarations_indented(&ctx, func, out, "    ");
         let shape = structurize::structurize(func);
+        adjust_use_counts_for_logical_ops(&mut ctx, func, &shape);
         emit_shape_strip_trailing_return(&mut ctx, func, &shape, out, "    ")?;
     }
 
