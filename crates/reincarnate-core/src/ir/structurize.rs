@@ -441,6 +441,20 @@ impl<'a> Structurizer<'a> {
         blk.insts.last().map(|&id| &self.func.insts[id].op)
     }
 
+    /// If `cond` is produced by `Not(inner)` in `block`, return `inner`.
+    fn strip_not(&self, block: BlockId, cond: ValueId) -> Option<ValueId> {
+        for &inst_id in &self.func.blocks[block].insts {
+            let inst = &self.func.insts[inst_id];
+            if inst.result == Some(cond) {
+                if let Op::Not(inner) = &inst.op {
+                    return Some(*inner);
+                }
+                break;
+            }
+        }
+        None
+    }
+
     /// Build branch arg assignments for a branch to `target` with `args`.
     fn branch_assigns(&self, target: BlockId, args: &[ValueId]) -> Vec<BlockArgAssign> {
         let target_block = &self.func.blocks[target];
@@ -579,11 +593,18 @@ impl<'a> Structurizer<'a> {
                 else_target,
                 else_args,
             } => {
-                let cond = *cond;
-                let then_target = *then_target;
-                let else_target = *else_target;
-                let then_args = then_args.clone();
-                let else_args = else_args.clone();
+                let mut cond = *cond;
+                let mut then_target = *then_target;
+                let mut else_target = *else_target;
+                let mut then_args = then_args.clone();
+                let mut else_args = else_args.clone();
+
+                // Normalize: strip Not from condition, swap branches.
+                if let Some(inner) = self.strip_not(block, cond) {
+                    cond = inner;
+                    std::mem::swap(&mut then_target, &mut else_target);
+                    std::mem::swap(&mut then_args, &mut else_args);
+                }
 
                 let then_assigns = self.branch_assigns(then_target, &then_args);
                 let else_assigns = self.branch_assigns(else_target, &else_args);
@@ -927,9 +948,15 @@ impl<'a> Structurizer<'a> {
                 else_target,
                 ..
             }) => {
-                let cond = *cond;
-                let then_target = *then_target;
-                let else_target = *else_target;
+                let mut cond = *cond;
+                let mut then_target = *then_target;
+                let mut else_target = *else_target;
+
+                // Normalize: strip Not from condition, swap branches.
+                if let Some(inner) = self.strip_not(header, cond) {
+                    cond = inner;
+                    std::mem::swap(&mut then_target, &mut else_target);
+                }
 
                 let then_in_loop = loop_body.contains(&then_target);
                 let else_in_loop = loop_body.contains(&else_target);

@@ -475,19 +475,18 @@ fn compute_use_counts(func: &Function) -> HashMap<ValueId, usize> {
     counts
 }
 
-/// Adjust use counts for LogicalOr/LogicalAnd shapes.
+/// Adjust use counts for shapes whose condition was normalized by the
+/// structurizer (Not stripped + branches swapped) or folded into a
+/// logical operator.
 ///
-/// In the standard case, a BrIf uses `cond` twice (as condition + branch
-/// arg). After folding into `cond || rhs` or `cond && rhs`, `cond`
-/// appears only once. Decrement by 1 so the inline system can fold
-/// single-use values through the `||`/`&&` expression.
+/// When the structurizer strips `Not(x)` from a BrIf condition, the Not
+/// instruction still exists in the IR and `x` is counted as used by it.
+/// Since the Not is dead after normalization, decrement `x`'s count.
 ///
-/// In the **inverted** case, the BrIf condition differs from the shape's
-/// `cond` (which is the inverse comparison). Each value is used once in
-/// the BrIf — no double-counting, so no decrement needed.
-///
-/// Only adjusts when rhs_body will emit empty (clean `||`/`&&` path).
-fn adjust_use_counts_for_logical_ops(ctx: &mut EmitCtx, func: &Function, shape: &Shape) {
+/// For LogicalAnd/LogicalOr specifically, the BrIf also uses `cond` as
+/// both condition and branch arg (2 uses) in the standard case; after
+/// folding to `cond && rhs`, cond appears once, so decrement by 1.
+fn adjust_use_counts_for_shapes(ctx: &mut EmitCtx, func: &Function, shape: &Shape) {
     match shape {
         Shape::LogicalOr {
             block,
@@ -502,57 +501,82 @@ fn adjust_use_counts_for_logical_ops(ctx: &mut EmitCtx, func: &Function, shape: 
             ..
         } => {
             if logical_rhs_body_emits_empty(ctx, func, rhs_body) {
-                let brif_cond = func.blocks[*block]
-                    .insts
-                    .last()
-                    .and_then(|&iid| match &func.insts[iid].op {
-                        Op::BrIf { cond: c, .. } => Some(*c),
-                        _ => None,
-                    });
+                let brif_cond = brif_cond_of(func, *block);
                 if brif_cond == Some(*cond) {
-                    // Standard case: BrIf uses cond as both condition and
-                    // branch arg (2 uses). After folding to `cond && rhs`,
-                    // cond appears once. Decrement by 1.
+                    // Standard case: BrIf uses cond twice (condition +
+                    // branch arg). After `cond && rhs`, cond appears once.
                     if let Some(count) = ctx.use_counts.get_mut(cond) {
                         *count = count.saturating_sub(1);
                     }
-                } else if let Some(bc) = brif_cond {
-                    // Inverted case: check if BrIf condition is Not(cond).
-                    // The Not instruction uses cond once and is dead after
-                    // folding, so cond's count needs decrementing by 1.
-                    let is_not_of_cond =
-                        func.insts.iter().any(|(_, inst)| {
-                            inst.result == Some(bc)
-                                && matches!(&inst.op, Op::Not(inner) if *inner == *cond)
-                        });
-                    if is_not_of_cond {
-                        if let Some(count) = ctx.use_counts.get_mut(cond) {
-                            *count = count.saturating_sub(1);
-                        }
-                    }
+                } else {
+                    // Normalized: structurizer stripped Not(cond). The Not
+                    // instruction's use of cond is dead.
+                    adjust_for_stripped_not(ctx, func, *block, *cond);
                 }
             }
-            adjust_use_counts_for_logical_ops(ctx, func, rhs_body);
-        }
-        Shape::Seq(parts) => {
-            for part in parts {
-                adjust_use_counts_for_logical_ops(ctx, func, part);
-            }
+            adjust_use_counts_for_shapes(ctx, func, rhs_body);
         }
         Shape::IfElse {
             then_body,
             else_body,
             ..
         } => {
-            adjust_use_counts_for_logical_ops(ctx, func, then_body);
-            adjust_use_counts_for_logical_ops(ctx, func, else_body);
+            // No use-count adjustment needed: the Not's use of cond is
+            // replaced 1:1 by the Shape's use of cond (no net change).
+            adjust_use_counts_for_shapes(ctx, func, then_body);
+            adjust_use_counts_for_shapes(ctx, func, else_body);
         }
-        Shape::WhileLoop { body, .. }
-        | Shape::ForLoop { body, .. }
-        | Shape::Loop { body, .. } => {
-            adjust_use_counts_for_logical_ops(ctx, func, body);
+        Shape::WhileLoop { body, .. } | Shape::ForLoop { body, .. } => {
+            adjust_use_counts_for_shapes(ctx, func, body);
+        }
+        Shape::Loop { body, .. } => {
+            adjust_use_counts_for_shapes(ctx, func, body);
+        }
+        Shape::Seq(parts) => {
+            for part in parts {
+                adjust_use_counts_for_shapes(ctx, func, part);
+            }
         }
         _ => {}
+    }
+}
+
+/// Get the BrIf condition value from a block's terminator.
+fn brif_cond_of(func: &Function, block: BlockId) -> Option<ValueId> {
+    func.blocks[block]
+        .insts
+        .last()
+        .and_then(|&iid| match &func.insts[iid].op {
+            Op::BrIf { cond: c, .. } => Some(*c),
+            _ => None,
+        })
+}
+
+/// If the BrIf condition was `Not(cond)` (structurizer stripped it),
+/// decrement `cond`'s use count since the Not instruction is dead.
+fn adjust_for_stripped_not(
+    ctx: &mut EmitCtx,
+    func: &Function,
+    block: BlockId,
+    cond: ValueId,
+) {
+    let Some(bc) = brif_cond_of(func, block) else {
+        return;
+    };
+    if bc == cond {
+        return; // Not stripped — BrIf condition matches shape condition.
+    }
+    let is_not_of_cond = func
+        .insts
+        .iter()
+        .any(|(_, inst)| {
+            inst.result == Some(bc)
+                && matches!(&inst.op, Op::Not(inner) if *inner == cond)
+        });
+    if is_not_of_cond {
+        if let Some(count) = ctx.use_counts.get_mut(&cond) {
+            *count = count.saturating_sub(1);
+        }
     }
 }
 
@@ -1015,7 +1039,7 @@ fn emit_function(
         emit_block_param_declarations(&ctx, func, out);
 
         let shape = structurize::structurize(func);
-        adjust_use_counts_for_logical_ops(&mut ctx, func, &shape);
+        adjust_use_counts_for_shapes(&mut ctx, func, &shape);
         emit_shape_strip_trailing_return(&mut ctx, func, &shape, out, "  ")?;
     }
 
@@ -1025,40 +1049,19 @@ fn emit_function(
 
 
 /// If `val` is the result of `Op::Cmp`, return the expression with flipped operator.
-fn try_flip_cmp(func: &Function, val: ValueId, ctx: &EmitCtx) -> Option<String> {
-    for inst in func.insts.values() {
-        if inst.result == Some(val) {
-            if let Op::Cmp(kind, a, b) = &inst.op {
-                let flipped = match kind {
-                    CmpKind::Eq => "!==",
-                    CmpKind::Ne => "===",
-                    CmpKind::Lt => ">=",
-                    CmpKind::Le => ">",
-                    CmpKind::Gt => "<=",
-                    CmpKind::Ge => "<",
-                };
-                return Some(format!("{} {} {}", ctx.operand(*a), flipped, ctx.operand(*b)));
-            }
-            break;
-        }
-    }
-    None
-}
-
-/// Negate a condition for `if` emission, avoiding double negation.
+/// Negate a condition for `if` emission.
 ///
-/// - `Not(inner)` → returns `inner` directly
-/// - `Cmp(kind, a, b)` → flips the comparison (e.g. `!==` → `===`)
-/// - Otherwise wraps with `!`
+/// The structurizer normalizes `Not(x)` conditions by swapping branches,
+/// so conditions reaching here should generally not be `Not` values.
+/// We still strip `Not` as a safety net to avoid emitting `!!x`.
 fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) -> String {
     for &inst_id in &func.blocks[block].insts {
         let inst = &func.insts[inst_id];
         if inst.result == Some(cond) {
-            match &inst.op {
-                Op::Not(inner) => return ctx.val(*inner),
-                Op::Cmp(..) => return try_flip_cmp(func, cond, ctx).unwrap(),
-                _ => break,
+            if let Op::Not(inner) = &inst.op {
+                return ctx.val(*inner);
             }
+            break;
         }
     }
     format!("!{}", ctx.operand(cond))
@@ -1557,12 +1560,7 @@ fn emit_inst(
         // -- Logic --
         Op::Not(a) => {
             let r = result.unwrap();
-            // If the operand is a comparison, flip the operator instead of wrapping with !
-            let expr = if let Some(flipped) = try_flip_cmp(func, *a, ctx) {
-                flipped
-            } else {
-                format!("!{}", ctx.operand(*a))
-            };
+            let expr = format!("!{}", ctx.operand(*a));
             emit_or_inline(ctx, r, expr, true, out, indent);
         }
         Op::Select {
@@ -2232,7 +2230,7 @@ fn emit_class_method(
     } else {
         emit_block_param_declarations_indented(&ctx, func, out, "    ");
         let shape = structurize::structurize(func);
-        adjust_use_counts_for_logical_ops(&mut ctx, func, &shape);
+        adjust_use_counts_for_shapes(&mut ctx, func, &shape);
         emit_shape_strip_trailing_return(&mut ctx, func, &shape, out, "    ")?;
     }
 
