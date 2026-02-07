@@ -1138,6 +1138,8 @@ fn emit_or_inline(
 ) {
     if ctx.should_inline(r) {
         ctx.store_inline(r, expr, needs_parens);
+    } else if ctx.use_counts.get(&r).copied().unwrap_or(0) == 0 {
+        let _ = writeln!(out, "{indent}{expr};");
     } else {
         let pfx = ctx.let_prefix(r);
         let _ = writeln!(out, "{indent}{pfx}{} = {expr};", ctx.val_name(r));
@@ -2197,12 +2199,13 @@ mod tests {
             mb.add_function(fb.build());
         });
 
-        assert!(out.contains("const v0 = null;"));
-        assert!(out.contains("const v1 = true;"));
-        assert!(out.contains("const v2 = false;"));
-        assert!(out.contains("const v3 = 42;"));
-        assert!(out.contains("const v4 = 3.125;"));
-        assert!(out.contains(r#"const v5 = "hello \"world\"\nnewline";"#));
+        // Unused constants are emitted as bare statements (no binding).
+        assert!(out.contains("  null;"));
+        assert!(out.contains("  true;"));
+        assert!(out.contains("  false;"));
+        assert!(out.contains("  42;"));
+        assert!(out.contains("  3.125;"));
+        assert!(out.contains(r#"  "hello \"world\"\nnewline";"#));
     }
 
     #[test]
@@ -2226,10 +2229,10 @@ mod tests {
             mb.add_function(fb.build());
         });
 
-        // Constants are inlined into the aggregate expressions.
-        assert!(out.contains("const v2 = [1, 2];"), "Should inline consts into array:\n{out}");
+        // Constants are inlined into the aggregate expressions; unused results have no binding.
+        assert!(out.contains("[1, 2];"), "Should inline consts into array:\n{out}");
         assert!(
-            out.contains("const v5 = { x: 10.0, y: 20.0 };"),
+            out.contains("{ x: 10.0, y: 20.0 };"),
             "Should inline consts into struct:\n{out}"
         );
     }
