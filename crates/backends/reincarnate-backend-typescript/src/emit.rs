@@ -889,17 +889,64 @@ fn is_empty_shape(shape: &Shape, func: &Function) -> bool {
     match shape {
         Shape::Seq(parts) => parts.iter().all(|p| is_empty_shape(p, func)),
         Shape::Block(block_id) => {
-            // A block is empty if it has no non-terminator instructions.
+            // A block is effectively empty if every instruction is either:
+            // - A terminator (Br/BrIf/Switch) — handled by the shape tree
+            // - A pure value-producing expression — will be inlined into its
+            //   consumers or dropped if unused, producing no visible output.
+            //   Side-effecting ops (calls, stores, etc.) are NOT considered empty.
             let block = &func.blocks[*block_id];
             block.insts.iter().all(|&inst_id| {
+                let inst = &func.insts[inst_id];
                 matches!(
-                    func.insts[inst_id].op,
-                    Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. }
+                    inst.op,
+                    Op::Br { .. }
+                        | Op::BrIf { .. }
+                        | Op::Switch { .. }
+                        | Op::Const(_)
+                        | Op::Add(..)
+                        | Op::Sub(..)
+                        | Op::Mul(..)
+                        | Op::Div(..)
+                        | Op::Rem(..)
+                        | Op::BitAnd(..)
+                        | Op::BitOr(..)
+                        | Op::BitXor(..)
+                        | Op::Shl(..)
+                        | Op::Shr(..)
+                        | Op::Neg(..)
+                        | Op::BitNot(..)
+                        | Op::Not(..)
+                        | Op::Copy(..)
+                        | Op::Cmp(..)
+                        | Op::Select { .. }
+                        | Op::Cast(..)
+                        | Op::TypeCheck(..)
+                        | Op::GetField { .. }
+                        | Op::GetIndex { .. }
+                        | Op::Load(..)
+                        | Op::GlobalRef(..)
                 )
             })
         }
         _ => false,
     }
+}
+
+/// Negate a condition for `if` emission, avoiding double negation.
+///
+/// If `cond` is the result of `Op::Not(inner)`, returns `inner` directly
+/// instead of wrapping with `!`.
+fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) -> String {
+    for &inst_id in &func.blocks[block].insts {
+        let inst = &func.insts[inst_id];
+        if inst.result == Some(cond) {
+            if let Op::Not(inner) = &inst.op {
+                return ctx.val(*inner);
+            }
+            break;
+        }
+    }
+    format!("!{}", ctx.operand(cond))
 }
 
 /// Emit a structured shape tree as TypeScript.
@@ -949,7 +996,8 @@ fn emit_shape(
                 }
                 (true, false) => {
                     // Only else has content — flip condition.
-                    let _ = writeln!(out, "{indent}if (!{}) {{", ctx.operand(*cond));
+                    let neg = negate_cond(ctx, func, *block, *cond);
+                    let _ = writeln!(out, "{indent}if ({neg}) {{");
                     let inner = format!("{indent}  ");
                     emit_arg_assigns(ctx, else_assigns, out, &inner);
                     emit_shape(ctx, func, else_body, out, &inner)?;
@@ -1151,7 +1199,8 @@ fn emit_shape_strip_trailing_return(
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (true, false) => {
-                    let _ = writeln!(out, "{indent}if (!{}) {{", ctx.operand(*cond));
+                    let neg = negate_cond(ctx, func, *block, *cond);
+                    let _ = writeln!(out, "{indent}if ({neg}) {{");
                     let inner = format!("{indent}  ");
                     emit_arg_assigns(ctx, else_assigns, out, &inner);
                     emit_shape_strip_trailing_return(ctx, func, else_body, out, &inner)?;
@@ -3887,6 +3936,94 @@ mod tests {
         assert!(
             !out.contains("if ("),
             "Both branches empty — entire if should be omitted:\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_flip_unwraps_not_instead_of_double_negating() {
+        // BrIf on Not(cond) with empty then → should emit if (cond), not if (!(!cond))
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let cond = fb.param(0);
+            let not_cond = fb.not(cond);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(not_cond, then_block, &[], else_block, &[]);
+
+            // then: empty
+            fb.switch_to_block(then_block);
+            fb.br(merge, &[]);
+
+            // else: has a call
+            fb.switch_to_block(else_block);
+            fb.system_call("renderer", "clear", &[], Type::Void);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("if (v0) {"),
+            "Should unwrap Not and use original condition:\n{out}"
+        );
+        assert!(
+            !out.contains("!(!"),
+            "Should not double-negate:\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_empty_then_with_pure_ops_treated_as_empty() {
+        // A then-branch block containing only pure ops (Cmp, GetField) should
+        // be treated as empty, flipping the condition.
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool, Type::Int(32)],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let cond = fb.param(0);
+            let x = fb.param(1);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(cond, then_block, &[], else_block, &[]);
+
+            // then: only pure ops (no calls/stores)
+            fb.switch_to_block(then_block);
+            let _unused = fb.cmp(CmpKind::Gt, x, x);
+            fb.br(merge, &[]);
+
+            // else: has a call
+            fb.switch_to_block(else_block);
+            fb.system_call("renderer", "clear", &[], Type::Void);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("if (!v0) {"),
+            "Pure-only then should be treated as empty, flipping condition:\n{out}"
+        );
+        assert!(
+            !out.contains("} else {"),
+            "Should not have else branch:\n{out}"
         );
     }
 }
