@@ -879,6 +879,29 @@ fn emit_function(
     Ok(())
 }
 
+/// Check if a branch arm (assigns + body) is empty — no assignments and no statements.
+fn is_empty_branch(assigns: &[BlockArgAssign], body: &Shape, func: &Function) -> bool {
+    assigns.is_empty() && is_empty_shape(body, func)
+}
+
+/// Check if a shape produces no output.
+fn is_empty_shape(shape: &Shape, func: &Function) -> bool {
+    match shape {
+        Shape::Seq(parts) => parts.iter().all(|p| is_empty_shape(p, func)),
+        Shape::Block(block_id) => {
+            // A block is empty if it has no non-terminator instructions.
+            let block = &func.blocks[*block_id];
+            block.insts.iter().all(|&inst_id| {
+                matches!(
+                    func.insts[inst_id].op,
+                    Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. }
+                )
+            })
+        }
+        _ => false,
+    }
+}
+
 /// Emit a structured shape tree as TypeScript.
 fn emit_shape(
     ctx: &mut EmitCtx,
@@ -909,14 +932,41 @@ fn emit_shape(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
-            let inner = format!("{indent}  ");
-            emit_arg_assigns(ctx, then_assigns, out, &inner);
-            emit_shape(ctx, func, then_body, out, &inner)?;
-            let _ = writeln!(out, "{indent}}} else {{");
-            emit_arg_assigns(ctx, else_assigns, out, &inner);
-            emit_shape(ctx, func, else_body, out, &inner)?;
-            let _ = writeln!(out, "{indent}}}");
+            let then_empty = is_empty_branch(then_assigns, then_body, func);
+            let else_empty = is_empty_branch(else_assigns, else_body, func);
+
+            match (then_empty, else_empty) {
+                (true, true) => {
+                    // Both branches empty — skip the entire if.
+                }
+                (false, true) => {
+                    // Only then has content — no else.
+                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, then_assigns, out, &inner);
+                    emit_shape(ctx, func, then_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+                (true, false) => {
+                    // Only else has content — flip condition.
+                    let _ = writeln!(out, "{indent}if (!{}) {{", ctx.operand(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, else_assigns, out, &inner);
+                    emit_shape(ctx, func, else_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+                (false, false) => {
+                    // Both branches have content — full if/else.
+                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, then_assigns, out, &inner);
+                    emit_shape(ctx, func, then_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}} else {{");
+                    emit_arg_assigns(ctx, else_assigns, out, &inner);
+                    emit_shape(ctx, func, else_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+            }
         }
 
         Shape::WhileLoop {
@@ -1086,14 +1136,38 @@ fn emit_shape_strip_trailing_return(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
-            let inner = format!("{indent}  ");
-            emit_arg_assigns(ctx, then_assigns, out, &inner);
-            emit_shape_strip_trailing_return(ctx, func, then_body, out, &inner)?;
-            let _ = writeln!(out, "{indent}}} else {{");
-            emit_arg_assigns(ctx, else_assigns, out, &inner);
-            emit_shape_strip_trailing_return(ctx, func, else_body, out, &inner)?;
-            let _ = writeln!(out, "{indent}}}");
+            let then_empty = is_empty_branch(then_assigns, then_body, func);
+            let else_empty = is_empty_branch(else_assigns, else_body, func);
+
+            match (then_empty, else_empty) {
+                (true, true) => {
+                    // Both branches empty — skip the entire if.
+                }
+                (false, true) => {
+                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, then_assigns, out, &inner);
+                    emit_shape_strip_trailing_return(ctx, func, then_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+                (true, false) => {
+                    let _ = writeln!(out, "{indent}if (!{}) {{", ctx.operand(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, else_assigns, out, &inner);
+                    emit_shape_strip_trailing_return(ctx, func, else_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+                (false, false) => {
+                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let inner = format!("{indent}  ");
+                    emit_arg_assigns(ctx, then_assigns, out, &inner);
+                    emit_shape_strip_trailing_return(ctx, func, then_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}} else {{");
+                    emit_arg_assigns(ctx, else_assigns, out, &inner);
+                    emit_shape_strip_trailing_return(ctx, func, else_body, out, &inner)?;
+                    let _ = writeln!(out, "{indent}}}");
+                }
+            }
             Ok(())
         }
         _ => emit_shape(ctx, func, shape, out, indent),
@@ -2430,10 +2504,9 @@ mod tests {
             mb.add_function(fb.build());
         });
 
-        // Should have if/else, no dispatch loop.
+        // Both branches are empty — entire if should be omitted.
         assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
-        assert!(out.contains("if (v0)"), "Should have if/else:\n{out}");
-        assert!(out.contains("} else {"), "Should have else branch:\n{out}");
+        assert!(!out.contains("if ("), "Empty diamond should omit entire if:\n{out}");
         // Trailing void return should be stripped.
         assert!(!out.contains("return;"), "Should not have trailing return:\n{out}");
     }
@@ -3680,6 +3753,126 @@ mod tests {
         assert!(
             !out.contains("as boolean"),
             "Multi-use cast should not use 'as T':\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_empty_else_suppressed() {
+        // if (cond) { body } else {} → if (cond) { body }
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let cond = fb.param(0);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(cond, then_block, &[], else_block, &[]);
+
+            // then: has a call
+            fb.switch_to_block(then_block);
+            fb.system_call("renderer", "clear", &[], Type::Void);
+            fb.br(merge, &[]);
+
+            // else: empty — just branches to merge
+            fb.switch_to_block(else_block);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("if (v0) {"),
+            "Should have if block:\n{out}"
+        );
+        assert!(
+            !out.contains("} else {"),
+            "Empty else should be suppressed:\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_empty_then_flips_condition() {
+        // if (cond) {} else { body } → if (!cond) { body }
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let cond = fb.param(0);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(cond, then_block, &[], else_block, &[]);
+
+            // then: empty
+            fb.switch_to_block(then_block);
+            fb.br(merge, &[]);
+
+            // else: has a call
+            fb.switch_to_block(else_block);
+            fb.system_call("renderer", "clear", &[], Type::Void);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("if (!v0) {"),
+            "Should flip condition when then is empty:\n{out}"
+        );
+        assert!(
+            !out.contains("} else {"),
+            "Should not have else branch:\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_both_empty_omits_entire_if() {
+        // if (cond) {} else {} → nothing
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let cond = fb.param(0);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(cond, then_block, &[], else_block, &[]);
+
+            // both empty
+            fb.switch_to_block(then_block);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(else_block);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            !out.contains("if ("),
+            "Both branches empty — entire if should be omitted:\n{out}"
         );
     }
 }
