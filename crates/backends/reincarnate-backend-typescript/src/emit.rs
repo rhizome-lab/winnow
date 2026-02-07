@@ -33,6 +33,7 @@ pub fn emit_module(module: &Module, output_dir: &Path) -> Result<(), CoreError> 
 /// Emit a module to a string (flat output — for testing or class-free modules).
 pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
     let mut out = String::new();
+    let class_names = build_class_names(module);
 
     emit_runtime_imports(module, &mut out);
     emit_imports(module, &mut out);
@@ -41,14 +42,14 @@ pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
     emit_globals(module, &mut out);
 
     if module.classes.is_empty() {
-        emit_functions(module, &mut out)?;
+        emit_functions(module, &class_names, &mut out)?;
     } else {
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &mut out)?;
+            emit_class(group, module, &class_names, &mut out)?;
         }
         for (_fid, func) in &free_funcs {
-            emit_function(func, &mut out)?;
+            emit_function(func, &class_names, &mut out)?;
         }
     }
 
@@ -106,6 +107,15 @@ impl ClassRegistry {
     }
 }
 
+/// Build a map from qualified class names to sanitized short names.
+fn build_class_names(module: &Module) -> HashMap<String, String> {
+    module
+        .classes
+        .iter()
+        .map(|c| (qualified_class_name(c), sanitize_ident(&c.name)))
+        .collect()
+}
+
 /// Build a qualified name from a ClassDef's namespace + name.
 fn qualified_class_name(class: &ClassDef) -> String {
     if class.namespace.is_empty() {
@@ -153,6 +163,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
 
     let (class_groups, free_funcs) = group_by_class(module);
     let registry = ClassRegistry::from_module(module);
+    let class_names = build_class_names(module);
     let mut barrel_exports: Vec<String> = Vec::new();
 
     for group in &class_groups {
@@ -177,7 +188,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
         let mut out = String::new();
         emit_runtime_imports_at_depth(module, &mut out, depth);
         emit_intra_imports(group, &segments, &registry, &mut out);
-        emit_class(group, module, &mut out)?;
+        emit_class(group, module, &class_names, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -194,7 +205,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
         emit_imports(module, &mut out);
         emit_globals(module, &mut out);
         for (_fid, func) in &free_funcs {
-            emit_function(func, &mut out)?;
+            emit_function(func, &class_names, &mut out)?;
         }
         let path = module_dir.join("_init.ts");
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -230,10 +241,14 @@ struct EmitCtx {
     use_counts: HashMap<ValueId, usize>,
     /// Inlined expressions for single-use values: (expr, needs_parens).
     inline_exprs: HashMap<ValueId, (String, bool)>,
+    /// Qualified class name → sanitized short name (e.g. "classes.Scenes::Foo" → "Foo").
+    class_names: HashMap<String, String>,
+    /// Values produced by `findPropStrict` — used to resolve `GetField` to class names.
+    scope_lookups: HashSet<ValueId>,
 }
 
 impl EmitCtx {
-    fn for_function(func: &Function) -> Self {
+    fn for_function(func: &Function, class_names: &HashMap<String, String>) -> Self {
         let needs_let = compute_needs_let(func);
         let use_counts = compute_use_counts(func);
         Self {
@@ -241,10 +256,16 @@ impl EmitCtx {
             self_value: None,
             use_counts,
             inline_exprs: HashMap::new(),
+            class_names: class_names.clone(),
+            scope_lookups: HashSet::new(),
         }
     }
 
-    fn for_method(func: &Function, self_value: ValueId) -> Self {
+    fn for_method(
+        func: &Function,
+        self_value: ValueId,
+        class_names: &HashMap<String, String>,
+    ) -> Self {
         let needs_let = compute_needs_let(func);
         let use_counts = compute_use_counts(func);
         Self {
@@ -252,6 +273,8 @@ impl EmitCtx {
             self_value: Some(self_value),
             use_counts,
             inline_exprs: HashMap::new(),
+            class_names: class_names.clone(),
+            scope_lookups: HashSet::new(),
         }
     }
 
@@ -513,6 +536,17 @@ fn collect_type_refs_from_function(
             Op::Alloc(ty) | Op::Cast(_, ty) => {
                 collect_type_ref(ty, self_name, registry, type_refs);
             }
+            // GetField with a class name → runtime value reference (used with `new`).
+            Op::GetField { field, .. } => {
+                if registry.lookup(field).is_some() {
+                    collect_type_ref(
+                        &Type::Struct(field.clone()),
+                        self_name,
+                        registry,
+                        value_refs,
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -696,15 +730,23 @@ fn emit_globals(module: &Module, out: &mut String) {
 // Functions
 // ---------------------------------------------------------------------------
 
-fn emit_functions(module: &Module, out: &mut String) -> Result<(), CoreError> {
+fn emit_functions(
+    module: &Module,
+    class_names: &HashMap<String, String>,
+    out: &mut String,
+) -> Result<(), CoreError> {
     for (_id, func) in module.functions.iter() {
-        emit_function(func, out)?;
+        emit_function(func, class_names, out)?;
     }
     Ok(())
 }
 
-fn emit_function(func: &Function, out: &mut String) -> Result<(), CoreError> {
-    let mut ctx = EmitCtx::for_function(func);
+fn emit_function(
+    func: &Function,
+    class_names: &HashMap<String, String>,
+    out: &mut String,
+) -> Result<(), CoreError> {
+    let mut ctx = EmitCtx::for_function(func, class_names);
     let vis = visibility_prefix(func.visibility);
     let star = if func.coroutine.is_some() { "*" } else { "" };
 
@@ -1216,6 +1258,13 @@ fn emit_inst(
         }
         Op::GetField { object, field } => {
             let r = result.unwrap();
+            // Resolve findPropStrict + GetField → class name.
+            if ctx.scope_lookups.contains(object) {
+                if let Some(short) = ctx.class_names.get(field) {
+                    emit_or_inline(ctx, r, short.clone(), false, out, indent);
+                    return Ok(());
+                }
+            }
             let expr = if is_valid_js_ident(field) {
                 format!("{}.{field}", ctx.operand(*object))
             } else {
@@ -1297,6 +1346,43 @@ fn emit_inst(
             method,
             args,
         } => {
+            // constructSuper(this, ...rest) → super(rest)
+            if system == "Flash.Class" && method == "constructSuper" {
+                let rest_args = args
+                    .iter()
+                    .skip(1)
+                    .map(|a| ctx.val(*a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(out, "{indent}super({rest_args});");
+                return Ok(());
+            }
+
+            // construct(ctor, ...rest) → new ctor(rest)
+            if system == "Flash.Object" && method == "construct" {
+                if let Some((&ctor, rest)) = args.split_first() {
+                    let rest_args = rest
+                        .iter()
+                        .map(|a| ctx.val(*a))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let expr = format!("new {}({rest_args})", ctx.val(ctor));
+                    if let Some(r) = result {
+                        emit_or_inline(ctx, r, expr, false, out, indent);
+                    } else {
+                        let _ = writeln!(out, "{indent}{expr};");
+                    }
+                    return Ok(());
+                }
+            }
+
+            // findPropStrict(name) → record scope lookup, emit normally
+            if system == "Flash.Scope" && method == "findPropStrict" {
+                if let Some(r) = result {
+                    ctx.scope_lookups.insert(r);
+                }
+            }
+
             let args_str = args
                 .iter()
                 .map(|a| ctx.val(*a))
@@ -1477,6 +1563,7 @@ fn group_by_class(module: &Module) -> (Vec<ClassGroup<'_>>, Vec<(FuncId, &Functi
 fn emit_class(
     group: &ClassGroup<'_>,
     _module: &Module,
+    class_names: &HashMap<String, String>,
     out: &mut String,
 ) -> Result<(), CoreError> {
     let class_name = sanitize_ident(&group.class_def.name);
@@ -1515,7 +1602,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(func, out)?;
+        emit_class_method(func, class_names, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -1523,7 +1610,11 @@ fn emit_class(
 }
 
 /// Emit a single method inside a class body.
-fn emit_class_method(func: &Function, out: &mut String) -> Result<(), CoreError> {
+fn emit_class_method(
+    func: &Function,
+    class_names: &HashMap<String, String>,
+    out: &mut String,
+) -> Result<(), CoreError> {
     // Extract bare method name from func.name (last `::` segment).
     let raw_name = func
         .name
@@ -1543,9 +1634,9 @@ fn emit_class_method(func: &Function, out: &mut String) -> Result<(), CoreError>
 
     // Build context — methods with a self parameter get `this` binding.
     let mut ctx = if skip_self && !entry.params.is_empty() {
-        EmitCtx::for_method(func, entry.params[0].value)
+        EmitCtx::for_method(func, entry.params[0].value, class_names)
     } else {
-        EmitCtx::for_function(func)
+        EmitCtx::for_function(func, class_names)
     };
 
     let params: Vec<String> = entry.params[param_start..]
