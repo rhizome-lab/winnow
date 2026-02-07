@@ -59,6 +59,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         &instance.init_method,
         &format!("{class_short_name}::new"),
         true,
+        Some(&class_short_name),
     )? {
         func.namespace = class_ns.clone();
         func.class = Some(class_short_name.clone());
@@ -75,7 +76,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
             let func_name = format!("{class_short_name}::{prefix}{bare_name}");
             let visibility = trait_visibility(pool, trait_);
             if let Some(mut func) =
-                translate_class_method(abc, &method_idx, &func_name, true)?
+                translate_class_method(abc, &method_idx, &func_name, true, Some(&class_short_name))?
             {
                 func.namespace = class_ns.clone();
                 func.class = Some(class_short_name.clone());
@@ -92,6 +93,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         &class.init_method,
         &format!("{class_short_name}::cinit"),
         false,
+        None,
     )? {
         func.namespace = class_ns.clone();
         func.class = Some(class_short_name.clone());
@@ -109,7 +111,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
             let func_name = format!("{class_short_name}::{prefix}{bare_name}");
             let visibility = trait_visibility(pool, trait_);
             if let Some(mut func) =
-                translate_class_method(abc, &method_idx, &func_name, false)?
+                translate_class_method(abc, &method_idx, &func_name, false, None)?
             {
                 func.namespace = class_ns.clone();
                 func.class = Some(class_short_name.clone());
@@ -236,11 +238,13 @@ fn find_private_ns_string(pool: &ConstantPool, class_name_idx: &Index<swf::avm2:
 /// Translate a method (by its index) into an IR function.
 ///
 /// `has_self` indicates whether the first parameter is an implicit `this`.
+/// `class_name` provides the owning class name so `this` can be typed as `Struct(name)`.
 fn translate_class_method(
     abc: &AbcFile,
     method_idx: &Index<swf::avm2::types::Method>,
     func_name: &str,
     has_self: bool,
+    class_name: Option<&str>,
 ) -> Result<Option<Function>, String> {
     let idx = method_idx.0 as usize;
     if idx >= abc.methods.len() {
@@ -261,7 +265,11 @@ fn translate_class_method(
     // Build parameter types
     let mut param_types = Vec::new();
     if has_self {
-        param_types.push(Type::Dynamic); // `this`
+        if let Some(name) = class_name {
+            param_types.push(Type::Struct(name.to_string()));
+        } else {
+            param_types.push(Type::Dynamic);
+        }
     }
     for param in &method.params {
         param_types.push(resolve_type(pool, &param.kind));
