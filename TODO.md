@@ -59,6 +59,13 @@ value needs a concrete type. This isn't a polish pass; it's a prerequisite.
   failures cause unnecessary `Dynamic` entries. Fix the frontend to preserve
   what the source already knows, so inference only needs to handle what's
   genuinely untyped.
+- [ ] **Flash frontend: extract local variable names** — We're throwing away
+  two sources of name information that the swf crate already parses:
+  (1) `MethodParam.name` — parameter names, gated behind `HAS_PARAM_NAMES`;
+  (2) `Op::Debug` opcodes — map register indices to variable names
+  (e.g., register 3 = `"player"`). Currently both are discarded. The output
+  uses synthesized names like `v42` instead of the original `player`, `score`,
+  etc. This is the single highest-impact change for output readability.
 - [ ] **Untyped frontend validation** — test the inference pipeline against a
   fully-untyped IR (simulating Lingo/HyperCard) to verify it can reconstruct
   useful types from usage patterns alone.
