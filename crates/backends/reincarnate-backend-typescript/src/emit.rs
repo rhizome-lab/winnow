@@ -35,6 +35,7 @@ pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
     let mut out = String::new();
     let class_names = build_class_names(module);
     let ancestor_sets = build_ancestor_sets(module);
+    let method_name_sets = build_method_name_sets(module);
 
     emit_runtime_imports(module, &mut out);
     emit_imports(module, &mut out);
@@ -47,7 +48,7 @@ pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
     } else {
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &ancestor_sets, &mut out)?;
+            emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, &mut out)?;
         }
         for (_fid, func) in &free_funcs {
             emit_function(func, &class_names, &mut out)?;
@@ -143,6 +144,40 @@ fn build_ancestor_sets(module: &Module) -> HashMap<String, HashSet<String>> {
     result
 }
 
+/// Build a mapping from qualified class name → set of all method short names
+/// visible through the class hierarchy (own methods + all ancestor methods).
+fn build_method_name_sets(module: &Module) -> HashMap<String, HashSet<String>> {
+    let class_by_short: HashMap<&str, &ClassDef> =
+        module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    let mut result = HashMap::new();
+    for class in &module.classes {
+        let mut names = HashSet::new();
+        let mut current = class;
+        loop {
+            for &fid in &current.methods {
+                if let Some(f) = module.functions.get(fid) {
+                    if let Some(short) = f.name.rsplit("::").next() {
+                        names.insert(short.to_string());
+                    }
+                }
+            }
+            match current.super_class {
+                Some(ref sc) => {
+                    let short = sc.rsplit("::").next().unwrap_or(sc);
+                    match class_by_short.get(short) {
+                        Some(parent) => current = parent,
+                        None => break,
+                    }
+                }
+                None => break,
+            }
+        }
+        result.insert(qualified_class_name(class), names);
+    }
+    result
+}
+
 /// Build a qualified name from a ClassDef's namespace + name.
 fn qualified_class_name(class: &ClassDef) -> String {
     if class.namespace.is_empty() {
@@ -192,6 +227,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
     let registry = ClassRegistry::from_module(module);
     let class_names = build_class_names(module);
     let ancestor_sets = build_ancestor_sets(module);
+    let method_name_sets = build_method_name_sets(module);
     let mut barrel_exports: Vec<String> = Vec::new();
 
     for group in &class_groups {
@@ -219,7 +255,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
         );
         emit_runtime_imports_for(systems, &mut out, depth);
         emit_intra_imports(group, &segments, &registry, &mut out);
-        emit_class(group, module, &class_names, &ancestor_sets, &mut out)?;
+        emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -282,6 +318,8 @@ struct EmitCtx {
     scope_lookups: HashSet<ValueId>,
     /// Short names of the current class and all its ancestors in the hierarchy.
     ancestors: HashSet<String>,
+    /// Method short names visible in the class hierarchy (for resolving inherited calls).
+    method_names: HashSet<String>,
 }
 
 impl EmitCtx {
@@ -296,6 +334,7 @@ impl EmitCtx {
             class_names: class_names.clone(),
             scope_lookups: HashSet::new(),
             ancestors: HashSet::new(),
+            method_names: HashSet::new(),
         }
     }
 
@@ -304,6 +343,7 @@ impl EmitCtx {
         self_value: ValueId,
         class_names: &HashMap<String, String>,
         ancestors: &HashSet<String>,
+        method_names: &HashSet<String>,
     ) -> Self {
         let needs_let = compute_needs_let(func);
         let use_counts = compute_use_counts(func);
@@ -315,6 +355,7 @@ impl EmitCtx {
             class_names: class_names.clone(),
             scope_lookups: HashSet::new(),
             ancestors: ancestors.clone(),
+            method_names: method_names.clone(),
         }
     }
 
@@ -1397,8 +1438,13 @@ fn emit_inst(
                     .collect::<Vec<_>>()
                     .join(", ");
                 if ctx.scope_lookups.contains(&receiver) {
-                    // Scope lookup receiver → bare function call
-                    format!("{}({rest_args})", sanitize_ident(method))
+                    if ctx.self_value.is_some() && ctx.method_names.contains(method) {
+                        // Inherited method via scope lookup → this.method()
+                        format!("this.{}({rest_args})", sanitize_ident(method))
+                    } else {
+                        // True global scope lookup → bare function call
+                        format!("{}({rest_args})", sanitize_ident(method))
+                    }
                 } else {
                     format!(
                         "{}.{}({rest_args})",
@@ -1408,15 +1454,24 @@ fn emit_inst(
                 }
             } else {
                 // Unqualified call: strip scope-lookup first arg if present
-                let effective_args: Vec<_> =
-                    if !args.is_empty() && ctx.scope_lookups.contains(&args[0]) {
-                        args[1..].iter().map(|a| ctx.val(*a)).collect()
-                    } else {
-                        args.iter().map(|a| ctx.val(*a)).collect()
-                    };
+                let has_scope_receiver =
+                    !args.is_empty() && ctx.scope_lookups.contains(&args[0]);
+                let effective_args: Vec<_> = if has_scope_receiver {
+                    args[1..].iter().map(|a| ctx.val(*a)).collect()
+                } else {
+                    args.iter().map(|a| ctx.val(*a)).collect()
+                };
                 let args_str = effective_args.join(", ");
                 let safe_name = sanitize_ident(fname);
-                format!("{safe_name}({args_str})")
+                if has_scope_receiver
+                    && ctx.self_value.is_some()
+                    && ctx.method_names.contains(fname)
+                {
+                    // Inherited method call — resolve to this.method()
+                    format!("this.{safe_name}({args_str})")
+                } else {
+                    format!("{safe_name}({args_str})")
+                }
             };
             if let Some(r) = result {
                 emit_or_inline(ctx, r, expr, false, out, indent);
@@ -1514,8 +1569,13 @@ fn emit_inst(
         // -- Type operations --
         Op::Cast(v, ty) => {
             let r = result.unwrap();
-            let expr = format!("{} as {}", ctx.operand(*v), ts_type(ty));
-            emit_or_inline(ctx, r, expr, true, out, indent);
+            if func.value_types[*v] == *ty {
+                // Same type — elide the redundant cast.
+                emit_or_inline(ctx, r, ctx.operand(*v), false, out, indent);
+            } else {
+                let expr = format!("{} as {}", ctx.operand(*v), ts_type(ty));
+                emit_or_inline(ctx, r, expr, true, out, indent);
+            }
         }
         Op::TypeCheck(v, ty) => {
             let r = result.unwrap();
@@ -1674,6 +1734,7 @@ fn emit_class(
     _module: &Module,
     class_names: &HashMap<String, String>,
     ancestor_sets: &HashMap<String, HashSet<String>>,
+    method_name_sets: &HashMap<String, HashSet<String>>,
     out: &mut String,
 ) -> Result<(), CoreError> {
     let class_name = sanitize_ident(&group.class_def.name);
@@ -1711,12 +1772,14 @@ fn emit_class(
     let qualified = qualified_class_name(group.class_def);
     let empty_ancestors = HashSet::new();
     let ancestors = ancestor_sets.get(&qualified).unwrap_or(&empty_ancestors);
+    let empty_methods = HashSet::new();
+    let method_names = method_name_sets.get(&qualified).unwrap_or(&empty_methods);
 
     for (i, &(_fid, func)) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(func, class_names, ancestors, out)?;
+        emit_class_method(func, class_names, ancestors, method_names, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -1728,6 +1791,7 @@ fn emit_class_method(
     func: &Function,
     class_names: &HashMap<String, String>,
     ancestors: &HashSet<String>,
+    method_names: &HashSet<String>,
     out: &mut String,
 ) -> Result<(), CoreError> {
     // Extract bare method name from func.name (last `::` segment).
@@ -1749,7 +1813,7 @@ fn emit_class_method(
 
     // Build context — methods with a self parameter get `this` binding.
     let mut ctx = if skip_self && !entry.params.is_empty() {
-        EmitCtx::for_method(func, entry.params[0].value, class_names, ancestors)
+        EmitCtx::for_method(func, entry.params[0].value, class_names, ancestors, method_names)
     } else {
         EmitCtx::for_function(func, class_names)
     };
@@ -3421,6 +3485,125 @@ mod tests {
         assert!(
             !out.contains("findPropStrict"),
             "Standalone scope lookup should not emit findPropStrict:\n{out}"
+        );
+    }
+
+    #[test]
+    fn scope_lookup_call_resolves_to_this_for_inherited_method() {
+        // In a method context, an unqualified call whose name matches a method
+        // in the class hierarchy should emit this.method() instead of method().
+        let mut mb = ModuleBuilder::new("test");
+
+        mb.add_struct(StructDef {
+            name: "Base".into(),
+            namespace: vec![],
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+        mb.add_struct(StructDef {
+            name: "Child".into(),
+            namespace: vec![],
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+
+        // Base class with isNaga method.
+        let base_sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Bool,
+        };
+        let mut fb = FunctionBuilder::new("Base::isNaga", base_sig, Visibility::Public);
+        fb.set_class(vec![], "Base".into(), MethodKind::Instance);
+        let _this = fb.param(0);
+        let c = fb.const_bool(false);
+        fb.ret(Some(c));
+        let base_method_id = mb.add_function(fb.build());
+
+        mb.add_class(ClassDef {
+            name: "Base".into(),
+            namespace: vec![],
+            struct_index: 0,
+            methods: vec![base_method_id],
+            super_class: None,
+            visibility: Visibility::Public,
+        });
+
+        // Child class with a method that calls isNaga via scope lookup.
+        let child_sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Bool,
+        };
+        let mut fb = FunctionBuilder::new("Child::check", child_sig, Visibility::Public);
+        fb.set_class(vec![], "Child".into(), MethodKind::Instance);
+        let _this = fb.param(0);
+        let name = fb.const_string("isNaga");
+        let scope =
+            fb.system_call("Flash.Scope", "findPropStrict", &[name], Type::Dynamic);
+        let result = fb.call("isNaga", &[scope], Type::Bool);
+        fb.ret(Some(result));
+        let child_method_id = mb.add_function(fb.build());
+
+        mb.add_class(ClassDef {
+            name: "Child".into(),
+            namespace: vec![],
+            struct_index: 1,
+            methods: vec![child_method_id],
+            super_class: Some("Base".into()),
+            visibility: Visibility::Public,
+        });
+
+        let module = mb.build();
+        let out = emit_module_to_string(&module).unwrap();
+
+        assert!(
+            out.contains("this.isNaga()"),
+            "Should emit this.isNaga() for inherited method call:\n{out}"
+        );
+        assert!(
+            !out.contains("findPropStrict"),
+            "findPropStrict should be resolved away:\n{out}"
+        );
+    }
+
+    #[test]
+    fn cast_elided_when_source_type_matches() {
+        // Cast(v, Bool) where v is already Bool → no "as boolean".
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Bool,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let casted = fb.cast(x, Type::Bool);
+            fb.ret(Some(casted));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            !out.contains("as boolean"),
+            "Redundant cast should be elided:\n{out}"
+        );
+    }
+
+    #[test]
+    fn cast_preserved_when_types_differ() {
+        // Cast(v, Bool) where v is Dynamic → should keep "as boolean".
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Bool,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let casted = fb.cast(x, Type::Bool);
+            fb.ret(Some(casted));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("as boolean"),
+            "Cast from Dynamic to Bool should be preserved:\n{out}"
         );
     }
 }
