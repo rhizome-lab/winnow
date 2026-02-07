@@ -784,6 +784,11 @@ fn collect_type_ref(
             collect_type_ref(yield_ty, self_name, registry, refs);
             collect_type_ref(return_ty, self_name, registry, refs);
         }
+        Type::Union(types) => {
+            for t in types {
+                collect_type_ref(t, self_name, registry, refs);
+            }
+        }
         _ => {}
     }
 }
@@ -2315,6 +2320,10 @@ fn type_check_expr(ctx: &EmitCtx, v: ValueId, ty: &Type) -> String {
         Type::Struct(name) | Type::Enum(name) => {
             let short = name.rsplit("::").next().unwrap_or(name);
             format!("{} instanceof {}", ctx.operand(v), sanitize_ident(short))
+        }
+        Type::Union(types) => {
+            let checks: Vec<_> = types.iter().map(|t| type_check_expr(ctx, v, t)).collect();
+            format!("({})", checks.join(" || "))
         }
         _ => format!("typeof {} === \"object\"", ctx.operand(v)),
     }
