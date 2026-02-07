@@ -367,32 +367,43 @@ fn emit_runtime_imports_at_depth(module: &Module, out: &mut String, depth: usize
 // Intra-module imports (class-to-class references)
 // ---------------------------------------------------------------------------
 
-/// Collect type names referenced by a class group that exist in the registry.
-fn collect_class_references(group: &ClassGroup<'_>, registry: &ClassRegistry) -> BTreeSet<String> {
+/// Collect type names referenced by a class group, split into value and type-only refs.
+///
+/// **Value refs** (class constructor needed at runtime):
+/// - `super_class` — `extends X` is a runtime expression
+/// - `Op::TypeCheck` — emits `instanceof X`
+///
+/// **Type refs** (erased at runtime):
+/// - Struct field types, function signatures, `Op::Alloc`, `Op::Cast`, `value_types`
+fn collect_class_references(
+    group: &ClassGroup<'_>,
+    registry: &ClassRegistry,
+) -> (BTreeSet<String>, BTreeSet<String>) {
     let self_name = &group.class_def.name;
-    let mut refs = BTreeSet::new();
+    let mut value_refs = BTreeSet::new();
+    let mut type_refs = BTreeSet::new();
 
-    // Super class reference.
+    // Super class reference — runtime value (extends).
     if let Some(sc) = &group.class_def.super_class {
         let short = sc.rsplit("::").next().unwrap_or(sc);
         if short != self_name {
             if let Some(entry) = registry.lookup(sc) {
-                refs.insert(entry.short_name.clone());
+                value_refs.insert(entry.short_name.clone());
             }
         }
     }
 
-    // Struct fields (class instance fields).
+    // Struct fields (class instance fields) — type-only.
     for (_name, ty) in &group.struct_def.fields {
-        collect_type_ref(ty, self_name, registry, &mut refs);
+        collect_type_ref(ty, self_name, registry, &mut type_refs);
     }
 
     // Scan all method bodies for type references.
     for (_fid, func) in &group.methods {
-        collect_type_refs_from_function(func, self_name, registry, &mut refs);
+        collect_type_refs_from_function(func, self_name, registry, &mut value_refs, &mut type_refs);
     }
 
-    refs
+    (value_refs, type_refs)
 }
 
 /// Scan a function's instructions and signature for type references.
@@ -400,27 +411,33 @@ fn collect_type_refs_from_function(
     func: &Function,
     self_name: &str,
     registry: &ClassRegistry,
-    refs: &mut BTreeSet<String>,
+    value_refs: &mut BTreeSet<String>,
+    type_refs: &mut BTreeSet<String>,
 ) {
-    // Check return type and param types.
-    collect_type_ref(&func.sig.return_ty, self_name, registry, refs);
+    // Return type and param types — type-only.
+    collect_type_ref(&func.sig.return_ty, self_name, registry, type_refs);
     for ty in &func.sig.params {
-        collect_type_ref(ty, self_name, registry, refs);
+        collect_type_ref(ty, self_name, registry, type_refs);
     }
 
-    // Check instructions.
+    // Instructions.
     for (_inst_id, inst) in func.insts.iter() {
         match &inst.op {
-            Op::Alloc(ty) | Op::Cast(_, ty) | Op::TypeCheck(_, ty) => {
-                collect_type_ref(ty, self_name, registry, refs);
+            // TypeCheck emits `instanceof` — runtime value reference.
+            Op::TypeCheck(_, ty) => {
+                collect_type_ref(ty, self_name, registry, value_refs);
+            }
+            // Alloc and Cast are type assertions only — type-only.
+            Op::Alloc(ty) | Op::Cast(_, ty) => {
+                collect_type_ref(ty, self_name, registry, type_refs);
             }
             _ => {}
         }
     }
 
-    // Check value_types for Struct/Enum references.
+    // value_types — type-only.
     for (_vid, ty) in func.value_types.iter() {
-        collect_type_ref(ty, self_name, registry, refs);
+        collect_type_ref(ty, self_name, registry, type_refs);
     }
 }
 
@@ -469,22 +486,33 @@ fn collect_type_ref(
     }
 }
 
-/// Emit `import { X } from "..."` statements for intra-module class references.
+/// Emit `import` / `import type` statements for intra-module class references.
 fn emit_intra_imports(
     group: &ClassGroup<'_>,
     source_segments: &[String],
     registry: &ClassRegistry,
     out: &mut String,
 ) {
-    let needed = collect_class_references(group, registry);
-    if needed.is_empty() {
+    let (value_refs, type_refs) = collect_class_references(group, registry);
+    if value_refs.is_empty() && type_refs.is_empty() {
         return;
     }
 
-    for short_name in &needed {
+    // Value imports first (runtime-needed).
+    for short_name in &value_refs {
         if let Some(entry) = registry.classes.get(short_name) {
             let rel = relative_import_path(source_segments, &entry.path_segments);
             let _ = writeln!(out, "import {{ {short_name} }} from \"{rel}\";");
+        }
+    }
+    // Type-only imports (names not already in value_refs).
+    for short_name in &type_refs {
+        if value_refs.contains(short_name) {
+            continue;
+        }
+        if let Some(entry) = registry.classes.get(short_name) {
+            let rel = relative_import_path(source_segments, &entry.path_segments);
+            let _ = writeln!(out, "import type {{ {short_name} }} from \"{rel}\";");
         }
     }
     out.push('\n');
