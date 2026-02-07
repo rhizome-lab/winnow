@@ -8,6 +8,7 @@ pub struct PassConfig {
     pub constant_folding: bool,
     pub cfg_simplify: bool,
     pub coroutine_lowering: bool,
+    pub redundant_cast_elimination: bool,
     pub mem2reg: bool,
     pub dead_code_elimination: bool,
     /// When enabled, the pipeline repeats all passes until none report changes.
@@ -21,6 +22,7 @@ impl Default for PassConfig {
             constant_folding: true,
             cfg_simplify: true,
             coroutine_lowering: true,
+            redundant_cast_elimination: true,
             mem2reg: true,
             dead_code_elimination: true,
             fixpoint: false,
@@ -36,6 +38,7 @@ impl PassConfig {
     /// - `"constant-folding"`
     /// - `"cfg-simplify"`
     /// - `"coroutine-lowering"`
+    /// - `"redundant-cast-elimination"`
     /// - `"mem2reg"`
     /// - `"dead-code-elimination"`
     /// - `"fixpoint"` — toggles pipeline fixpoint iteration
@@ -47,6 +50,7 @@ impl PassConfig {
                 "constant-folding" => config.constant_folding = false,
                 "cfg-simplify" => config.cfg_simplify = false,
                 "coroutine-lowering" => config.coroutine_lowering = false,
+                "redundant-cast-elimination" => config.redundant_cast_elimination = false,
                 "mem2reg" => config.mem2reg = false,
                 "dead-code-elimination" => config.dead_code_elimination = false,
                 "fixpoint" => config.fixpoint = false,
@@ -89,6 +93,7 @@ mod tests {
             "constant-folding",
             "cfg-simplify",
             "coroutine-lowering",
+            "redundant-cast-elimination",
             "mem2reg",
             "dead-code-elimination",
             "fixpoint",
@@ -97,6 +102,7 @@ mod tests {
         assert!(!config.constant_folding);
         assert!(!config.cfg_simplify);
         assert!(!config.coroutine_lowering);
+        assert!(!config.redundant_cast_elimination);
         assert!(!config.mem2reg);
         assert!(!config.dead_code_elimination);
         assert!(!config.fixpoint);
