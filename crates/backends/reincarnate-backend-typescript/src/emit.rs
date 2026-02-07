@@ -320,12 +320,19 @@ struct EmitCtx {
     ancestors: HashSet<String>,
     /// Method short names visible in the class hierarchy (for resolving inherited calls).
     method_names: HashSet<String>,
+    /// Debug names for values (from source-level variable/parameter names).
+    value_names: HashMap<ValueId, String>,
 }
 
 impl EmitCtx {
     fn for_function(func: &Function, class_names: &HashMap<String, String>) -> Self {
         let needs_let = compute_needs_let(func);
         let use_counts = compute_use_counts(func);
+        let value_names: HashMap<ValueId, String> = func
+            .value_names
+            .iter()
+            .map(|(k, v)| (*k, sanitize_ident(v)))
+            .collect();
         Self {
             needs_let,
             self_value: None,
@@ -335,6 +342,7 @@ impl EmitCtx {
             scope_lookups: HashSet::new(),
             ancestors: HashSet::new(),
             method_names: HashSet::new(),
+            value_names,
         }
     }
 
@@ -347,6 +355,11 @@ impl EmitCtx {
     ) -> Self {
         let needs_let = compute_needs_let(func);
         let use_counts = compute_use_counts(func);
+        let value_names: HashMap<ValueId, String> = func
+            .value_names
+            .iter()
+            .map(|(k, v)| (*k, sanitize_ident(v)))
+            .collect();
         Self {
             needs_let,
             self_value: Some(self_value),
@@ -356,6 +369,7 @@ impl EmitCtx {
             scope_lookups: HashSet::new(),
             ancestors: ancestors.clone(),
             method_names: method_names.clone(),
+            value_names,
         }
     }
 
@@ -375,6 +389,8 @@ impl EmitCtx {
             "this".into()
         } else if let Some((expr, _)) = self.inline_exprs.get(&v) {
             expr.clone()
+        } else if let Some(name) = self.value_names.get(&v) {
+            name.clone()
         } else {
             format!("v{}", v.index())
         }
@@ -393,6 +409,8 @@ impl EmitCtx {
             } else {
                 expr.clone()
             }
+        } else if let Some(name) = self.value_names.get(&v) {
+            name.clone()
         } else {
             format!("v{}", v.index())
         }
@@ -402,6 +420,8 @@ impl EmitCtx {
     fn val_name(&self, v: ValueId) -> String {
         if self.self_value == Some(v) {
             "this".into()
+        } else if let Some(name) = self.value_names.get(&v) {
+            name.clone()
         } else {
             format!("v{}", v.index())
         }
