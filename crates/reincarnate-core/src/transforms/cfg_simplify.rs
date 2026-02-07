@@ -8,10 +8,11 @@ use super::util::{branch_targets, substitute_values_in_op};
 
 /// CFG simplification transform — removes redundant blocks and simplifies control flow.
 ///
-/// Three phases per function, iterated to a fixed point:
+/// Four phases per function, iterated to a fixed point:
 /// 1. Forward empty blocks (blocks whose only instruction is an unconditional `Br`)
 /// 2. Merge blocks (single-predecessor blocks absorbed into their predecessor)
-/// 3. Cleanup unreachable blocks (clear instructions and params)
+/// 3. Eliminate trivial block parameters (all predecessors pass the same value)
+/// 4. Cleanup unreachable blocks (clear instructions and params)
 pub struct CfgSimplify;
 
 /// Find all blocks reachable from the entry block via BFS.
@@ -391,7 +392,224 @@ fn merge_blocks(func: &mut Function) -> bool {
     changed
 }
 
-/// Phase 3: Cleanup unreachable blocks.
+/// Remove the branch argument at `index` from any branch targeting `target` in `op`.
+fn remove_branch_arg_at(op: &mut Op, target: BlockId, index: usize) {
+    match op {
+        Op::Br {
+            target: t, args, ..
+        } if *t == target => {
+            args.remove(index);
+        }
+        Op::BrIf {
+            then_target,
+            then_args,
+            else_target,
+            else_args,
+            ..
+        } => {
+            if *then_target == target {
+                then_args.remove(index);
+            }
+            if *else_target == target {
+                else_args.remove(index);
+            }
+        }
+        Op::Switch {
+            cases, default, ..
+        } => {
+            for (_, t, args) in cases.iter_mut() {
+                if *t == target {
+                    args.remove(index);
+                }
+            }
+            if default.0 == target {
+                default.1.remove(index);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect all branch argument lists targeting `target` from an Op.
+/// Unlike `get_branch_args` which returns the first match, this returns ALL
+/// arg lists (e.g., both then_args and else_args if both target the same block).
+fn collect_all_branch_args(op: &Op, target: BlockId) -> Vec<&Vec<ValueId>> {
+    let mut result = Vec::new();
+    match op {
+        Op::Br {
+            target: t, args, ..
+        } if *t == target => {
+            result.push(args);
+        }
+        Op::BrIf {
+            then_target,
+            then_args,
+            else_target,
+            else_args,
+            ..
+        } => {
+            if *then_target == target {
+                result.push(then_args);
+            }
+            if *else_target == target {
+                result.push(else_args);
+            }
+        }
+        Op::Switch {
+            cases, default, ..
+        } => {
+            for (_, t, args) in cases {
+                if *t == target {
+                    result.push(args);
+                }
+            }
+            if default.0 == target {
+                result.push(&default.1);
+            }
+        }
+        _ => {}
+    }
+    result
+}
+
+/// Phase 3: Eliminate trivial block parameters.
+///
+/// A block parameter is "trivial" when every incoming edge passes the same ValueId
+/// for that parameter position. In that case the parameter can be removed and all
+/// uses of the parameter value can be replaced with the single incoming value.
+///
+/// Returns true if any changes were made.
+fn eliminate_trivial_params(func: &mut Function) -> bool {
+    let reachable = find_reachable_blocks(func);
+    let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
+
+    // Collect removals: (block, param indices to remove in reverse order).
+    let mut removals: Vec<(BlockId, Vec<usize>)> = Vec::new();
+
+    for block_id in func.blocks.keys().collect::<Vec<_>>() {
+        if block_id == func.entry {
+            continue;
+        }
+        if !reachable.contains(&block_id) {
+            continue;
+        }
+        let params = &func.blocks[block_id].params;
+        if params.is_empty() {
+            continue;
+        }
+
+        // Collect all incoming arg lists for this block from all instructions.
+        let mut incoming: Vec<&Vec<ValueId>> = Vec::new();
+        for src_block in func.blocks.keys().collect::<Vec<_>>() {
+            if !reachable.contains(&src_block) {
+                continue;
+            }
+            for &inst_id in &func.blocks[src_block].insts {
+                incoming.extend(collect_all_branch_args(&func.insts[inst_id].op, block_id));
+            }
+        }
+
+        if incoming.is_empty() {
+            continue;
+        }
+
+        let mut trivial_indices: Vec<usize> = Vec::new();
+
+        for (i, param) in params.iter().enumerate() {
+            let mut uniform_value: Option<ValueId> = None;
+            let mut is_trivial = true;
+
+            for args in &incoming {
+                if i >= args.len() {
+                    is_trivial = false;
+                    break;
+                }
+                let val = args[i];
+                match uniform_value {
+                    None => uniform_value = Some(val),
+                    Some(v) if v == val => {}
+                    Some(_) => {
+                        is_trivial = false;
+                        break;
+                    }
+                }
+            }
+
+            if is_trivial {
+                if let Some(v) = uniform_value {
+                    subst.insert(param.value, v);
+                    trivial_indices.push(i);
+                }
+            }
+        }
+
+        if !trivial_indices.is_empty() {
+            trivial_indices.reverse();
+            removals.push((block_id, trivial_indices));
+        }
+    }
+
+    if subst.is_empty() {
+        return false;
+    }
+
+    // Resolve transitive substitutions: if subst has {A→B, B→C}, resolve A→C.
+    // This prevents dangling references when an intermediate value's block
+    // parameter was also eliminated.
+    let resolved_subst: HashMap<ValueId, ValueId> = subst
+        .keys()
+        .map(|&from| {
+            let mut val = subst[&from];
+            let mut depth = 0;
+            while let Some(&next) = subst.get(&val) {
+                val = next;
+                depth += 1;
+                if depth > subst.len() {
+                    break; // cycle guard
+                }
+            }
+            (from, val)
+        })
+        .collect();
+    let subst = resolved_subst;
+
+    // Remove trivial params from blocks.
+    let removal_map: HashMap<BlockId, &Vec<usize>> =
+        removals.iter().map(|(b, idx)| (*b, idx)).collect();
+
+    for (block_id, indices) in &removals {
+        for &i in indices {
+            func.blocks[*block_id].params.remove(i);
+        }
+    }
+
+    // Remove branch args and apply substitutions only in reachable blocks.
+    for &block_id in &reachable {
+        for &inst_id in &func.blocks[block_id].insts {
+            // Remove branch args from instructions that target affected blocks.
+            // Deduplicate targets since remove_branch_arg_at handles all arms
+            // of a BrIf/Switch in one call.
+            let mut seen = HashSet::new();
+            for target in branch_targets(&func.insts[inst_id].op) {
+                if !seen.insert(target) {
+                    continue;
+                }
+                if let Some(indices) = removal_map.get(&target) {
+                    for &i in *indices {
+                        remove_branch_arg_at(&mut func.insts[inst_id].op, target, i);
+                    }
+                }
+            }
+
+            // Apply value substitution.
+            substitute_values_in_op(&mut func.insts[inst_id].op, &subst);
+        }
+    }
+
+    true
+}
+
+/// Phase 4: Cleanup unreachable blocks.
 fn cleanup_unreachable(func: &mut Function) -> bool {
     let reachable = find_reachable_blocks(func);
     let mut changed = false;
@@ -418,6 +636,7 @@ fn simplify_cfg(func: &mut Function) -> bool {
         let mut changed = false;
         changed |= forward_empty_blocks(func);
         changed |= merge_blocks(func);
+        changed |= eliminate_trivial_params(func);
         changed |= cleanup_unreachable(func);
         if !changed {
             break;
@@ -754,6 +973,140 @@ mod tests {
             Op::Return(_) => {} // D was merged all the way in
             Op::Br { target, .. } => assert_eq!(*target, block_d),
             other => panic!("expected Return or Br to D, got {:?}", other),
+        }
+    }
+
+    /// Trivial param eliminated: both predecessors pass the same value → param removed.
+    #[test]
+    fn trivial_param_eliminated() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+        let then_block = fb.create_block();
+        let else_block = fb.create_block();
+
+        // entry: const 42, br_if → then / else
+        let val = fb.const_int(42);
+        let cond = fb.const_bool(true);
+        fb.br_if(cond, then_block, &[], else_block, &[]);
+
+        // then → merge(val)
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[val]);
+
+        // else → merge(val)  — same value as then
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[val]);
+
+        // merge(p0): return p0
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // merge's param should be eliminated; return should use val directly.
+        assert!(
+            func.blocks[merge].params.is_empty(),
+            "trivial param should be removed"
+        );
+        let last_inst = *func.blocks[merge].insts.last().unwrap();
+        match &func.insts[last_inst].op {
+            Op::Return(Some(v)) => assert_eq!(*v, val),
+            other => panic!("expected Return(Some(val)), got {:?}", other),
+        }
+    }
+
+    /// Non-trivial param preserved: predecessors pass different values.
+    #[test]
+    fn non_trivial_param_preserved() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+        let then_block = fb.create_block();
+        let else_block = fb.create_block();
+
+        let val_a = fb.const_int(1);
+        let val_b = fb.const_int(2);
+        let cond = fb.const_bool(true);
+        fb.br_if(cond, then_block, &[], else_block, &[]);
+
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[val_a]);
+
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[val_b]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // param should be preserved since predecessors pass different values.
+        assert_eq!(
+            func.blocks[merge].params.len(),
+            1,
+            "non-trivial param should be preserved"
+        );
+    }
+
+    /// Mixed params: 3 params, 2 trivial + 1 non-trivial → only trivial ones removed.
+    #[test]
+    fn mixed_trivial_and_non_trivial_params() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+
+        let (merge, merge_params) = fb.create_block_with_params(&[
+            Type::Int(64),
+            Type::Int(64),
+            Type::Int(64),
+        ]);
+        let then_block = fb.create_block();
+        let else_block = fb.create_block();
+
+        let shared_a = fb.const_int(10);
+        let shared_c = fb.const_int(30);
+        let diff_then = fb.const_int(20);
+        let diff_else = fb.const_int(21);
+        let cond = fb.const_bool(true);
+        fb.br_if(cond, then_block, &[], else_block, &[]);
+
+        // then → merge(shared_a, diff_then, shared_c)
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[shared_a, diff_then, shared_c]);
+
+        // else → merge(shared_a, diff_else, shared_c)
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[shared_a, diff_else, shared_c]);
+
+        // merge(p0, p1, p2): return p1
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[1]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // Params 0 and 2 are trivial → removed. Only param 1 (non-trivial) remains.
+        assert_eq!(
+            func.blocks[merge].params.len(),
+            1,
+            "only non-trivial param should remain"
+        );
+
+        // The return should still reference the non-trivial value (not substituted).
+        let last_inst = *func.blocks[merge].insts.last().unwrap();
+        match &func.insts[last_inst].op {
+            Op::Return(Some(_)) => {} // value preserved (may be original or rewritten)
+            other => panic!("expected Return(Some(_)), got {:?}", other),
         }
     }
 }
