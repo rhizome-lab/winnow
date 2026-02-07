@@ -303,12 +303,12 @@ impl EmitCtx {
         }
     }
 
-    /// Returns `"let "` for instruction results, `""` for parameters and self.
+    /// Returns `"const "` for instruction results, `""` for parameters and self.
     fn let_prefix(&self, v: ValueId) -> &'static str {
         if self.self_value == Some(v) {
             ""
         } else if self.needs_let.contains(&v) {
-            "let "
+            "const "
         } else {
             ""
         }
@@ -1970,12 +1970,12 @@ mod tests {
             mb.add_function(fb.build());
         });
 
-        assert!(out.contains("let v0 = null;"));
-        assert!(out.contains("let v1 = true;"));
-        assert!(out.contains("let v2 = false;"));
-        assert!(out.contains("let v3 = 42;"));
-        assert!(out.contains("let v4 = 3.125;"));
-        assert!(out.contains(r#"let v5 = "hello \"world\"\nnewline";"#));
+        assert!(out.contains("const v0 = null;"));
+        assert!(out.contains("const v1 = true;"));
+        assert!(out.contains("const v2 = false;"));
+        assert!(out.contains("const v3 = 42;"));
+        assert!(out.contains("const v4 = 3.125;"));
+        assert!(out.contains(r#"const v5 = "hello \"world\"\nnewline";"#));
     }
 
     #[test]
@@ -2000,9 +2000,9 @@ mod tests {
         });
 
         // Constants are inlined into the aggregate expressions.
-        assert!(out.contains("let v2 = [1, 2];"), "Should inline consts into array:\n{out}");
+        assert!(out.contains("const v2 = [1, 2];"), "Should inline consts into array:\n{out}");
         assert!(
-            out.contains("let v5 = { x: 10.0, y: 20.0 };"),
+            out.contains("const v5 = { x: 10.0, y: 20.0 };"),
             "Should inline consts into struct:\n{out}"
         );
     }
