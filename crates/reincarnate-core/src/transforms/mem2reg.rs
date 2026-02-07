@@ -106,6 +106,27 @@ fn promote_function(func: &mut Function) -> bool {
         }
     }
 
+    // Propagate value names through promotions:
+    // - Single-store allocs: transfer name from the alloc pointer to the stored value.
+    for ptr in &single_store {
+        if let Some(name) = func.value_names.remove(ptr) {
+            let target = store_value[ptr];
+            func.value_names.entry(target).or_insert(name);
+        }
+    }
+    // - Copy elimination: transfer name from copy result to source.
+    for (inst_id, inst) in func.insts.iter() {
+        if dead_insts.contains(&inst_id) {
+            if let Op::Copy(src) = &inst.op {
+                if let Some(r) = inst.result {
+                    if let Some(name) = func.value_names.remove(&r) {
+                        func.value_names.entry(*src).or_insert(name);
+                    }
+                }
+            }
+        }
+    }
+
     // Phase 3: Rewrite all surviving instructions to use the substitution map.
     let inst_ids: Vec<_> = func.insts.keys().collect();
     for inst_id in inst_ids {
