@@ -76,24 +76,21 @@ impl ClassRegistry {
             let mut segments: Vec<String> =
                 class.namespace.iter().map(|s| sanitize_ident(s)).collect();
             segments.push(short.clone());
-            let entry = ClassEntry {
-                short_name: short.clone(),
-                path_segments: segments,
-            };
+
             // Key by qualified name: "classes.Scenes.Areas.Swamp::CorruptedDriderScene"
             let qualified = qualified_class_name(class);
-            classes.insert(qualified, entry);
+            classes.insert(
+                qualified,
+                ClassEntry {
+                    short_name: short.clone(),
+                    path_segments: segments.clone(),
+                },
+            );
             // Also key by bare name for fallback lookup (if not already taken).
-            let bare_entry = ClassEntry {
-                short_name: short.clone(),
-                path_segments: classes
-                    .values()
-                    .last()
-                    .unwrap()
-                    .path_segments
-                    .clone(),
-            };
-            classes.entry(short).or_insert(bare_entry);
+            classes.entry(short.clone()).or_insert(ClassEntry {
+                short_name: short,
+                path_segments: segments,
+            });
         }
         Self { classes }
     }
@@ -121,15 +118,17 @@ fn qualified_class_name(class: &ClassDef) -> String {
 /// Both `from` and `to` are file-level segments (the last element is the
 /// filename without extension).
 fn relative_import_path(from: &[String], to: &[String]) -> String {
-    // Find common prefix length.
-    let common = from
+    // Find common prefix length (only among directory segments, not filenames).
+    let from_dirs = from.len().saturating_sub(1);
+    let to_dirs = to.len().saturating_sub(1);
+    let common = from[..from_dirs]
         .iter()
-        .zip(to.iter())
+        .zip(to[..to_dirs].iter())
         .take_while(|(a, b)| a == b)
         .count();
 
-    // Go up from `from`'s directory (all segments except the filename).
-    let ups = from.len() - 1 - common;
+    // Go up from `from`'s directory.
+    let ups = from_dirs - common;
     let mut parts = Vec::new();
     if ups == 0 {
         parts.push(".".to_string());
