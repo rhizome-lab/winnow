@@ -121,16 +121,20 @@ fn refine(old: &Type, new: &Type) -> Option<Type> {
 }
 
 /// Merge two types into a union, deduplicating members.
-/// Returns a single type if only one distinct member remains.
+/// `Dynamic` members are dropped — they carry no information.
+/// Returns a single type if only one distinct member remains,
+/// or `Dynamic` if no concrete members exist.
 fn union_type(a: Type, b: Type) -> Type {
     let mut types = match a {
-        Type::Union(v) => v,
+        Type::Dynamic => vec![],
+        Type::Union(v) => v.into_iter().filter(|t| *t != Type::Dynamic).collect(),
         other => vec![other],
     };
     match b {
+        Type::Dynamic => {}
         Type::Union(v) => {
             for t in v {
-                if !types.contains(&t) {
+                if t != Type::Dynamic && !types.contains(&t) {
                     types.push(t);
                 }
             }
@@ -141,10 +145,10 @@ fn union_type(a: Type, b: Type) -> Type {
             }
         }
     }
-    if types.len() == 1 {
-        types.into_iter().next().unwrap()
-    } else {
-        Type::Union(types)
+    match types.len() {
+        0 => Type::Dynamic,
+        1 => types.into_iter().next().unwrap(),
+        _ => Type::Union(types),
     }
 }
 
