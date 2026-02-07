@@ -1048,20 +1048,33 @@ fn emit_function(
 }
 
 
-/// If `val` is the result of `Op::Cmp`, return the expression with flipped operator.
 /// Negate a condition for `if` emission.
 ///
 /// The structurizer normalizes `Not(x)` conditions by swapping branches,
 /// so conditions reaching here should generally not be `Not` values.
 /// We still strip `Not` as a safety net to avoid emitting `!!x`.
+///
+/// For `Cmp` conditions that would be inlined, we flip the comparison
+/// operator (e.g. `>=` → `<`) instead of wrapping with `!`.
 fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) -> String {
     for &inst_id in &func.blocks[block].insts {
         let inst = &func.insts[inst_id];
         if inst.result == Some(cond) {
-            if let Op::Not(inner) = &inst.op {
-                return ctx.val(*inner);
+            match &inst.op {
+                Op::Not(inner) => return ctx.val(*inner),
+                Op::Cmp(kind, a, b) if ctx.should_inline(cond) => {
+                    let op = match kind.inverse() {
+                        CmpKind::Eq => "===",
+                        CmpKind::Ne => "!==",
+                        CmpKind::Lt => "<",
+                        CmpKind::Le => "<=",
+                        CmpKind::Gt => ">",
+                        CmpKind::Ge => ">=",
+                    };
+                    return format!("{} {} {}", ctx.operand(*a), op, ctx.operand(*b));
+                }
+                _ => break,
             }
-            break;
         }
     }
     format!("!{}", ctx.operand(cond))
@@ -4167,6 +4180,50 @@ mod tests {
         assert!(
             !out.contains("!(!"),
             "Should not double-negate:\n{out}"
+        );
+    }
+
+    #[test]
+    fn if_else_empty_then_flips_cmp_operator() {
+        // BrIf(Cmp(Ge, a, b), then=empty, else=body) → if (a < b) { body }
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Int(64), Type::Int(64)],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let a = fb.param(0);
+            let b = fb.param(1);
+            let cmp = fb.cmp(CmpKind::Ge, a, b);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge = fb.create_block();
+
+            fb.br_if(cmp, then_block, &[], else_block, &[]);
+
+            // then: empty
+            fb.switch_to_block(then_block);
+            fb.br(merge, &[]);
+
+            // else: has a call
+            fb.switch_to_block(else_block);
+            fb.system_call("renderer", "clear", &[], Type::Void);
+            fb.br(merge, &[]);
+
+            fb.switch_to_block(merge);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("if (v0 < v1) {"),
+            "Should flip Cmp(Ge) to < when then is empty:\n{out}"
+        );
+        assert!(
+            !out.contains("!("),
+            "Should not wrap with !():\n{out}"
         );
     }
 

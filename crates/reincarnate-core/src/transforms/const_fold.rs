@@ -195,6 +195,39 @@ fn try_fold(op: &Op, consts: &HashMap<ValueId, Constant>) -> Option<Constant> {
     }
 }
 
+/// Peephole: rewrite `Not(Cmp(kind, a, b))` → `Cmp(inverse(kind), a, b)`.
+///
+/// This turns `!(x >= 1)` into `x < 1` at the IR level, so the emitter
+/// doesn't need to handle comparison flipping as a syntax transformation.
+fn fold_not_cmp(func: &mut Function) -> bool {
+    // Map from ValueId → (CmpKind, lhs, rhs) for all Cmp instructions.
+    let mut cmp_defs: HashMap<ValueId, (CmpKind, ValueId, ValueId)> = HashMap::new();
+    for (_, inst) in func.insts.iter() {
+        if let (Op::Cmp(kind, a, b), Some(result)) = (&inst.op, inst.result) {
+            cmp_defs.insert(result, (*kind, *a, *b));
+        }
+    }
+
+    let updates: Vec<(InstId, CmpKind, ValueId, ValueId)> = func
+        .insts
+        .keys()
+        .filter_map(|inst_id| {
+            let inst = &func.insts[inst_id];
+            if let Op::Not(inner) = &inst.op {
+                let &(kind, a, b) = cmp_defs.get(inner)?;
+                return Some((inst_id, kind.inverse(), a, b));
+            }
+            None
+        })
+        .collect();
+
+    let changed = !updates.is_empty();
+    for (inst_id, inv_kind, a, b) in updates {
+        func.insts[inst_id].op = Op::Cmp(inv_kind, a, b);
+    }
+    changed
+}
+
 /// Run constant folding on a single function. Returns true if any changes were made.
 fn fold_function(func: &mut Function) -> bool {
     let mut any_changed = false;
@@ -231,6 +264,10 @@ fn fold_function(func: &mut Function) -> bool {
         }
         any_changed = true;
     }
+
+    // Peephole: Not(Cmp) → Cmp(inverse). Runs after constant folding
+    // since it doesn't create new folding opportunities.
+    any_changed |= fold_not_cmp(func);
 
     any_changed
 }
@@ -393,6 +430,29 @@ mod tests {
 
         let func = apply_fold(fb.build());
         assert!(matches!(&find_inst_for(&func, result).op, Op::Const(Constant::Int(-42))));
+    }
+
+    /// `Not(Cmp(Ge, param, 1))` folds to `Cmp(Lt, param, 1)`.
+    #[test]
+    fn not_cmp_folds_to_inverse() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Bool,
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let param = fb.param(0);
+        let one = fb.const_int(1);
+        let cmp = fb.cmp(CmpKind::Ge, param, one);
+        let result = fb.not(cmp);
+        fb.ret(Some(result));
+
+        let func = apply_fold(fb.build());
+        let inst = find_inst_for(&func, result);
+        assert!(
+            matches!(&inst.op, Op::Cmp(CmpKind::Lt, a, b) if *a == param && *b == one),
+            "expected Cmp(Lt, param, 1), got {:?}",
+            inst.op
+        );
     }
 
     /// `0xFF & 0x0F` folds to `Int(15)`.
