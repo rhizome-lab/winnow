@@ -120,30 +120,8 @@ fn refine(old: &Type, new: &Type) -> Option<Type> {
     }
 }
 
-/// Returns true if two types are equivalent for union deduplication.
-/// Numeric types with different bit widths are considered equivalent
-/// because they map to the same backend type (e.g., `number` in TS).
-fn types_equivalent(a: &Type, b: &Type) -> bool {
-    if a == b {
-        return true;
-    }
-    matches!(
-        (a, b),
-        (Type::Int(_), Type::Int(_))
-            | (Type::Int(_), Type::Float(_))
-            | (Type::Float(_), Type::Int(_))
-            | (Type::Float(_), Type::Float(_))
-            | (Type::UInt(_), Type::UInt(_))
-            | (Type::UInt(_), Type::Int(_))
-            | (Type::Int(_), Type::UInt(_))
-            | (Type::UInt(_), Type::Float(_))
-            | (Type::Float(_), Type::UInt(_))
-    )
-}
-
 /// Flatten a type into a list of non-Dynamic, non-Option, non-Union members,
-/// tracking nullability. This ensures unions never nest. Numeric types that
-/// are equivalent for codegen purposes are deduplicated.
+/// tracking nullability. This ensures unions never nest.
 fn flatten_into(ty: Type, nullable: &mut bool, out: &mut Vec<Type>) {
     match ty {
         Type::Dynamic => {}
@@ -157,7 +135,7 @@ fn flatten_into(ty: Type, nullable: &mut bool, out: &mut Vec<Type>) {
             }
         }
         other => {
-            if !out.iter().any(|existing| types_equivalent(existing, &other)) {
+            if !out.contains(&other) {
                 out.push(other);
             }
         }

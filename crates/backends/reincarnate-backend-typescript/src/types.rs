@@ -37,7 +37,16 @@ pub fn ts_type(ty: &Type) -> String {
             ts_type(yield_ty),
             ts_type(return_ty)
         ),
-        Type::Union(types) => types.iter().map(ts_type).collect::<Vec<_>>().join(" | "),
+        Type::Union(types) => {
+            let mut parts = Vec::new();
+            for t in types {
+                let s = ts_type(t);
+                if !parts.contains(&s) {
+                    parts.push(s);
+                }
+            }
+            parts.join(" | ")
+        }
         Type::Var(_) | Type::Dynamic => "any".into(),
     }
 }
