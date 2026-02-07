@@ -1102,6 +1102,7 @@ fn emit_shape(
         Shape::IfElse {
             block,
             cond,
+            cond_negated,
             then_assigns,
             then_body,
             then_trailing_assigns,
@@ -1111,6 +1112,14 @@ fn emit_shape(
         } => {
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
+
+            // Format condition (structurizer sets cond_negated when it
+            // swaps branches to normalize empty-then).
+            let cond_expr = if *cond_negated {
+                negate_cond(ctx, func, *block, *cond)
+            } else {
+                ctx.val(*cond)
+            };
 
             // Emit both branches to buffers so we can detect truly empty output.
             let inner = format!("{indent}  ");
@@ -1133,20 +1142,25 @@ fn emit_shape(
                 }
                 (false, true) => {
                     // Only then has content — no else.
-                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
                     out.push_str(&then_buf);
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (true, false) => {
-                    // Only else has content — flip condition.
-                    let neg = negate_cond(ctx, func, *block, *cond);
+                    // Fallback: then became empty at render time despite
+                    // structurizer normalization. Negate and show else.
+                    let neg = if *cond_negated {
+                        ctx.val(*cond)
+                    } else {
+                        negate_cond(ctx, func, *block, *cond)
+                    };
                     let _ = writeln!(out, "{indent}if ({neg}) {{");
                     out.push_str(&else_buf);
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (false, false) => {
                     // Both branches have content — full if/else.
-                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
                     out.push_str(&then_buf);
                     let _ = writeln!(out, "{indent}}} else {{");
                     out.push_str(&else_buf);
@@ -1365,6 +1379,7 @@ fn emit_shape_strip_trailing_return(
         Shape::IfElse {
             block,
             cond,
+            cond_negated,
             then_assigns,
             then_body,
             then_trailing_assigns,
@@ -1374,6 +1389,12 @@ fn emit_shape_strip_trailing_return(
         } => {
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
+
+            let cond_expr = if *cond_negated {
+                negate_cond(ctx, func, *block, *cond)
+            } else {
+                ctx.val(*cond)
+            };
 
             // Emit both branches to buffers so we can detect truly empty output.
             let inner = format!("{indent}  ");
@@ -1395,18 +1416,22 @@ fn emit_shape_strip_trailing_return(
                     // Both branches empty — skip the entire if.
                 }
                 (false, true) => {
-                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
                     out.push_str(&then_buf);
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (true, false) => {
-                    let neg = negate_cond(ctx, func, *block, *cond);
+                    let neg = if *cond_negated {
+                        ctx.val(*cond)
+                    } else {
+                        negate_cond(ctx, func, *block, *cond)
+                    };
                     let _ = writeln!(out, "{indent}if ({neg}) {{");
                     out.push_str(&else_buf);
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (false, false) => {
-                    let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
                     out.push_str(&then_buf);
                     let _ = writeln!(out, "{indent}}} else {{");
                     out.push_str(&else_buf);

@@ -34,6 +34,7 @@ pub enum Shape {
     IfElse {
         block: BlockId,
         cond: ValueId,
+        cond_negated: bool,
         then_assigns: Vec<BlockArgAssign>,
         then_body: Box<Shape>,
         then_trailing_assigns: Vec<BlockArgAssign>,
@@ -627,6 +628,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
                             then_trailing_assigns: vec![],
@@ -641,6 +643,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
                             then_trailing_assigns: vec![],
@@ -657,6 +660,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
                             then_trailing_assigns: vec![],
@@ -673,6 +677,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
                             then_trailing_assigns: vec![],
@@ -689,6 +694,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
                             then_trailing_assigns: vec![],
@@ -703,6 +709,7 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
+                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
                             then_trailing_assigns: vec![],
@@ -749,9 +756,29 @@ impl<'a> Structurizer<'a> {
                         (vec![], vec![])
                     };
 
+                // Normalize: if then is structurally empty and else is not,
+                // swap branches and negate the condition. This avoids the
+                // emitter having to detect and flip empty-then at render time.
+                let then_empty = matches!(&then_body, Shape::Seq(v) if v.is_empty())
+                    && then_assigns.is_empty()
+                    && then_trailing_assigns.is_empty();
+                let else_empty = matches!(&else_body, Shape::Seq(v) if v.is_empty())
+                    && else_assigns.is_empty()
+                    && else_trailing_assigns.is_empty();
+                let (cond_negated, then_assigns, then_body, then_trailing_assigns,
+                     else_assigns, else_body, else_trailing_assigns) =
+                    if then_empty && !else_empty {
+                        (true, else_assigns, else_body, else_trailing_assigns,
+                         then_assigns, then_body, then_trailing_assigns)
+                    } else {
+                        (false, then_assigns, then_body, then_trailing_assigns,
+                         else_assigns, else_body, else_trailing_assigns)
+                    };
+
                 let if_shape = Shape::IfElse {
                     block,
                     cond,
+                    cond_negated,
                     then_assigns,
                     then_body: Box::new(then_body),
                     then_trailing_assigns,
@@ -1177,6 +1204,7 @@ impl<'a> Structurizer<'a> {
         let Shape::IfElse {
             block,
             cond,
+            cond_negated: _,
             ref then_assigns,
             ref then_body,
             ref then_trailing_assigns,
