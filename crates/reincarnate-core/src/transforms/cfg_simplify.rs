@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::CoreError;
-use crate::ir::{BlockId, Function, Module, Op, ValueId};
+use crate::ir::{BlockId, Function, Inst, Module, Op, Type, ValueId};
 use crate::pipeline::{Transform, TransformResult};
 
 use super::util::{branch_targets, substitute_values_in_op};
@@ -628,6 +628,75 @@ fn cleanup_unreachable(func: &mut Function) -> bool {
     changed
 }
 
+/// Phase 5: Collapse same-target BrIf.
+///
+/// When a `BrIf` has `then_target == else_target`, replace it with a `Br`.
+/// For argument positions where `then_args[i] != else_args[i]`, insert a
+/// `Select { cond, on_true, on_false }` instruction to merge the values.
+///
+/// Returns true if any changes were made.
+fn collapse_same_target_brif(func: &mut Function) -> bool {
+    let mut changed = false;
+
+    for block_id in func.blocks.keys().collect::<Vec<_>>() {
+        let insts = func.blocks[block_id].insts.clone();
+        let Some(&last_inst_id) = insts.last() else {
+            continue;
+        };
+
+        let (cond, target, then_args, else_args) = match &func.insts[last_inst_id].op {
+            Op::BrIf {
+                cond,
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+            } if then_target == else_target => {
+                (*cond, *then_target, then_args.clone(), else_args.clone())
+            }
+            _ => continue,
+        };
+
+        // Build unified args, inserting Select where they differ.
+        let mut unified_args = Vec::with_capacity(then_args.len());
+        for (t_arg, e_arg) in then_args.iter().zip(else_args.iter()) {
+            if t_arg == e_arg {
+                unified_args.push(*t_arg);
+            } else {
+                // Determine the result type from the target block's param.
+                let param_ty = if unified_args.len() < func.blocks[target].params.len() {
+                    func.blocks[target].params[unified_args.len()].ty.clone()
+                } else {
+                    Type::Dynamic
+                };
+                let result_val = func.value_types.push(param_ty);
+                let select_inst = func.insts.push(Inst {
+                    op: Op::Select {
+                        cond,
+                        on_true: *t_arg,
+                        on_false: *e_arg,
+                    },
+                    result: Some(result_val),
+                    span: None,
+                });
+                // Insert the Select before the terminator.
+                let term_pos = func.blocks[block_id].insts.len() - 1;
+                func.blocks[block_id].insts.insert(term_pos, select_inst);
+                unified_args.push(result_val);
+            }
+        }
+
+        // Replace BrIf with Br.
+        func.insts[last_inst_id].op = Op::Br {
+            target,
+            args: unified_args,
+        };
+        changed = true;
+    }
+
+    changed
+}
+
 /// Run CFG simplification on a single function.
 /// Returns true if any changes were made.
 fn simplify_cfg(func: &mut Function) -> bool {
@@ -636,6 +705,7 @@ fn simplify_cfg(func: &mut Function) -> bool {
         let mut changed = false;
         changed |= forward_empty_blocks(func);
         changed |= merge_blocks(func);
+        changed |= collapse_same_target_brif(func);
         changed |= eliminate_trivial_params(func);
         changed |= cleanup_unreachable(func);
         if !changed {
@@ -898,9 +968,11 @@ mod tests {
         }
     }
 
-    /// Multiple predecessors prevent merge: B with 2+ predecessors stays separate.
+    /// Multiple predecessors prevent merge — but if forward_empty_blocks causes
+    /// both arms of a BrIf to target B, the same-target collapse converts to Br,
+    /// making B single-predecessor, so it gets merged into entry.
     #[test]
-    fn multiple_predecessors_prevent_merge() {
+    fn multiple_predecessors_collapsed_via_same_target() {
         let sig = FunctionSig {
             params: vec![],
             return_ty: Type::Void,
@@ -915,18 +987,25 @@ mod tests {
         // entry branches to both A and B.
         fb.br_if(cond, block_a, &[], block_b, &[]);
 
-        // A → B
+        // A → B (empty forwarder)
         fb.switch_to_block(block_a);
         fb.br(block_b, &[]);
 
-        // B has two predecessors (entry and A), so it can't be merged.
+        // B: return
         fb.switch_to_block(block_b);
         fb.ret(None);
 
         let func = apply_cfg_simplify(fb.build());
 
-        // B should still have its return instruction (not merged away).
-        assert!(!func.blocks[block_b].insts.is_empty());
+        // After forwarding, BrIf targets B from both arms → collapses to Br(B) →
+        // B merges into entry. Entry should end with Return.
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(
+            matches!(func.insts[last_inst].op, Op::Return(_)),
+            "expected Return after collapse + merge, got {:?}",
+            func.insts[last_inst].op
+        );
     }
 
     /// Chained forwarding: A → B → C where B and C are both empty → resolved via fixpoint.
@@ -977,6 +1056,8 @@ mod tests {
     }
 
     /// Trivial param eliminated: both predecessors pass the same value → param removed.
+    /// With same-target BrIf collapse, the empty forwarders get eliminated first,
+    /// producing BrIf(cond, merge, [val], merge, [val]) → Br(merge, [val]) → merge merged.
     #[test]
     fn trivial_param_eliminated() {
         let sig = FunctionSig {
@@ -1008,21 +1089,18 @@ mod tests {
 
         let func = apply_cfg_simplify(fb.build());
 
-        // merge's param should be eliminated; return should use val directly.
-        assert!(
-            func.blocks[merge].params.is_empty(),
-            "trivial param should be removed"
-        );
-        let last_inst = *func.blocks[merge].insts.last().unwrap();
+        // After forwarding + same-target collapse + merge, entry should return val directly.
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
         match &func.insts[last_inst].op {
             Op::Return(Some(v)) => assert_eq!(*v, val),
             other => panic!("expected Return(Some(val)), got {:?}", other),
         }
     }
 
-    /// Non-trivial param preserved: predecessors pass different values.
+    /// Non-trivial param: predecessors pass different values → Select replaces the phi.
     #[test]
-    fn non_trivial_param_preserved() {
+    fn non_trivial_param_becomes_select() {
         let sig = FunctionSig {
             params: vec![],
             return_ty: Type::Int(64),
@@ -1049,15 +1127,23 @@ mod tests {
 
         let func = apply_cfg_simplify(fb.build());
 
-        // param should be preserved since predecessors pass different values.
-        assert_eq!(
-            func.blocks[merge].params.len(),
-            1,
-            "non-trivial param should be preserved"
+        // After forwarding + same-target collapse, a Select(cond, val_a, val_b) is
+        // inserted and merge merges into entry. Entry should have Select + Return.
+        let entry = func.entry;
+        let has_select = func.blocks[entry]
+            .insts
+            .iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Select { .. }));
+        assert!(has_select, "different args should produce Select");
+
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(
+            matches!(func.insts[last_inst].op, Op::Return(Some(_))),
+            "should end with Return"
         );
     }
 
-    /// Mixed params: 3 params, 2 trivial + 1 non-trivial → only trivial ones removed.
+    /// Mixed params: 3 params, 2 trivial + 1 non-trivial → Select for the differing one.
     #[test]
     fn mixed_trivial_and_non_trivial_params() {
         let sig = FunctionSig {
@@ -1095,18 +1181,125 @@ mod tests {
 
         let func = apply_cfg_simplify(fb.build());
 
-        // Params 0 and 2 are trivial → removed. Only param 1 (non-trivial) remains.
-        assert_eq!(
-            func.blocks[merge].params.len(),
-            1,
-            "only non-trivial param should remain"
-        );
+        // After forwarding + same-target collapse: Select for param 1 (different),
+        // shared_a and shared_c passed directly. Then merge merges into entry.
+        let entry = func.entry;
+        let has_select = func.blocks[entry]
+            .insts
+            .iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Select { .. }));
+        assert!(has_select, "differing param should produce Select");
 
-        // The return should still reference the non-trivial value (not substituted).
-        let last_inst = *func.blocks[merge].insts.last().unwrap();
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(
+            matches!(func.insts[last_inst].op, Op::Return(Some(_))),
+            "should end with Return"
+        );
+    }
+
+    /// BrIf where both arms target the same block with identical args → Br.
+    #[test]
+    fn collapse_same_target_brif_identical_args() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64)],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let val = fb.param(1);
+
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        // BrIf cond → merge(val), merge(val)
+        fb.br_if(cond, merge, &[val], merge, &[val]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // Should collapse to Br + eliminate trivial param.
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        // After merging, the return should reference val directly.
         match &func.insts[last_inst].op {
-            Op::Return(Some(_)) => {} // value preserved (may be original or rewritten)
-            other => panic!("expected Return(Some(_)), got {:?}", other),
+            Op::Return(Some(v)) => assert_eq!(*v, val),
+            other => panic!("expected Return(Some(val)), got {:?}", other),
         }
+        // No Select should be inserted since args are identical.
+        let has_select = func.insts.values().any(|i| matches!(i.op, Op::Select { .. }));
+        assert!(!has_select, "identical args should not produce Select");
+    }
+
+    /// BrIf where both arms target the same block with different args → Select + Br.
+    #[test]
+    fn collapse_same_target_brif_different_args() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let a = fb.param(1);
+        let b = fb.param(2);
+
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        // BrIf cond → merge(a), merge(b)
+        fb.br_if(cond, merge, &[a], merge, &[b]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // After collapse + merge + trivial param elimination, entry should contain
+        // a Select and a Return that uses the Select's result.
+        let entry = func.entry;
+        let has_select = func.blocks[entry]
+            .insts
+            .iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Select { .. }));
+        assert!(has_select, "differing args should produce a Select");
+
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(
+            matches!(func.insts[last_inst].op, Op::Return(Some(_))),
+            "should end with Return"
+        );
+    }
+
+    /// BrIf with different targets is not collapsed.
+    #[test]
+    fn collapse_same_target_brif_preserves_different_targets() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Void,
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+
+        let block_a = fb.create_block();
+        let block_b = fb.create_block();
+
+        fb.br_if(cond, block_a, &[], block_b, &[]);
+
+        fb.switch_to_block(block_a);
+        fb.ret(None);
+
+        fb.switch_to_block(block_b);
+        fb.ret(None);
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // Should still have a BrIf (different targets).
+        let entry = func.entry;
+        let has_brif = func.blocks[entry].insts.iter().any(|&id| {
+            matches!(func.insts[id].op, Op::BrIf { .. })
+        });
+        assert!(
+            has_brif,
+            "different targets should preserve BrIf"
+        );
     }
 }

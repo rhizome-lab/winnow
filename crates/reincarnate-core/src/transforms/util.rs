@@ -37,6 +37,11 @@ pub fn value_operands(op: &Op) -> Vec<ValueId> {
         | Op::Shl(a, b)
         | Op::Shr(a, b) => vec![*a, *b],
         Op::Neg(a) | Op::BitNot(a) | Op::Not(a) | Op::Copy(a) => vec![*a],
+        Op::Select {
+            cond,
+            on_true,
+            on_false,
+        } => vec![*cond, *on_true, *on_false],
         Op::Cmp(_, a, b) => vec![*a, *b],
         Op::Br { args, .. } => args.clone(),
         Op::BrIf {
@@ -115,6 +120,15 @@ pub fn substitute_values_in_op(op: &mut Op, subst: &HashMap<ValueId, ValueId>) {
             sub(b);
         }
         Op::Neg(a) | Op::BitNot(a) | Op::Not(a) | Op::Copy(a) => sub(a),
+        Op::Select {
+            cond,
+            on_true,
+            on_false,
+        } => {
+            sub(cond);
+            sub(on_true);
+            sub(on_false);
+        }
         Op::Cmp(_, a, b) => {
             sub(a);
             sub(b);

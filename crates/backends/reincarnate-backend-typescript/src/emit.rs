@@ -1331,6 +1331,20 @@ fn emit_inst(
             let expr = format!("!{}", ctx.operand(*a));
             emit_or_inline(ctx, r, expr, true, out, indent);
         }
+        Op::Select {
+            cond,
+            on_true,
+            on_false,
+        } => {
+            let r = result.unwrap();
+            let expr = format!(
+                "{} ? {} : {}",
+                ctx.operand(*cond),
+                ctx.operand(*on_true),
+                ctx.operand(*on_false)
+            );
+            emit_or_inline(ctx, r, expr, true, out, indent);
+        }
 
         // -- Control flow --
         Op::Br { target, args } => {

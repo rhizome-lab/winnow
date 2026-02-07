@@ -460,6 +460,18 @@ impl fmt::Display for Function {
                         write!(f, "copy ")?;
                         fmt_value(*val, f)?;
                     }
+                    Op::Select {
+                        cond,
+                        on_true,
+                        on_false,
+                    } => {
+                        write!(f, "select ")?;
+                        fmt_value(*cond, f)?;
+                        write!(f, ", ")?;
+                        fmt_value(*on_true, f)?;
+                        write!(f, ", ")?;
+                        fmt_value(*on_false, f)?;
+                    }
                 }
 
                 writeln!(f)?;

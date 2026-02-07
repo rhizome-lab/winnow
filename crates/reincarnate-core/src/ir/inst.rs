@@ -65,6 +65,12 @@ pub enum Op {
 
     // -- Logic --
     Not(ValueId),
+    /// Conditional select: `cond ? on_true : on_false`
+    Select {
+        cond: ValueId,
+        on_true: ValueId,
+        on_false: ValueId,
+    },
 
     // -- Control flow --
     /// Unconditional branch.
