@@ -73,6 +73,8 @@ After editing multiple files, run the full check once — not after each edit. F
 
 **Minimize file churn.** When editing a file, read it once, plan all changes, and apply them in one pass. Avoid read-edit-build-fail-read-fix cycles by thinking through the complete change before starting.
 
+**Commit after every phase.** When a plan has multiple steps, commit after each step that passes `cargo clippy && cargo test`. Do not accumulate changes across phases. Do not defer commits to the end. Do not rationalize skipping commits because changes are "intertwined" or "small". Each commit should represent one logical unit of progress. This is non-negotiable.
+
 **Use `normalize view` for structural exploration:**
 ```bash
 ~/git/rhizone/normalize/target/debug/normalize view <file>    # outline with line numbers
@@ -97,7 +99,7 @@ Scope is optional but recommended for multi-crate repos.
 
 Do not:
 - Announce actions ("I will now...") - just do them
-- Leave work uncommitted
+- Leave work uncommitted — commit after every phase, no exceptions
 - Create special cases - design to avoid them
 - Add to the monolith - split by domain into sub-crates
 - Cut corners with fallbacks - implement properly for each case
