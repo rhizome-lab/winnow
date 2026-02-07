@@ -390,6 +390,26 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
         any_changed = true;
     }
 
+    // Refine alloc instruction types from store analysis.
+    let alloc_types = build_alloc_types(func);
+    for block in func.blocks.values() {
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id];
+            if let Op::Alloc(ref ty) = inst.op {
+                if *ty == Type::Dynamic {
+                    if let Some(result) = inst.result {
+                        if let Some(refined) = alloc_types.get(&result) {
+                            if *refined != Type::Dynamic {
+                                func.insts[inst_id].op = Op::Alloc(refined.clone());
+                                any_changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Sync BlockParam.ty fields with value_types.
     for block in func.blocks.keys().collect::<Vec<_>>() {
         let param_vals: Vec<(usize, Type)> = func.blocks[block]
@@ -1041,5 +1061,71 @@ mod tests {
         let caller = &module.functions[FuncId::new(2)];
         // Ambiguous — stays Dynamic.
         assert_eq!(caller.value_types[result], Type::Dynamic);
+    }
+
+    /// Alloc(Dynamic) refined to Alloc(Int(64)) when all stores agree.
+    #[test]
+    fn alloc_type_refined_from_stores() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64),
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let ptr = fb.alloc(Type::Dynamic);
+        let a = fb.const_int(1);
+        fb.store(ptr, a);
+        let b = fb.const_int(2);
+        fb.store(ptr, b);
+        let loaded = fb.load(ptr, Type::Dynamic);
+        fb.ret(Some(loaded));
+        let func = fb.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+
+        let transform = TypeInference;
+        let module = transform.apply(module).unwrap().module;
+
+        let func = &module.functions[FuncId::new(0)];
+        // The alloc op should now be Alloc(Int(64)).
+        let alloc_inst = func.insts.values().find(|i| matches!(&i.op, Op::Alloc(_))).unwrap();
+        match &alloc_inst.op {
+            Op::Alloc(ty) => assert_eq!(*ty, Type::Int(64)),
+            other => panic!("expected Alloc, got {:?}", other),
+        }
+    }
+
+    /// Alloc(Dynamic) stays Dynamic when stores disagree on type.
+    #[test]
+    fn alloc_type_mixed_stays_dynamic() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Dynamic,
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let ptr = fb.alloc(Type::Dynamic);
+        let a = fb.const_int(1);
+        fb.store(ptr, a);
+        let b = fb.const_string("hello");
+        fb.store(ptr, b);
+        let loaded = fb.load(ptr, Type::Dynamic);
+        fb.ret(Some(loaded));
+        let func = fb.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+
+        let transform = TypeInference;
+        let module = transform.apply(module).unwrap().module;
+
+        let func = &module.functions[FuncId::new(0)];
+        // Mixed stores — alloc stays Dynamic.
+        let alloc_inst = func.insts.values().find(|i| matches!(&i.op, Op::Alloc(_))).unwrap();
+        match &alloc_inst.op {
+            Op::Alloc(ty) => assert_eq!(*ty, Type::Dynamic),
+            other => panic!("expected Alloc, got {:?}", other),
+        }
     }
 }
