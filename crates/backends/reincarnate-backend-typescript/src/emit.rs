@@ -977,12 +977,15 @@ fn emit_shape(
             let _ = writeln!(out, "{indent}while (true) {{");
             let inner = format!("{indent}  ");
             emit_block_instructions(ctx, func, *header, out, &inner)?;
-            let cond_expr = if *cond_negated {
-                format!("!{}", ctx.operand(*cond))
-            } else {
+            // Break when loop condition is false.
+            // cond_negated=false → loop while cond, break on !cond
+            // cond_negated=true  → loop while !cond, break on cond
+            let break_expr = if *cond_negated {
                 ctx.val(*cond)
+            } else {
+                negate_cond(ctx, func, *header, *cond)
             };
-            let _ = writeln!(out, "{inner}if (!({cond_expr})) break;");
+            let _ = writeln!(out, "{inner}if ({break_expr}) break;");
             // Strip trailing Continue — while(true) loops back naturally.
             emit_shape_strip_trailing_continue(ctx, func, body, out, &inner)?;
             let _ = writeln!(out, "{indent}}}");
@@ -1002,12 +1005,12 @@ fn emit_shape(
             let _ = writeln!(out, "{indent}while (true) {{");
             let inner = format!("{indent}  ");
             emit_block_instructions(ctx, func, *header, out, &inner)?;
-            let cond_expr = if *cond_negated {
-                format!("!{}", ctx.operand(*cond))
-            } else {
+            let break_expr = if *cond_negated {
                 ctx.val(*cond)
+            } else {
+                negate_cond(ctx, func, *header, *cond)
             };
-            let _ = writeln!(out, "{inner}if (!({cond_expr})) break;");
+            let _ = writeln!(out, "{inner}if ({break_expr}) break;");
             // Strip trailing Continue — update assigns + natural loop-back handle it.
             emit_shape_strip_trailing_continue(ctx, func, body, out, &inner)?;
             emit_arg_assigns(ctx, update_assigns, out, &inner);
