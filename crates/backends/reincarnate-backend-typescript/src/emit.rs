@@ -666,13 +666,24 @@ fn emit_function(func: &Function, out: &mut String) -> Result<(), CoreError> {
     let _ = writeln!(out, " {{");
 
     if is_simple {
-        emit_block_body(&ctx, func, func.entry, &func.blocks[func.entry], out, "  ")?;
+        let insts = &func.blocks[func.entry].insts;
+        let emit_count = if insts
+            .last()
+            .is_some_and(|&id| matches!(func.insts[id].op, Op::Return(None)))
+        {
+            insts.len() - 1
+        } else {
+            insts.len()
+        };
+        for &inst_id in &insts[..emit_count] {
+            emit_inst(&ctx, func, inst_id, out, "  ")?;
+        }
     } else {
         // Pre-declare only non-entry block parameters.
         emit_block_param_declarations(&ctx, func, out);
 
         let shape = structurize::structurize(func);
-        emit_shape(&ctx, func, &shape, out, "  ")?;
+        emit_shape_strip_trailing_return(&ctx, func, &shape, out, "  ")?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -832,6 +843,71 @@ fn emit_shape_strip_trailing_continue(
             Ok(())
         }
         Shape::Continue => Ok(()), // Just a bare Continue — skip it.
+        _ => emit_shape(ctx, func, shape, out, indent),
+    }
+}
+
+/// Emit a shape, stripping a trailing `Return(None)` from the output.
+///
+/// Used at the top level of function/method bodies to omit unnecessary
+/// `return;` at the end of void functions.
+fn emit_shape_strip_trailing_return(
+    ctx: &EmitCtx,
+    func: &Function,
+    shape: &Shape,
+    out: &mut String,
+    indent: &str,
+) -> Result<(), CoreError> {
+    match shape {
+        Shape::Seq(parts) => {
+            let len = parts.len();
+            for (i, part) in parts.iter().enumerate() {
+                if i == len - 1 {
+                    emit_shape_strip_trailing_return(ctx, func, part, out, indent)?;
+                } else {
+                    emit_shape(ctx, func, part, out, indent)?;
+                }
+            }
+            Ok(())
+        }
+        Shape::Block(block_id) => {
+            // Emit block instructions, skip trailing Return(None).
+            let block = &func.blocks[*block_id];
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id];
+                match &inst.op {
+                    Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => break,
+                    Op::Return(None) => {
+                        // Skip — trailing void return.
+                    }
+                    _ => {
+                        emit_inst(ctx, func, inst_id, out, indent)?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Shape::IfElse {
+            block,
+            cond,
+            then_assigns,
+            then_body,
+            else_assigns,
+            else_body,
+        } => {
+            // Emit the block's non-terminator instructions first.
+            emit_block_instructions(ctx, func, *block, out, indent)?;
+
+            let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+            let inner = format!("{indent}  ");
+            emit_arg_assigns(ctx, then_assigns, out, &inner);
+            emit_shape_strip_trailing_return(ctx, func, then_body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}} else {{");
+            emit_arg_assigns(ctx, else_assigns, out, &inner);
+            emit_shape_strip_trailing_return(ctx, func, else_body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}}");
+            Ok(())
+        }
         _ => emit_shape(ctx, func, shape, out, indent),
     }
 }
@@ -1507,11 +1583,22 @@ fn emit_class_method(func: &Function, out: &mut String) -> Result<(), CoreError>
 
     // Method body.
     if is_simple {
-        emit_block_body(&ctx, func, func.entry, &func.blocks[func.entry], out, "    ")?;
+        let insts = &func.blocks[func.entry].insts;
+        let emit_count = if insts
+            .last()
+            .is_some_and(|&id| matches!(func.insts[id].op, Op::Return(None)))
+        {
+            insts.len() - 1
+        } else {
+            insts.len()
+        };
+        for &inst_id in &insts[..emit_count] {
+            emit_inst(&ctx, func, inst_id, out, "    ")?;
+        }
     } else {
         emit_block_param_declarations_indented(&ctx, func, out, "    ");
         let shape = structurize::structurize(func);
-        emit_shape(&ctx, func, &shape, out, "    ")?;
+        emit_shape_strip_trailing_return(&ctx, func, &shape, out, "    ")?;
     }
 
     let _ = writeln!(out, "  }}");
@@ -1995,6 +2082,8 @@ mod tests {
         assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
         assert!(out.contains("if (v0)"), "Should have if/else:\n{out}");
         assert!(out.contains("} else {"), "Should have else branch:\n{out}");
+        // Trailing void return should be stripped.
+        assert!(!out.contains("return;"), "Should not have trailing return:\n{out}");
     }
 
     #[test]
