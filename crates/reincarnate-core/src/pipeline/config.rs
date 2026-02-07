@@ -5,6 +5,7 @@
 #[derive(Debug, Clone)]
 pub struct PassConfig {
     pub type_inference: bool,
+    pub constraint_solve: bool,
     pub constant_folding: bool,
     pub cfg_simplify: bool,
     pub coroutine_lowering: bool,
@@ -19,6 +20,7 @@ impl Default for PassConfig {
     fn default() -> Self {
         Self {
             type_inference: true,
+            constraint_solve: true,
             constant_folding: true,
             cfg_simplify: true,
             coroutine_lowering: true,
@@ -35,6 +37,7 @@ impl PassConfig {
     ///
     /// Pass names correspond to `Transform::name()` values:
     /// - `"type-inference"`
+    /// - `"constraint-solve"`
     /// - `"constant-folding"`
     /// - `"cfg-simplify"`
     /// - `"coroutine-lowering"`
@@ -47,6 +50,7 @@ impl PassConfig {
         for name in skip {
             match *name {
                 "type-inference" => config.type_inference = false,
+                "constraint-solve" => config.constraint_solve = false,
                 "constant-folding" => config.constant_folding = false,
                 "cfg-simplify" => config.cfg_simplify = false,
                 "coroutine-lowering" => config.coroutine_lowering = false,
@@ -69,6 +73,7 @@ mod tests {
     fn default_enables_all() {
         let config = PassConfig::default();
         assert!(config.type_inference);
+        assert!(config.constraint_solve);
         assert!(config.constant_folding);
         assert!(config.cfg_simplify);
         assert!(config.coroutine_lowering);
@@ -90,6 +95,7 @@ mod tests {
     fn skip_list_all() {
         let config = PassConfig::from_skip_list(&[
             "type-inference",
+            "constraint-solve",
             "constant-folding",
             "cfg-simplify",
             "coroutine-lowering",
@@ -99,6 +105,7 @@ mod tests {
             "fixpoint",
         ]);
         assert!(!config.type_inference);
+        assert!(!config.constraint_solve);
         assert!(!config.constant_folding);
         assert!(!config.cfg_simplify);
         assert!(!config.coroutine_lowering);

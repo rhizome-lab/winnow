@@ -25,6 +25,9 @@ pub fn default_pipeline(config: &PassConfig) -> TransformPipeline {
     if config.type_inference {
         pipeline.add(Box::new(TypeInference));
     }
+    if config.constraint_solve {
+        pipeline.add(Box::new(ConstraintSolve));
+    }
     if config.constant_folding {
         pipeline.add(Box::new(ConstantFolding));
     }
