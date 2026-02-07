@@ -1475,8 +1475,9 @@ fn emit_inst(
                             }
                         }
                     }
-                    // Fallback: record for bare-name resolution in GetField/SetField.
+                    // Fallback: record for bare-name resolution in GetField/SetField/binop.
                     ctx.scope_lookups.insert(r);
+                    return Ok(());
                 }
             }
 
@@ -1852,6 +1853,17 @@ fn emit_binop(
     op: &str,
 ) {
     let r = result.unwrap();
+    let a_is_scope = ctx.scope_lookups.contains(a);
+    let b_is_scope = ctx.scope_lookups.contains(b);
+    if a_is_scope || b_is_scope {
+        let expr = if a_is_scope {
+            ctx.operand(*b)
+        } else {
+            ctx.operand(*a)
+        };
+        emit_or_inline(ctx, r, expr, false, out, indent);
+        return;
+    }
     let expr = format!("{} {op} {}", ctx.operand(*a), ctx.operand(*b));
     emit_or_inline(ctx, r, expr, true, out, indent);
 }
@@ -3344,6 +3356,59 @@ mod tests {
         assert!(
             out.contains("add(v0, v1)"),
             "Should preserve all args for non-scope call:\n{out}"
+        );
+    }
+
+    #[test]
+    fn binop_add_strips_scope_operand() {
+        // findPropStrict("int") + int(x) → int(x)
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Dynamic,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let name = fb.const_string("int");
+            let scope =
+                fb.system_call("Flash.Scope", "findPropStrict", &[name], Type::Dynamic);
+            let int_fn = fb.get_field(scope, "int", Type::Dynamic);
+            let casted = fb.call_indirect(int_fn, &[x], Type::Int(64));
+            let sum = fb.add(scope, casted);
+            fb.ret(Some(sum));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            !out.contains("findPropStrict"),
+            "findPropStrict should not appear in function body:\n{out}"
+        );
+        // The add should collapse to just the non-scope operand.
+        assert!(
+            out.contains("return int(v0);"),
+            "Should resolve to int(x) without scope operand:\n{out}"
+        );
+    }
+
+    #[test]
+    fn standalone_scope_lookup_not_emitted() {
+        // findPropStrict("rand") with no GetField/Call use → no output
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let name = fb.const_string("rand");
+            let _scope =
+                fb.system_call("Flash.Scope", "findPropStrict", &[name], Type::Dynamic);
+            fb.ret(None);
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            !out.contains("findPropStrict"),
+            "Standalone scope lookup should not emit findPropStrict:\n{out}"
         );
     }
 }
