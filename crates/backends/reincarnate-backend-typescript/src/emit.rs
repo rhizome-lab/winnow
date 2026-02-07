@@ -502,10 +502,6 @@ fn adjust_use_counts_for_logical_ops(ctx: &mut EmitCtx, func: &Function, shape: 
             ..
         } => {
             if logical_rhs_body_emits_empty(ctx, func, rhs_body) {
-                // Only decrement when the shape's cond was the BrIf's own
-                // condition (standard case: BrIf uses cond twice). In the
-                // inverted case the BrIf condition is a different value,
-                // so no double-counting occurred.
                 let brif_cond = func.blocks[*block]
                     .insts
                     .last()
@@ -514,8 +510,25 @@ fn adjust_use_counts_for_logical_ops(ctx: &mut EmitCtx, func: &Function, shape: 
                         _ => None,
                     });
                 if brif_cond == Some(*cond) {
+                    // Standard case: BrIf uses cond as both condition and
+                    // branch arg (2 uses). After folding to `cond && rhs`,
+                    // cond appears once. Decrement by 1.
                     if let Some(count) = ctx.use_counts.get_mut(cond) {
                         *count = count.saturating_sub(1);
+                    }
+                } else if let Some(bc) = brif_cond {
+                    // Inverted case: check if BrIf condition is Not(cond).
+                    // The Not instruction uses cond once and is dead after
+                    // folding, so cond's count needs decrementing by 1.
+                    let is_not_of_cond =
+                        func.insts.iter().any(|(_, inst)| {
+                            inst.result == Some(bc)
+                                && matches!(&inst.op, Op::Not(inner) if *inner == *cond)
+                        });
+                    if is_not_of_cond {
+                        if let Some(count) = ctx.use_counts.get_mut(cond) {
+                            *count = count.saturating_sub(1);
+                        }
                     }
                 }
             }
