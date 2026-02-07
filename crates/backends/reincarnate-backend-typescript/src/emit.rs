@@ -988,18 +988,41 @@ fn emit_function(
 }
 
 
+/// If `val` is the result of `Op::Cmp`, return the expression with flipped operator.
+fn try_flip_cmp(func: &Function, val: ValueId, ctx: &EmitCtx) -> Option<String> {
+    for inst in func.insts.values() {
+        if inst.result == Some(val) {
+            if let Op::Cmp(kind, a, b) = &inst.op {
+                let flipped = match kind {
+                    CmpKind::Eq => "!==",
+                    CmpKind::Ne => "===",
+                    CmpKind::Lt => ">=",
+                    CmpKind::Le => ">",
+                    CmpKind::Gt => "<=",
+                    CmpKind::Ge => "<",
+                };
+                return Some(format!("{} {} {}", ctx.operand(*a), flipped, ctx.operand(*b)));
+            }
+            break;
+        }
+    }
+    None
+}
+
 /// Negate a condition for `if` emission, avoiding double negation.
 ///
-/// If `cond` is the result of `Op::Not(inner)`, returns `inner` directly
-/// instead of wrapping with `!`.
+/// - `Not(inner)` → returns `inner` directly
+/// - `Cmp(kind, a, b)` → flips the comparison (e.g. `!==` → `===`)
+/// - Otherwise wraps with `!`
 fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) -> String {
     for &inst_id in &func.blocks[block].insts {
         let inst = &func.insts[inst_id];
         if inst.result == Some(cond) {
-            if let Op::Not(inner) = &inst.op {
-                return ctx.val(*inner);
+            match &inst.op {
+                Op::Not(inner) => return ctx.val(*inner),
+                Op::Cmp(..) => return try_flip_cmp(func, cond, ctx).unwrap(),
+                _ => break,
             }
-            break;
         }
     }
     format!("!{}", ctx.operand(cond))
@@ -1498,7 +1521,12 @@ fn emit_inst(
         // -- Logic --
         Op::Not(a) => {
             let r = result.unwrap();
-            let expr = format!("!{}", ctx.operand(*a));
+            // If the operand is a comparison, flip the operator instead of wrapping with !
+            let expr = if let Some(flipped) = try_flip_cmp(func, *a, ctx) {
+                flipped
+            } else {
+                format!("!{}", ctx.operand(*a))
+            };
             emit_or_inline(ctx, r, expr, true, out, indent);
         }
         Op::Select {
