@@ -6,7 +6,8 @@ use std::path::Path;
 use reincarnate_core::entity::EntityRef;
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{
-    Block, CmpKind, Constant, Function, InstId, Module, Op, StructDef, Type, ValueId, Visibility,
+    structurize, Block, BlockArgAssign, BlockId, CmpKind, Constant, Function, InstId, Module, Op,
+    Shape, StructDef, Type, ValueId, Visibility,
 };
 
 use crate::runtime::SYSTEM_NAMES;
@@ -305,26 +306,213 @@ fn emit_function(func: &Function, out: &mut String) -> Result<(), CoreError> {
     if is_simple {
         emit_block_body(&ctx, func, func.entry, &func.blocks[func.entry], out, "  ")?;
     } else {
-        // Pre-declare only non-entry block parameters (they're assigned from
-        // other blocks via branch args).
+        // Pre-declare only non-entry block parameters.
         emit_block_param_declarations(&ctx, func, out);
 
-        let _ = writeln!(out, "  let $block = {};", func.entry.index());
-        let _ = writeln!(out, "  while (true) {{");
-        let _ = writeln!(out, "    switch ($block) {{");
-
-        for (block_id, block) in func.blocks.iter() {
-            let _ = writeln!(out, "      case {}: {{", block_id.index());
-            emit_block_body(&ctx, func, block_id, block, out, "        ")?;
-            let _ = writeln!(out, "      }}");
-        }
-
-        let _ = writeln!(out, "    }}");
-        let _ = writeln!(out, "  }}");
+        let shape = structurize::structurize(func);
+        emit_shape(&ctx, func, &shape, out, "  ")?;
     }
 
     let _ = writeln!(out, "}}\n");
     Ok(())
+}
+
+/// Emit a structured shape tree as TypeScript.
+fn emit_shape(
+    ctx: &EmitCtx,
+    func: &Function,
+    shape: &Shape,
+    out: &mut String,
+    indent: &str,
+) -> Result<(), CoreError> {
+    match shape {
+        Shape::Block(block_id) => {
+            emit_block_instructions(ctx, func, *block_id, out, indent)?;
+        }
+
+        Shape::Seq(parts) => {
+            for part in parts {
+                emit_shape(ctx, func, part, out, indent)?;
+            }
+        }
+
+        Shape::IfElse {
+            block,
+            cond,
+            then_assigns,
+            then_body,
+            else_assigns,
+            else_body,
+        } => {
+            // Emit the block's non-terminator instructions first.
+            emit_block_instructions(ctx, func, *block, out, indent)?;
+
+            let _ = writeln!(out, "{indent}if ({}) {{", ctx.val(*cond));
+            let inner = format!("{indent}  ");
+            emit_arg_assigns(ctx, then_assigns, out, &inner);
+            emit_shape(ctx, func, then_body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}} else {{");
+            emit_arg_assigns(ctx, else_assigns, out, &inner);
+            emit_shape(ctx, func, else_body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}}");
+        }
+
+        Shape::WhileLoop {
+            header,
+            cond,
+            cond_negated,
+            body,
+        } => {
+            let cond_expr = if *cond_negated {
+                format!("!{}", ctx.val(*cond))
+            } else {
+                ctx.val(*cond)
+            };
+            let _ = writeln!(out, "{indent}while (true) {{");
+            let inner = format!("{indent}  ");
+            emit_block_instructions(ctx, func, *header, out, &inner)?;
+            let _ = writeln!(out, "{inner}if (!{cond_expr}) break;");
+            // Strip trailing Continue — while(true) loops back naturally.
+            emit_shape_strip_trailing_continue(ctx, func, body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}}");
+        }
+
+        Shape::ForLoop {
+            header,
+            init_assigns,
+            cond,
+            cond_negated,
+            update_assigns,
+            body,
+        } => {
+            let cond_expr = if *cond_negated {
+                format!("!{}", ctx.val(*cond))
+            } else {
+                ctx.val(*cond)
+            };
+
+            // Emit init assignments before the loop.
+            emit_arg_assigns(ctx, init_assigns, out, indent);
+
+            let _ = writeln!(out, "{indent}while (true) {{");
+            let inner = format!("{indent}  ");
+            emit_block_instructions(ctx, func, *header, out, &inner)?;
+            let _ = writeln!(out, "{inner}if (!{cond_expr}) break;");
+            // Strip trailing Continue — update assigns + natural loop-back handle it.
+            emit_shape_strip_trailing_continue(ctx, func, body, out, &inner)?;
+            emit_arg_assigns(ctx, update_assigns, out, &inner);
+            let _ = writeln!(out, "{indent}}}");
+        }
+
+        Shape::Loop { header: _, body } => {
+            let _ = writeln!(out, "{indent}while (true) {{");
+            let inner = format!("{indent}  ");
+            emit_shape(ctx, func, body, out, &inner)?;
+            let _ = writeln!(out, "{indent}}}");
+        }
+
+        Shape::Break => {
+            let _ = writeln!(out, "{indent}break;");
+        }
+
+        Shape::Continue => {
+            let _ = writeln!(out, "{indent}continue;");
+        }
+
+        Shape::LabeledBreak { depth } => {
+            // Use label syntax: break L0; break L1; etc.
+            let _ = writeln!(out, "{indent}break L{depth};");
+        }
+
+        Shape::Dispatch { blocks, entry } => {
+            // Fallback dispatch loop.
+            let _ = writeln!(out, "{indent}let $block = {};", entry.index());
+            let _ = writeln!(out, "{indent}while (true) {{");
+            let _ = writeln!(out, "{indent}  switch ($block) {{");
+
+            for &block_id in blocks {
+                let block = &func.blocks[block_id];
+                let _ = writeln!(out, "{indent}    case {}: {{", block_id.index());
+                let case_indent = format!("{indent}      ");
+                emit_block_body(ctx, func, block_id, block, out, &case_indent)?;
+                let _ = writeln!(out, "{indent}    }}");
+            }
+
+            let _ = writeln!(out, "{indent}  }}");
+            let _ = writeln!(out, "{indent}}}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Emit a shape, stripping a trailing `Continue` from `Seq` shapes.
+///
+/// Used inside `while(true)` loops where the natural loop-back makes an
+/// explicit `continue` redundant.
+fn emit_shape_strip_trailing_continue(
+    ctx: &EmitCtx,
+    func: &Function,
+    shape: &Shape,
+    out: &mut String,
+    indent: &str,
+) -> Result<(), CoreError> {
+    match shape {
+        Shape::Seq(parts) => {
+            let len = parts.len();
+            for (i, part) in parts.iter().enumerate() {
+                if i == len - 1 && *part == Shape::Continue {
+                    // Skip trailing Continue.
+                    continue;
+                }
+                emit_shape(ctx, func, part, out, indent)?;
+            }
+            Ok(())
+        }
+        Shape::Continue => Ok(()), // Just a bare Continue — skip it.
+        _ => emit_shape(ctx, func, shape, out, indent),
+    }
+}
+
+/// Emit a block's non-terminator instructions (skip Br, BrIf, Switch, Return
+/// is kept since it's meaningful).
+fn emit_block_instructions(
+    ctx: &EmitCtx,
+    func: &Function,
+    block_id: BlockId,
+    out: &mut String,
+    indent: &str,
+) -> Result<(), CoreError> {
+    let block = &func.blocks[block_id];
+    for &inst_id in &block.insts {
+        let inst = &func.insts[inst_id];
+        match &inst.op {
+            Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => {
+                // Terminators are handled by the shape tree.
+            }
+            _ => {
+                emit_inst(ctx, func, inst_id, out, indent)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Emit block argument assignments.
+fn emit_arg_assigns(
+    ctx: &EmitCtx,
+    assigns: &[BlockArgAssign],
+    out: &mut String,
+    indent: &str,
+) {
+    for assign in assigns {
+        let _ = writeln!(
+            out,
+            "{indent}{} = {};",
+            ctx.val(assign.dst),
+            ctx.val(assign.src)
+        );
+    }
 }
 
 /// Pre-declare `let` bindings for non-entry block parameters only.
@@ -946,12 +1134,12 @@ mod tests {
             mb.add_function(fb.build());
         });
 
-        assert!(out.contains("$block"));
-        assert!(out.contains("switch ($block)"));
-        assert!(out.contains("if (v0)"));
+        // Structured output: if/else instead of dispatch loop.
+        assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
+        assert!(out.contains("if (v0)"), "Should have if (v0):\n{out}");
         // Block args assignment.
-        assert!(out.contains("v3 = v1;"));
-        assert!(out.contains("v4 = v2;"));
+        assert!(out.contains("v3 = v1;"), "Should assign v3 = v1:\n{out}");
+        assert!(out.contains("v4 = v2;"), "Should assign v4 = v2:\n{out}");
     }
 
     #[test]
@@ -1197,5 +1385,120 @@ mod tests {
         // Non-ident field name should use bracket notation.
         assert!(out.contains("[\"flash.display::Loader\"]"));
         assert!(!out.contains(".flash.display::Loader"));
+    }
+
+    #[test]
+    fn emit_structured_if_else() {
+        //   entry: br_if cond, then, else
+        //   then:  br merge
+        //   else:  br merge
+        //   merge: return
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("diamond", sig, Visibility::Public);
+            let cond = fb.param(0);
+
+            let then_block = fb.create_block();
+            let else_block = fb.create_block();
+            let merge_block = fb.create_block();
+
+            fb.br_if(cond, then_block, &[], else_block, &[]);
+
+            fb.switch_to_block(then_block);
+            fb.br(merge_block, &[]);
+
+            fb.switch_to_block(else_block);
+            fb.br(merge_block, &[]);
+
+            fb.switch_to_block(merge_block);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        // Should have if/else, no dispatch loop.
+        assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
+        assert!(out.contains("if (v0)"), "Should have if/else:\n{out}");
+        assert!(out.contains("} else {"), "Should have else branch:\n{out}");
+    }
+
+    #[test]
+    fn emit_while_loop() {
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Bool],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("while_loop", sig, Visibility::Public);
+            let cond = fb.param(0);
+
+            let header = fb.create_block();
+            let body = fb.create_block();
+            let exit = fb.create_block();
+
+            fb.br(header, &[]);
+
+            fb.switch_to_block(header);
+            fb.br_if(cond, body, &[], exit, &[]);
+
+            fb.switch_to_block(body);
+            fb.br(header, &[]);
+
+            fb.switch_to_block(exit);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
+        assert!(out.contains("while (true)"), "Should have while loop:\n{out}");
+    }
+
+    #[test]
+    fn emit_for_loop() {
+        use reincarnate_core::ir::CmpKind;
+
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![],
+                return_ty: Type::Void,
+            };
+            let mut fb = FunctionBuilder::new("for_loop", sig, Visibility::Public);
+
+            let (header, header_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+            let body = fb.create_block();
+            let exit = fb.create_block();
+
+            let v_init = fb.const_int(0);
+            fb.br(header, &[v_init]);
+
+            fb.switch_to_block(header);
+            let v_i = header_vals[0];
+            let v_n = fb.const_int(10);
+            let v_cond = fb.cmp(CmpKind::Lt, v_i, v_n);
+            fb.br_if(v_cond, body, &[], exit, &[]);
+
+            fb.switch_to_block(body);
+            let v_one = fb.const_int(1);
+            let v_next = fb.add(v_i, v_one);
+            fb.br(header, &[v_next]);
+
+            fb.switch_to_block(exit);
+            fb.ret(None);
+
+            mb.add_function(fb.build());
+        });
+
+        assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
+        // For-loop emits as while(true) with init assigns before and
+        // update assigns inside.
+        assert!(out.contains("while (true)"), "Should have loop:\n{out}");
+        // Init assigns header param v0 from const v1 (which is 0).
+        assert!(out.contains("v0 = v1;"), "Should have init assign:\n{out}");
+        // Update assigns header param v0 from computed v5 (v0 + 1).
+        assert!(out.contains("v0 = v5;"), "Should have update assign:\n{out}");
     }
 }
