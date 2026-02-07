@@ -1583,9 +1583,23 @@ fn emit_inst(
             if func.value_types[*v] == *ty {
                 // Same type — elide the redundant cast.
                 emit_or_inline(ctx, r, ctx.operand(*v), false, out, indent);
-            } else {
+            } else if ctx.should_inline(r) {
+                // Inlined into another expression — need `as T` wrapper.
                 let expr = format!("{} as {}", ctx.operand(*v), ts_type(ty));
-                emit_or_inline(ctx, r, expr, true, out, indent);
+                ctx.store_inline(r, expr, true);
+            } else if ctx.use_counts.get(&r).copied().unwrap_or(0) == 0 {
+                // Unused — emit source as side-effect statement.
+                let _ = writeln!(out, "{indent}{};", ctx.operand(*v));
+            } else {
+                // Assigned to a variable — type annotation instead of `as T`.
+                let pfx = ctx.let_prefix(r);
+                let _ = writeln!(
+                    out,
+                    "{indent}{pfx}{}: {} = {};",
+                    ctx.val_name(r),
+                    ts_type(ty),
+                    ctx.operand(*v)
+                );
             }
         }
         Op::TypeCheck(v, ty) => {
@@ -3622,8 +3636,8 @@ mod tests {
     }
 
     #[test]
-    fn cast_preserved_when_types_differ() {
-        // Cast(v, Bool) where v is Dynamic → should keep "as boolean".
+    fn cast_inlined_uses_as_t() {
+        // Single-use cast (inlined into return) → needs "as T" wrapper.
         let out = build_and_emit(|mb| {
             let sig = FunctionSig {
                 params: vec![Type::Dynamic],
@@ -3637,8 +3651,35 @@ mod tests {
         });
 
         assert!(
-            out.contains("as boolean"),
-            "Cast from Dynamic to Bool should be preserved:\n{out}"
+            out.contains("return v0 as boolean"),
+            "Inlined cast should use 'as T':\n{out}"
+        );
+    }
+
+    #[test]
+    fn cast_binding_uses_type_annotation() {
+        // Multi-use cast (assigned to variable) → type annotation instead of "as T".
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Bool,
+            };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let casted = fb.cast(x, Type::Bool);
+            // Use the cast result twice to force a variable binding.
+            let _sum = fb.add(casted, casted);
+            fb.ret(Some(casted));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains(": boolean = v0"),
+            "Multi-use cast should use type annotation:\n{out}"
+        );
+        assert!(
+            !out.contains("as boolean"),
+            "Multi-use cast should not use 'as T':\n{out}"
         );
     }
 }
