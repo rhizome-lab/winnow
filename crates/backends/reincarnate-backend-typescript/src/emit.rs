@@ -2593,4 +2593,131 @@ mod tests {
             "Should import Monster from parent dir:\n{content}"
         );
     }
+
+    #[test]
+    fn construct_super_emits_super_call() {
+        let mut mb = ModuleBuilder::new("test");
+
+        mb.add_struct(StructDef {
+            name: "Child".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void,
+        };
+        let mut fb = FunctionBuilder::new("Child::new", sig, Visibility::Public);
+        fb.set_class(Vec::new(), "Child".into(), MethodKind::Constructor);
+        let this = fb.param(0);
+        fb.system_call("Flash.Class", "constructSuper", &[this], Type::Void);
+        fb.ret(None);
+        let ctor_id = mb.add_function(fb.build());
+
+        mb.add_class(ClassDef {
+            name: "Child".into(),
+            namespace: Vec::new(),
+            struct_index: 0,
+            methods: vec![ctor_id],
+            super_class: Some("Parent".into()),
+            visibility: Visibility::Public,
+        });
+
+        let module = mb.build();
+        let out = emit_module_to_string(&module).unwrap();
+
+        assert!(
+            out.contains("super();"),
+            "constructSuper should emit super():\n{out}"
+        );
+        assert!(
+            !out.contains("constructSuper"),
+            "Should not have raw constructSuper call:\n{out}"
+        );
+    }
+
+    #[test]
+    fn find_prop_strict_get_field_construct_emits_new() {
+        let mut mb = ModuleBuilder::new("test");
+
+        // Two classes: Container and Widget. Container constructs a Widget.
+        mb.add_struct(StructDef {
+            name: "Container".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+        mb.add_struct(StructDef {
+            name: "Widget".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+
+        // Container constructor does findPropStrict + getField + construct.
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void,
+        };
+        let mut fb = FunctionBuilder::new("Container::new", sig, Visibility::Public);
+        fb.set_class(Vec::new(), "Container".into(), MethodKind::Constructor);
+        let _this = fb.param(0);
+
+        // findPropStrict("Widget")
+        let name = fb.const_string("Widget");
+        let scope = fb.system_call("Flash.Scope", "findPropStrict", &[name], Type::Dynamic);
+        // getField(scope, "Widget")
+        let ctor = fb.get_field(scope, "Widget", Type::Dynamic);
+        // construct(ctor)
+        let obj = fb.system_call("Flash.Object", "construct", &[ctor], Type::Dynamic);
+        // Use the result so it's not dead code.
+        fb.set_field(_this, "child", obj);
+        fb.ret(None);
+        let ctor_id = mb.add_function(fb.build());
+
+        // Widget constructor (empty).
+        let sig2 = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void,
+        };
+        let mut fb2 = FunctionBuilder::new("Widget::new", sig2, Visibility::Public);
+        fb2.set_class(Vec::new(), "Widget".into(), MethodKind::Constructor);
+        fb2.ret(None);
+        let widget_ctor_id = mb.add_function(fb2.build());
+
+        mb.add_class(ClassDef {
+            name: "Container".into(),
+            namespace: Vec::new(),
+            struct_index: 0,
+            methods: vec![ctor_id],
+            super_class: None,
+            visibility: Visibility::Public,
+        });
+        mb.add_class(ClassDef {
+            name: "Widget".into(),
+            namespace: Vec::new(),
+            struct_index: 1,
+            methods: vec![widget_ctor_id],
+            super_class: None,
+            visibility: Visibility::Public,
+        });
+
+        let module = mb.build();
+        let out = emit_module_to_string(&module).unwrap();
+
+        assert!(
+            out.contains("new Widget()"),
+            "Should emit new Widget():\n{out}"
+        );
+        assert!(
+            !out.contains("Flash_Object.construct"),
+            "Should not have Flash_Object.construct call:\n{out}"
+        );
+        assert!(
+            !out.contains("Flash_Scope.findPropStrict"),
+            "findPropStrict should be resolved away:\n{out}"
+        );
+    }
 }
