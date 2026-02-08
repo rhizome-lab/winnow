@@ -1015,12 +1015,15 @@ impl<'a> Structurizer<'a> {
 
                 if then_in_loop && !else_in_loop {
                     // while (cond) { then_body }
+                    // Try to flip a single-use Cmp so the break condition
+                    // is already in the IR (avoids emitter-side negation).
+                    let negated = self.try_invert_cmp(cond);
                     let body = self.structurize_loop_body(
                         then_target,
                         header,
                         &loop_body,
                     );
-                    self.try_for_loop(header, cond, false, body, &loop_body)
+                    self.try_for_loop(header, cond, negated, body, &loop_body)
                 } else if !then_in_loop && else_in_loop {
                     // while (!cond) { else_body }
                     let body = self.structurize_loop_body(
