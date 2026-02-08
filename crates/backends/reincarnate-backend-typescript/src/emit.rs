@@ -538,17 +538,17 @@ fn compute_merged_stores(func: &Function) -> (HashMap<ValueId, ValueId>, HashSet
     (alloc_inits, skip_stores)
 }
 
-/// Adjust use counts for shapes whose condition was normalized by the
-/// structurizer (Not stripped + branches swapped) or folded into a
-/// logical operator.
+/// Correct use counts for structural patterns where the shape tree uses
+/// values differently than the raw IR.
 ///
-/// When the structurizer strips `Not(x)` from a BrIf condition, the Not
-/// instruction still exists in the IR and `x` is counted as used by it.
-/// Since the Not is dead after normalization, decrement `x`'s count.
+/// These adjustments ensure single-use values are properly inlineable:
 ///
-/// For LogicalAnd/LogicalOr specifically, the BrIf also uses `cond` as
-/// both condition and branch arg (2 uses) in the standard case; after
-/// folding to `cond && rhs`, cond appears once, so decrement by 1.
+/// - **LogicalAnd/LogicalOr**: BrIf uses `cond` as both condition and
+///   branch arg (2 uses in IR), but `cond && rhs` uses it once.
+/// - **Stripped Not**: When the structurizer normalizes `Not(x)` away,
+///   decrement `x`'s count since the Not instruction is dead.
+/// - **Math.max/min**: The absorbed Cmp instruction's operands are used
+///   by both the Cmp and branch args; decrement for the dead Cmp use.
 fn adjust_use_counts_for_shapes(ctx: &mut EmitCtx, func: &Function, shape: &Shape) {
     match shape {
         Shape::LogicalOr {
@@ -1216,7 +1216,8 @@ fn emit_shape(
                 (then_assigns, then_body, then_trailing_assigns),
                 (else_assigns, else_body, else_trailing_assigns),
             ) {
-                // Process trivial bodies so inline expressions get registered.
+                // Process trivial bodies so their instructions get deferred
+                // into lazy_inlines, available for on-demand resolution.
                 let mut discard = String::new();
                 emit_shape(ctx, func, then_body, &mut discard, "")?;
                 emit_shape(ctx, func, else_body, &mut discard, "")?;
@@ -1517,7 +1518,8 @@ fn emit_shape_strip_trailing_return(
                 (then_assigns, then_body, then_trailing_assigns),
                 (else_assigns, else_body, else_trailing_assigns),
             ) {
-                // Process trivial bodies so inline expressions get registered.
+                // Process trivial bodies so their instructions get deferred
+                // into lazy_inlines, available for on-demand resolution.
                 let mut discard = String::new();
                 emit_shape(ctx, func, then_body, &mut discard, "")?;
                 emit_shape(ctx, func, else_body, &mut discard, "")?;
