@@ -98,6 +98,10 @@ struct LowerCtx<'a> {
     /// Set of ValueIds whose inline expressions involve side effects.
     /// Tracks which deferred inlines carry side-effecting sub-expressions.
     side_effecting_inlines: HashMap<ValueId, Expr>,
+    /// Values already declared by `flush_side_effecting_inlines`.
+    /// Prevents duplicate declarations when `build_val` later references
+    /// the same value (e.g. a LogicalAnd phi flushed before its consumer).
+    se_flush_declared: HashSet<ValueId>,
     /// When true, the next ForLoop's init_assigns should be skipped because
     /// a preceding IfElse's trailing assigns already set the loop header params.
     skip_loop_init_assigns: bool,
@@ -130,6 +134,7 @@ impl<'a> LowerCtx<'a> {
             entry_params,
             referenced_block_params: HashSet::new(),
             side_effecting_inlines: HashMap::new(),
+            se_flush_declared: HashSet::new(),
             skip_loop_init_assigns: false,
         }
     }
@@ -181,7 +186,9 @@ impl<'a> LowerCtx<'a> {
         }
 
         // Track block-param references for declaration generation.
-        if !self.entry_params.contains(&v) {
+        // Skip values already declared by flush_side_effecting_inlines to
+        // avoid duplicate declarations.
+        if !self.entry_params.contains(&v) && !self.se_flush_declared.contains(&v) {
             self.referenced_block_params.insert(v);
         }
 
@@ -226,17 +233,13 @@ impl<'a> LowerCtx<'a> {
 
         for v in to_flush {
             let expr = self.side_effecting_inlines.remove(&v).unwrap();
-            let is_inst_result = !self.entry_params.contains(&v);
+            self.se_flush_declared.insert(v);
             stmts.push(Stmt::VarDecl {
                 name: self.value_name(v),
                 ty: None,
                 init: Some(expr),
                 mutable: false,
             });
-            // Suppress later let prefix since we've already declared.
-            if is_inst_result {
-                // Already declared, no further action needed.
-            }
         }
     }
 
@@ -1230,11 +1233,9 @@ fn emit_or_inline_ast(ctx: &mut LowerCtx, v: ValueId, expr: Expr, stmts: &mut Ve
         stmts.push(Stmt::Expr(expr));
     } else {
         ctx.referenced_block_params.insert(v);
-        stmts.push(Stmt::VarDecl {
-            name: ctx.value_name(v),
-            ty: None,
-            init: Some(expr),
-            mutable: false,
+        stmts.push(Stmt::Assign {
+            target: Expr::Var(ctx.value_name(v)),
+            value: expr,
         });
     }
 }
