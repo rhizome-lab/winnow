@@ -548,12 +548,54 @@ fn adjust_use_counts_for_shapes(ctx: &mut EmitCtx, func: &Function, shape: &Shap
             adjust_use_counts_for_shapes(ctx, func, rhs_body);
         }
         Shape::IfElse {
+            block,
+            cond,
+            then_assigns,
             then_body,
+            then_trailing_assigns,
+            else_assigns,
             else_body,
-            ..
+            else_trailing_assigns,
         } => {
-            // No use-count adjustment needed: the Not's use of cond is
-            // replaced 1:1 by the Shape's use of cond (no net change).
+            // When Math.max/min absorbs a ternary IfElse, the Cmp defining
+            // cond is never emitted. Decrement use counts for its operands
+            // so they can be inlined at their (now single) use site.
+            if let Some((_, then_src, else_src)) = try_ternary_assigns(
+                ctx,
+                func,
+                (then_assigns, then_body, then_trailing_assigns),
+                (else_assigns, else_body, else_trailing_assigns),
+            ) {
+                if try_minmax(func, *block, *cond, then_src, else_src).is_some() {
+                    // cond loses its BrIf use (absorbed by Math.max/min).
+                    if let Some(count) = ctx.use_counts.get_mut(cond) {
+                        *count = count.saturating_sub(1);
+                    }
+                    // If cond is now unused, the Cmp won't emit — decrement
+                    // its operands too.
+                    if ctx.use_counts.get(cond).copied().unwrap_or(0) == 0 {
+                        let cmp_ops = func.blocks[*block].insts.iter().rev().find_map(
+                            |&iid| {
+                                let inst = &func.insts[iid];
+                                if inst.result == Some(*cond) {
+                                    if let Op::Cmp(_, lhs, rhs) = &inst.op {
+                                        return Some((*lhs, *rhs));
+                                    }
+                                }
+                                None
+                            },
+                        );
+                        if let Some((lhs, rhs)) = cmp_ops {
+                            if let Some(c) = ctx.use_counts.get_mut(&lhs) {
+                                *c = c.saturating_sub(1);
+                            }
+                            if let Some(c) = ctx.use_counts.get_mut(&rhs) {
+                                *c = c.saturating_sub(1);
+                            }
+                        }
+                    }
+                }
+            }
             adjust_use_counts_for_shapes(ctx, func, then_body);
             adjust_use_counts_for_shapes(ctx, func, else_body);
         }
