@@ -449,31 +449,22 @@ fn compute_needs_let(func: &Function) -> HashSet<ValueId> {
         func.blocks[func.entry].params.iter().map(|p| p.value).collect();
 
     let mut needs_let = HashSet::new();
-    // Only iterate live instructions in blocks — the arena includes
-    // orphaned dead instructions from Mem2Reg/DCE.
-    for block in func.blocks.values() {
-        for &inst_id in &block.insts {
-            if let Some(r) = func.insts[inst_id].result {
-                if !entry_params.contains(&r) {
-                    needs_let.insert(r);
-                }
+    for (_, inst) in func.insts.iter() {
+        if let Some(r) = inst.result {
+            if !entry_params.contains(&r) {
+                needs_let.insert(r);
             }
         }
     }
     needs_let
 }
 
-/// Count how many times each value is used as an operand across live instructions.
-///
-/// Only counts instructions that are actually in blocks — orphaned instructions
-/// left in the arena by transforms (e.g. dead Copies from Mem2Reg) are excluded.
+/// Count how many times each value is used as an operand.
 fn compute_use_counts(func: &Function) -> HashMap<ValueId, usize> {
     let mut counts = HashMap::new();
-    for (_block_id, block) in func.blocks.iter() {
-        for &inst_id in &block.insts {
-            for v in value_operands(&func.insts[inst_id].op) {
-                *counts.entry(v).or_insert(0) += 1;
-            }
+    for (_, inst) in func.insts.iter() {
+        for v in value_operands(&inst.op) {
+            *counts.entry(v).or_insert(0) += 1;
         }
     }
     counts
