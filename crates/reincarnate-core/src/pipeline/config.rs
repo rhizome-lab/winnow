@@ -91,14 +91,17 @@ impl Default for LoweringConfig {
 }
 
 impl LoweringConfig {
-    /// "Literal" preset — faithful 1:1 translation without pattern-matching
-    /// optimizations. Produces straightforward if/else with assignments.
+    /// "Literal" preset — faithful 1:1 translation. Ternaries, logical
+    /// short-circuit operators, and while-condition hoisting are kept because
+    /// they accurately represent what the bytecode does. Only pattern-matching
+    /// optimizations that introduce constructs not in the original bytecode
+    /// (e.g. Math.max/min) are disabled.
     pub fn literal() -> Self {
         Self {
-            ternary: false,
+            ternary: true,
             minmax: false,
-            logical_operators: false,
-            while_condition_hoisting: false,
+            logical_operators: true,
+            while_condition_hoisting: true,
         }
     }
 
@@ -192,10 +195,10 @@ mod tests {
     #[test]
     fn lowering_literal_preset() {
         let config = LoweringConfig::literal();
-        assert!(!config.ternary);
+        assert!(config.ternary);
         assert!(!config.minmax);
-        assert!(!config.logical_operators);
-        assert!(!config.while_condition_hoisting);
+        assert!(config.logical_operators);
+        assert!(config.while_condition_hoisting);
     }
 
     #[test]
