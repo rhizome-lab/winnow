@@ -4,6 +4,7 @@ pub mod builder;
 pub mod coroutine;
 pub mod func;
 pub mod inst;
+pub mod lower_ast;
 pub mod module;
 pub mod printer;
 pub mod structurize;
@@ -11,6 +12,7 @@ pub mod ty;
 pub mod value;
 
 pub use ast::{AstFunction, BinOp, Expr, Stmt, UnaryOp};
+pub use lower_ast::lower_function;
 pub use block::{Block, BlockId, BlockParam};
 pub use builder::{FunctionBuilder, ModuleBuilder};
 pub use coroutine::CoroutineInfo;
