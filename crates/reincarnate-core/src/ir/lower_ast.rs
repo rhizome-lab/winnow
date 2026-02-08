@@ -336,6 +336,12 @@ fn adjust_use_counts_for_shapes(ctx: &mut LowerCtx, func: &Function, shape: &Sha
                 (else_assigns, else_body, else_trailing_assigns),
             ) {
                 if try_minmax(func, *block, *cond, then_src, else_src).is_some() {
+                    // The cond comparison is replaced by Math.max/min —
+                    // mark it dead so it doesn't consume its operands via
+                    // side-effecting inline chaining.
+                    if let Some(c) = ctx.use_counts.get_mut(cond) {
+                        *c = c.saturating_sub(1);
+                    }
                     for &iid in func.blocks[*block].insts.iter().rev() {
                         let inst = &func.insts[iid];
                         if inst.result == Some(*cond) {
@@ -401,6 +407,12 @@ fn adjust_for_stripped_not(
         });
     if is_not_of_cond {
         if let Some(count) = ctx.use_counts.get_mut(&cond) {
+            *count = count.saturating_sub(1);
+        }
+        // Also mark the Not itself as dead — the short-circuit pattern
+        // replaces the branch, so the Not shouldn't consume the cond
+        // via side-effecting inline chaining.
+        if let Some(count) = ctx.use_counts.get_mut(&bc) {
             *count = count.saturating_sub(1);
         }
     }
@@ -1074,9 +1086,9 @@ fn lower_shape_into(
             else_trailing_assigns,
         } => {
             lower_block_instructions(ctx, func, *block, stmts);
-            ctx.flush_side_effecting_inlines(stmts);
 
-            // Try ternary pattern.
+            // Try ternary pattern BEFORE flushing side-effecting inlines,
+            // so that operands are still available for minmax/ternary.
             if let Some((dst, then_src, else_src)) = try_ternary_assigns(
                 ctx,
                 func,
@@ -1084,13 +1096,17 @@ fn lower_shape_into(
                 (else_assigns, else_body, else_trailing_assigns),
             ) {
                 // Process trivial bodies so their insts get deferred.
+                // Save SE inlines so they don't leak into body processing.
+                let saved_se = std::mem::take(&mut ctx.side_effecting_inlines);
                 lower_shape(ctx, func, then_body);
                 lower_shape(ctx, func, else_body);
+                let body_se = std::mem::replace(&mut ctx.side_effecting_inlines, saved_se);
+                ctx.side_effecting_inlines.extend(body_se);
 
                 if let Some((name, a, b)) =
                     try_minmax(func, *block, *cond, then_src, else_src)
                 {
-                    // Math.max / Math.min
+                    // Math.max / Math.min — consume operands, then flush rest.
                     let expr = Expr::Call {
                         func: name.to_string(),
                         args: vec![
@@ -1098,6 +1114,7 @@ fn lower_shape_into(
                             ctx.build_val(func, b),
                         ],
                     };
+                    ctx.flush_side_effecting_inlines(stmts);
                     ctx.referenced_block_params.insert(dst);
                     stmts.push(Stmt::Assign {
                         target: Expr::Var(ctx.value_name(dst)),
@@ -1108,6 +1125,7 @@ fn lower_shape_into(
                     let cond_expr = ctx.build_val(func, *cond);
                     let then_expr = ctx.build_val(func, then_src);
                     let else_expr = ctx.build_val(func, else_src);
+                    ctx.flush_side_effecting_inlines(stmts);
                     ctx.referenced_block_params.insert(dst);
                     stmts.push(Stmt::Assign {
                         target: Expr::Var(ctx.value_name(dst)),
@@ -1119,6 +1137,7 @@ fn lower_shape_into(
                     });
                 }
             } else {
+                ctx.flush_side_effecting_inlines(stmts);
                 let cond_expr = ctx.build_val(func, *cond);
 
                 let mut then_stmts = Vec::new();
@@ -1288,7 +1307,13 @@ fn lower_shape_into(
             rhs,
         } => {
             lower_block_instructions(ctx, func, *block, stmts);
+            // Save SE inlines from the header block so they don't leak
+            // into rhs_body processing (which would prevent short-circuit).
+            let saved_se = std::mem::take(&mut ctx.side_effecting_inlines);
             let body_stmts = lower_shape(ctx, func, rhs_body);
+            let rhs_se = std::mem::replace(&mut ctx.side_effecting_inlines, saved_se);
+            // Merge any SE inlines from the rhs body back.
+            ctx.side_effecting_inlines.extend(rhs_se);
 
             if body_stmts.is_empty() {
                 // Short-circuit: phi = cond || rhs
@@ -1326,7 +1351,12 @@ fn lower_shape_into(
             rhs,
         } => {
             lower_block_instructions(ctx, func, *block, stmts);
+            // Save SE inlines from the header block so they don't leak
+            // into rhs_body processing (which would prevent short-circuit).
+            let saved_se = std::mem::take(&mut ctx.side_effecting_inlines);
             let body_stmts = lower_shape(ctx, func, rhs_body);
+            let rhs_se = std::mem::replace(&mut ctx.side_effecting_inlines, saved_se);
+            ctx.side_effecting_inlines.extend(rhs_se);
 
             if body_stmts.is_empty() {
                 // Short-circuit: phi = cond && rhs
