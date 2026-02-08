@@ -357,6 +357,12 @@ fn promote_multi_store(func: &mut Function) -> bool {
                     Op::Store { ptr: p, value } if *p == *ptr => {
                         current_def = *value;
                         dead_insts.insert(inst_id);
+                        // Transfer name from alloc to stored value so the
+                        // instruction result keeps the source-level variable
+                        // name (e.g. v11 = Math.round(damage) → "damage").
+                        if let Some(name) = func.value_names.get(ptr).cloned() {
+                            func.value_names.entry(*value).or_insert(name);
+                        }
                     }
                     Op::Load(p) if *p == *ptr => {
                         if let Some(r) = func.insts[inst_id].result {

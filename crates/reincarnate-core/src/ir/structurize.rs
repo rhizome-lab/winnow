@@ -501,14 +501,8 @@ impl<'a> Structurizer<'a> {
             .iter()
             .zip(args.iter())
             .filter(|(param, &src)| {
-                // Skip identity: same ValueId, or same debug name (e.g. multiple
-                // phis for the same promoted variable).
-                if param.value == src {
-                    return false;
-                }
-                let dst_name = self.func.value_names.get(&param.value);
-                let src_name = self.func.value_names.get(&src);
-                !(dst_name.is_some() && dst_name == src_name)
+                // Skip identity: same ValueId.
+                param.value != src
             })
             .map(|(param, &src)| BlockArgAssign {
                 dst: param.value,

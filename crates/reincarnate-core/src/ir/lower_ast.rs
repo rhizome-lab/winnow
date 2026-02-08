@@ -31,6 +31,7 @@ use super::value::{Constant, ValueId};
 /// `config` controls which pattern-matching optimizations are applied.
 pub fn lower_function(func: &Function, shape: &Shape, config: &LoweringConfig) -> AstFunction {
     let mut ctx = LowerCtx::new(func, config);
+
     adjust_use_counts_for_shapes(&mut ctx, func, shape);
 
     let mut body = lower_shape(&mut ctx, func, shape);
@@ -108,13 +109,17 @@ struct LowerCtx<'a> {
     /// When true, the next ForLoop's init_assigns should be skipped because
     /// a preceding IfElse's trailing assigns already set the loop header params.
     skip_loop_init_assigns: bool,
+    /// Names shared by 2+ ValueIds (out-of-SSA coalesced variables).
+    /// Instruction results with these names are emitted as assignments to the
+    /// existing mutable variable rather than fresh `const` declarations.
+    shared_names: HashSet<String>,
 }
 
 impl<'a> LowerCtx<'a> {
     fn new(func: &Function, config: &'a LoweringConfig) -> Self {
         let use_counts = compute_use_counts(func);
         let (alloc_inits, skip_stores) = compute_merged_stores(func);
-        let value_names: HashMap<ValueId, String> = func
+        let mut value_names: HashMap<ValueId, String> = func
             .value_names
             .iter()
             .map(|(k, v)| (*k, v.clone()))
@@ -123,6 +128,66 @@ impl<'a> LowerCtx<'a> {
             .params
             .iter()
             .map(|p| p.value)
+            .collect();
+
+        // Out-of-SSA name coalescing: scan branch args to find instruction
+        // results that represent redefinitions of named variables. When a
+        // Br/BrIf/Switch arg targets a named phi and the source has no name,
+        // rename the source to the phi's name in the lowerer's local copy.
+        // We do this HERE (not in Mem2Reg) to avoid affecting func.value_names,
+        // which the structurizer reads for its own identity-skip logic.
+        for (_, block) in func.blocks.iter() {
+            let Some(&last_inst) = block.insts.last() else {
+                continue;
+            };
+            let mut propagate = |target: BlockId, args: &[ValueId]| {
+                let target_block = &func.blocks[target];
+                for (param, &src) in target_block.params.iter().zip(args.iter()) {
+                    if param.value == src {
+                        continue;
+                    }
+                    if let Some(name) = func.value_names.get(&param.value) {
+                        value_names.entry(src).or_insert_with(|| name.clone());
+                    }
+                }
+            };
+            match &func.insts[last_inst].op {
+                Op::Br { target, args } => {
+                    propagate(*target, args);
+                }
+                Op::BrIf {
+                    then_target,
+                    then_args,
+                    else_target,
+                    else_args,
+                    ..
+                } => {
+                    propagate(*then_target, then_args);
+                    propagate(*else_target, else_args);
+                }
+                Op::Switch {
+                    cases, default, ..
+                } => {
+                    for (_, target, args) in cases {
+                        propagate(*target, args);
+                    }
+                    propagate(default.0, &default.1);
+                }
+                _ => {}
+            }
+        }
+
+        // Find names shared by 2+ ValueIds — these are out-of-SSA coalesced
+        // variables where instruction results represent redefinitions of a
+        // source-level variable.  Emit them as assignments, not const decls.
+        let mut name_counts: HashMap<&str, usize> = HashMap::new();
+        for name in value_names.values() {
+            *name_counts.entry(name.as_str()).or_default() += 1;
+        }
+        let shared_names: HashSet<String> = name_counts
+            .into_iter()
+            .filter(|(_, count)| *count >= 2)
+            .map(|(name, _)| name.to_string())
             .collect();
 
         Self {
@@ -139,6 +204,7 @@ impl<'a> LowerCtx<'a> {
             side_effecting_inlines: HashMap::new(),
             se_flush_declared: HashSet::new(),
             skip_loop_init_assigns: false,
+            shared_names,
         }
     }
 
@@ -237,12 +303,20 @@ impl<'a> LowerCtx<'a> {
         for v in to_flush {
             let expr = self.side_effecting_inlines.remove(&v).unwrap();
             self.se_flush_declared.insert(v);
-            stmts.push(Stmt::VarDecl {
-                name: self.value_name(v),
-                ty: None,
-                init: Some(expr),
-                mutable: false,
-            });
+            let name = self.value_name(v);
+            if self.shared_names.contains(&name) {
+                stmts.push(Stmt::Assign {
+                    target: Expr::Var(name),
+                    value: expr,
+                });
+            } else {
+                stmts.push(Stmt::VarDecl {
+                    name,
+                    ty: None,
+                    init: Some(expr),
+                    mutable: false,
+                });
+            }
         }
     }
 
@@ -787,26 +861,27 @@ fn lower_inst(ctx: &mut LowerCtx, func: &Function, inst_id: InstId, stmts: &mut 
                 } else if count == 0 && side_effecting {
                     // Side-effecting but unused result — emit as expression stmt.
                     stmts.push(Stmt::Expr(expr));
-                } else if count == 1 && !side_effecting {
-                    // Single-use pure — should have been deferred/inlined already.
-                    // If we get here, emit as VarDecl.
-                    stmts.push(Stmt::VarDecl {
-                        name: ctx.value_name(r),
-                        ty: None,
-                        init: Some(expr),
-                        mutable: false,
-                    });
                 } else if count == 1 && side_effecting {
                     // Single-use side-effecting — store for inline at use site.
                     ctx.side_effecting_inlines.insert(r, expr);
                 } else {
-                    // Multi-use — emit as VarDecl.
-                    stmts.push(Stmt::VarDecl {
-                        name: ctx.value_name(r),
-                        ty: None,
-                        init: Some(expr),
-                        mutable: false,
-                    });
+                    // Single-use (fell through deferred path) or multi-use.
+                    let name = ctx.value_name(r);
+                    if ctx.shared_names.contains(&name) {
+                        // Out-of-SSA coalesced: this instruction result
+                        // redefines an existing variable — emit assignment.
+                        stmts.push(Stmt::Assign {
+                            target: Expr::Var(name),
+                            value: expr,
+                        });
+                    } else {
+                        stmts.push(Stmt::VarDecl {
+                            name,
+                            ty: None,
+                            init: Some(expr),
+                            mutable: false,
+                        });
+                    }
                 }
             } else {
                 // No result — expression statement.
@@ -1299,15 +1374,16 @@ fn emit_block_br_assigns(
             if param.value == src {
                 continue;
             }
-            let dst_name = func.value_names.get(&param.value);
-            let src_name = func.value_names.get(&src);
-            if dst_name.is_some() && dst_name == src_name {
+            let target_name = ctx.value_name(param.value);
+            let value = ctx.build_val(func, src);
+            // Skip self-assignment (coalesced values share the target name).
+            if matches!(&value, Expr::Var(name) if name == &target_name) {
                 continue;
             }
             ctx.referenced_block_params.insert(param.value);
             stmts.push(Stmt::Assign {
-                target: Expr::Var(ctx.value_name(param.value)),
-                value: ctx.build_val(func, src),
+                target: Expr::Var(target_name),
+                value,
             });
         }
     }
@@ -1320,10 +1396,16 @@ fn lower_arg_assigns(
     stmts: &mut Vec<Stmt>,
 ) {
     for assign in assigns {
+        let target_name = ctx.value_name(assign.dst);
+        let value = ctx.build_val(func, assign.src);
+        // Skip self-assignment (coalesced values share the target name).
+        if matches!(&value, Expr::Var(name) if name == &target_name) {
+            continue;
+        }
         ctx.referenced_block_params.insert(assign.dst);
         stmts.push(Stmt::Assign {
-            target: Expr::Var(ctx.value_name(assign.dst)),
-            value: ctx.build_val(func, assign.src),
+            target: Expr::Var(target_name),
+            value,
         });
     }
 }
