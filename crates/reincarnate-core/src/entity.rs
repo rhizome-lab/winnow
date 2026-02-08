@@ -89,6 +89,10 @@ impl<K: EntityRef, V> PrimaryMap<K, V> {
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.elems.iter()
     }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.elems.iter_mut()
+    }
 }
 
 impl<K: EntityRef, V> std::ops::Index<K> for PrimaryMap<K, V> {

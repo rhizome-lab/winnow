@@ -4,13 +4,14 @@
 //! represents `if`/`else`, `while`, `for`, and general loops. Falls back to
 //! a dispatch-loop (`Shape::Dispatch`) for irreducible subgraphs.
 //!
-//! This is a read-only analysis — the IR is not modified.
+//! The structurizer may modify the IR in limited ways (e.g. flipping a
+//! single-use `Cmp` kind when normalizing branch direction).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::entity::EntityRef;
 use crate::ir::{BlockId, Function, Op, ValueId};
-use crate::transforms::util::branch_targets;
+use crate::transforms::util::{branch_targets, value_operands};
 
 // -------------------------------------------------------------------------
 // Shape types
@@ -34,7 +35,6 @@ pub enum Shape {
     IfElse {
         block: BlockId,
         cond: ValueId,
-        cond_negated: bool,
         then_assigns: Vec<BlockArgAssign>,
         then_body: Box<Shape>,
         then_trailing_assigns: Vec<BlockArgAssign>,
@@ -382,7 +382,7 @@ const MAX_DEPTH: usize = 200;
 
 /// Context for the recursive structurizer.
 struct Structurizer<'a> {
-    func: &'a Function,
+    func: &'a mut Function,
     cfg: Cfg,
     idom: HashMap<BlockId, BlockId>,
     ipdom: HashMap<BlockId, BlockId>,
@@ -398,7 +398,7 @@ struct Structurizer<'a> {
 }
 
 impl<'a> Structurizer<'a> {
-    fn new(func: &'a Function) -> Self {
+    fn new(func: &'a mut Function) -> Self {
         let cfg = build_cfg(func);
         let idom = compute_dominators(func, &cfg);
         let ipdom = compute_post_dominators(func, &cfg);
@@ -440,6 +440,38 @@ impl<'a> Structurizer<'a> {
         }
         // Fallback: use the last instruction if it exists.
         blk.insts.last().map(|&id| &self.func.insts[id].op)
+    }
+
+    /// If `cond` is produced by a single-use `Cmp`, flip the comparison
+    /// kind in-place (e.g. `Ge` → `Lt`) and return true.
+    ///
+    /// This lets the structurizer swap then/else branches without
+    /// introducing a negation flag — the IR condition itself is inverted.
+    fn try_invert_cmp(&mut self, cond: ValueId) -> bool {
+        // Check single-use: scan all block instructions for references.
+        let mut use_count = 0u32;
+        for block in self.func.blocks.values() {
+            for &inst_id in &block.insts {
+                if value_operands(&self.func.insts[inst_id].op).contains(&cond) {
+                    use_count += 1;
+                    if use_count > 1 {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Find and flip the Cmp instruction.
+        for inst in self.func.insts.values_mut() {
+            if inst.result == Some(cond) {
+                if let Op::Cmp(ref mut kind, _, _) = inst.op {
+                    *kind = kind.inverse();
+                    return true;
+                }
+                break;
+            }
+        }
+        false
     }
 
     /// If `cond` is produced by `Not(inner)` in `block`, return `inner`.
@@ -628,7 +660,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
                             then_trailing_assigns: vec![],
@@ -643,7 +674,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
                             then_trailing_assigns: vec![],
@@ -660,7 +690,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Break),
                             then_trailing_assigns: vec![],
@@ -677,7 +706,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
                             then_trailing_assigns: vec![],
@@ -694,7 +722,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(Shape::Continue),
                             then_trailing_assigns: vec![],
@@ -709,7 +736,6 @@ impl<'a> Structurizer<'a> {
                         return Shape::IfElse {
                             block,
                             cond,
-                            cond_negated: false,
                             then_assigns,
                             then_body: Box::new(then_body_shape),
                             then_trailing_assigns: vec![],
@@ -757,28 +783,27 @@ impl<'a> Structurizer<'a> {
                     };
 
                 // Normalize: if then is structurally empty and else is not,
-                // swap branches and negate the condition. This avoids the
-                // emitter having to detect and flip empty-then at render time.
+                // swap branches and invert the Cmp condition in the IR.
+                // This avoids the emitter having to negate at render time.
                 let then_empty = matches!(&then_body, Shape::Seq(v) if v.is_empty())
                     && then_assigns.is_empty()
                     && then_trailing_assigns.is_empty();
                 let else_empty = matches!(&else_body, Shape::Seq(v) if v.is_empty())
                     && else_assigns.is_empty()
                     && else_trailing_assigns.is_empty();
-                let (cond_negated, then_assigns, then_body, then_trailing_assigns,
+                let (then_assigns, then_body, then_trailing_assigns,
                      else_assigns, else_body, else_trailing_assigns) =
-                    if then_empty && !else_empty {
-                        (true, else_assigns, else_body, else_trailing_assigns,
+                    if then_empty && !else_empty && self.try_invert_cmp(cond) {
+                        (else_assigns, else_body, else_trailing_assigns,
                          then_assigns, then_body, then_trailing_assigns)
                     } else {
-                        (false, then_assigns, then_body, then_trailing_assigns,
+                        (then_assigns, then_body, then_trailing_assigns,
                          else_assigns, else_body, else_trailing_assigns)
                     };
 
                 let if_shape = Shape::IfElse {
                     block,
                     cond,
-                    cond_negated,
                     then_assigns,
                     then_body: Box::new(then_body),
                     then_trailing_assigns,
@@ -1204,7 +1229,6 @@ impl<'a> Structurizer<'a> {
         let Shape::IfElse {
             block,
             cond,
-            cond_negated: _,
             ref then_assigns,
             ref then_body,
             ref then_trailing_assigns,
@@ -1380,13 +1404,14 @@ fn values_equivalent(func: &Function, a: ValueId, b: ValueId) -> bool {
 /// Multi-block functions are analyzed for if/else, loops, etc.
 /// Recursion depth is bounded by `MAX_DEPTH`; the dominator and
 /// post-dominator computations are nearly linear (Lengauer-Tarjan).
-pub fn structurize(func: &Function) -> Shape {
+pub fn structurize(func: &mut Function) -> Shape {
     if func.blocks.len() == 1 {
         return Shape::Block(func.entry);
     }
 
+    let entry = func.entry;
     let mut s = Structurizer::new(func);
-    s.structurize_region(func.entry, None, None)
+    s.structurize_region(entry, None, None)
 }
 
 // -------------------------------------------------------------------------
@@ -1409,8 +1434,8 @@ mod tests {
         let a = fb.param(0);
         fb.ret(Some(a));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
         assert_eq!(shape, Shape::Block(func.entry));
     }
 
@@ -1432,8 +1457,8 @@ mod tests {
         fb.switch_to_block(b2);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         // Should be Seq([Block(entry), Block(b1), Block(b2)])
         match &shape {
@@ -1473,8 +1498,8 @@ mod tests {
         fb.switch_to_block(merge_block);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         // Should contain an IfElse.
         fn has_if_else(shape: &Shape) -> bool {
@@ -1510,8 +1535,8 @@ mod tests {
         fb.switch_to_block(merge_block);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn has_if_else(shape: &Shape) -> bool {
             match shape {
@@ -1564,8 +1589,8 @@ mod tests {
         fb.switch_to_block(exit);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn has_while(shape: &Shape) -> bool {
             match shape {
@@ -1610,8 +1635,8 @@ mod tests {
         fb.switch_to_block(exit);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn has_for(shape: &Shape) -> bool {
             match shape {
@@ -1651,8 +1676,8 @@ mod tests {
         fb.switch_to_block(exit);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn has_loop(shape: &Shape) -> bool {
             match shape {
@@ -1705,8 +1730,8 @@ mod tests {
         fb.switch_to_block(exit);
         fb.ret(None);
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn has_loop(shape: &Shape) -> bool {
             match shape {
@@ -1796,8 +1821,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         // Should produce LogicalOr.
         fn find_logical_or(shape: &Shape) -> Option<&Shape> {
@@ -1858,8 +1883,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_if_else(shape: &Shape) -> Option<&Shape> {
             match shape {
@@ -1925,8 +1950,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_logical_and(shape: &Shape) -> Option<&Shape> {
             match shape {
@@ -1979,8 +2004,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_logical_or(shape: &Shape) -> Option<&Shape> {
             match shape {
@@ -2043,8 +2068,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_logical_and(shape: &Shape) -> Option<&Shape> {
             match shape {
@@ -2110,8 +2135,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_logical_or(shape: &Shape) -> Option<&Shape> {
             match shape {
@@ -2173,8 +2198,8 @@ mod tests {
         let v_phi = merge_vals[0];
         fb.ret(Some(v_phi));
 
-        let func = fb.build();
-        let shape = structurize(&func);
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
 
         fn find_logical_and(shape: &Shape) -> Option<&Shape> {
             match shape {

@@ -19,7 +19,7 @@ use crate::types::ts_type;
 ///
 /// If the module has classes, emits a directory with one file per class plus
 /// a barrel `index.ts`. Otherwise emits a flat `.ts` file.
-pub fn emit_module(module: &Module, output_dir: &Path) -> Result<(), CoreError> {
+pub fn emit_module(module: &mut Module, output_dir: &Path) -> Result<(), CoreError> {
     if module.classes.is_empty() {
         let out = emit_module_to_string(module)?;
         let path = output_dir.join(format!("{}.ts", module.name));
@@ -31,7 +31,7 @@ pub fn emit_module(module: &Module, output_dir: &Path) -> Result<(), CoreError> 
 }
 
 /// Emit a module to a string (flat output — for testing or class-free modules).
-pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
+pub fn emit_module_to_string(module: &mut Module) -> Result<String, CoreError> {
     let mut out = String::new();
     let class_names = build_class_names(module);
     let ancestor_sets = build_ancestor_sets(module);
@@ -50,8 +50,8 @@ pub fn emit_module_to_string(module: &Module) -> Result<String, CoreError> {
         for group in &class_groups {
             emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, &mut out)?;
         }
-        for (_fid, func) in &free_funcs {
-            emit_function(func, &class_names, &mut out)?;
+        for &fid in &free_funcs {
+            emit_function(&mut module.functions[fid], &class_names, &mut out)?;
         }
     }
 
@@ -219,7 +219,7 @@ fn relative_import_path(from: &[String], to: &[String]) -> String {
 }
 
 /// Emit a module as a directory with one `.ts` file per class in nested dirs.
-pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), CoreError> {
+pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path) -> Result<(), CoreError> {
     let module_dir = output_dir.join(&module.name);
     fs::create_dir_all(&module_dir).map_err(CoreError::Io)?;
 
@@ -231,7 +231,7 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
     let mut barrel_exports: Vec<String> = Vec::new();
 
     for group in &class_groups {
-        let class_def = group.class_def;
+        let class_def = &group.class_def;
         let short_name = sanitize_ident(&class_def.name);
 
         // Path segments for this class: namespace segments + class name.
@@ -251,10 +251,10 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
 
         let mut out = String::new();
         let systems = collect_system_names_from_funcs(
-            group.methods.iter().map(|(_id, f)| *f),
+            group.methods.iter().map(|&fid| &module.functions[fid]),
         );
         emit_runtime_imports_for(systems, &mut out, depth);
-        emit_intra_imports(group, &segments, &registry, &mut out);
+        emit_intra_imports(group, module, &segments, &registry, &mut out);
         emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -269,13 +269,13 @@ pub fn emit_module_to_dir(module: &Module, output_dir: &Path) -> Result<(), Core
     if !free_funcs.is_empty() {
         let mut out = String::new();
         let systems = collect_system_names_from_funcs(
-            free_funcs.iter().map(|(_id, f)| *f),
+            free_funcs.iter().map(|&fid| &module.functions[fid]),
         );
         emit_runtime_imports_for(systems, &mut out, 0);
         emit_imports(module, &mut out);
         emit_globals(module, &mut out);
-        for (_fid, func) in &free_funcs {
-            emit_function(func, &class_names, &mut out)?;
+        for &fid in &free_funcs {
+            emit_function(&mut module.functions[fid], &class_names, &mut out)?;
         }
         let path = module_dir.join("_init.ts");
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -727,7 +727,8 @@ fn emit_runtime_imports_for(systems: BTreeSet<String>, out: &mut String, depth: 
 /// **Type refs** (erased at runtime):
 /// - Struct field types, function signatures, `Op::Alloc`, `Op::Cast`, `value_types`
 fn collect_class_references(
-    group: &ClassGroup<'_>,
+    group: &ClassGroup,
+    module: &Module,
     registry: &ClassRegistry,
 ) -> (BTreeSet<String>, BTreeSet<String>) {
     let self_name = &group.class_def.name;
@@ -750,7 +751,8 @@ fn collect_class_references(
     }
 
     // Scan all method bodies for type references.
-    for (_fid, func) in &group.methods {
+    for &fid in &group.methods {
+        let func = &module.functions[fid];
         collect_type_refs_from_function(func, self_name, registry, &mut value_refs, &mut type_refs);
     }
 
@@ -855,12 +857,13 @@ fn collect_type_ref(
 
 /// Emit `import` / `import type` statements for intra-module class references.
 fn emit_intra_imports(
-    group: &ClassGroup<'_>,
+    group: &ClassGroup,
+    module: &Module,
     source_segments: &[String],
     registry: &ClassRegistry,
     out: &mut String,
 ) {
-    let (value_refs, type_refs) = collect_class_references(group, registry);
+    let (value_refs, type_refs) = collect_class_references(group, module, registry);
     if value_refs.is_empty() && type_refs.is_empty() {
         return;
     }
@@ -982,18 +985,18 @@ fn emit_globals(module: &Module, out: &mut String) {
 // ---------------------------------------------------------------------------
 
 fn emit_functions(
-    module: &Module,
+    module: &mut Module,
     class_names: &HashMap<String, String>,
     out: &mut String,
 ) -> Result<(), CoreError> {
-    for (_id, func) in module.functions.iter() {
-        emit_function(func, class_names, out)?;
+    for id in module.functions.keys().collect::<Vec<_>>() {
+        emit_function(&mut module.functions[id], class_names, out)?;
     }
     Ok(())
 }
 
 fn emit_function(
-    func: &Function,
+    func: &mut Function,
     class_names: &HashMap<String, String>,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -1102,7 +1105,6 @@ fn emit_shape(
         Shape::IfElse {
             block,
             cond,
-            cond_negated,
             then_assigns,
             then_body,
             then_trailing_assigns,
@@ -1113,13 +1115,7 @@ fn emit_shape(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            // Format condition (structurizer sets cond_negated when it
-            // swaps branches to normalize empty-then).
-            let cond_expr = if *cond_negated {
-                negate_cond(ctx, func, *block, *cond)
-            } else {
-                ctx.val(*cond)
-            };
+            let cond_expr = ctx.val(*cond);
 
             // Emit both branches to buffers so we can detect truly empty output.
             let inner = format!("{indent}  ");
@@ -1149,11 +1145,7 @@ fn emit_shape(
                 (true, false) => {
                     // Fallback: then became empty at render time despite
                     // structurizer normalization. Negate and show else.
-                    let neg = if *cond_negated {
-                        ctx.val(*cond)
-                    } else {
-                        negate_cond(ctx, func, *block, *cond)
-                    };
+                    let neg = negate_cond(ctx, func, *block, *cond);
                     let _ = writeln!(out, "{indent}if ({neg}) {{");
                     out.push_str(&else_buf);
                     let _ = writeln!(out, "{indent}}}");
@@ -1379,7 +1371,6 @@ fn emit_shape_strip_trailing_return(
         Shape::IfElse {
             block,
             cond,
-            cond_negated,
             then_assigns,
             then_body,
             then_trailing_assigns,
@@ -1390,11 +1381,7 @@ fn emit_shape_strip_trailing_return(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            let cond_expr = if *cond_negated {
-                negate_cond(ctx, func, *block, *cond)
-            } else {
-                ctx.val(*cond)
-            };
+            let cond_expr = ctx.val(*cond);
 
             // Emit both branches to buffers so we can detect truly empty output.
             let inner = format!("{indent}  ");
@@ -1421,11 +1408,7 @@ fn emit_shape_strip_trailing_return(
                     let _ = writeln!(out, "{indent}}}");
                 }
                 (true, false) => {
-                    let neg = if *cond_negated {
-                        ctx.val(*cond)
-                    } else {
-                        negate_cond(ctx, func, *block, *cond)
-                    };
+                    let neg = negate_cond(ctx, func, *block, *cond);
                     let _ = writeln!(out, "{indent}if ({neg}) {{");
                     out.push_str(&else_buf);
                     let _ = writeln!(out, "{indent}}}");
@@ -2073,39 +2056,43 @@ fn emit_inst(
 // Class grouping and emission
 // ---------------------------------------------------------------------------
 
-struct ClassGroup<'a> {
-    class_def: &'a ClassDef,
-    struct_def: &'a StructDef,
-    methods: Vec<(FuncId, &'a Function)>,
+struct ClassGroup {
+    class_def: ClassDef,
+    struct_def: StructDef,
+    methods: Vec<FuncId>,
 }
 
 /// Partition module contents into class groups and free functions.
-fn group_by_class(module: &Module) -> (Vec<ClassGroup<'_>>, Vec<(FuncId, &Function)>) {
+fn group_by_class(module: &Module) -> (Vec<ClassGroup>, Vec<FuncId>) {
     let mut claimed: HashSet<FuncId> = HashSet::new();
     let mut groups = Vec::new();
 
     for class in &module.classes {
-        let struct_def = &module.structs[class.struct_index];
-        let methods: Vec<(FuncId, &Function)> = class
+        let struct_def = module.structs[class.struct_index].clone();
+        let methods: Vec<FuncId> = class
             .methods
             .iter()
-            .filter_map(|&fid| {
-                let func = module.functions.get(fid)?;
-                claimed.insert(fid);
-                Some((fid, func))
+            .filter(|&&fid| {
+                if module.functions.get(fid).is_some() {
+                    claimed.insert(fid);
+                    true
+                } else {
+                    false
+                }
             })
+            .copied()
             .collect();
         groups.push(ClassGroup {
-            class_def: class,
+            class_def: class.clone(),
             struct_def,
             methods,
         });
     }
 
-    let free: Vec<(FuncId, &Function)> = module
+    let free: Vec<FuncId> = module
         .functions
-        .iter()
-        .filter(|(fid, _)| !claimed.contains(fid))
+        .keys()
+        .filter(|fid| !claimed.contains(fid))
         .collect();
 
     (groups, free)
@@ -2113,8 +2100,8 @@ fn group_by_class(module: &Module) -> (Vec<ClassGroup<'_>>, Vec<(FuncId, &Functi
 
 /// Emit a TypeScript class from a `ClassGroup`.
 fn emit_class(
-    group: &ClassGroup<'_>,
-    _module: &Module,
+    group: &ClassGroup,
+    module: &mut Module,
     class_names: &HashMap<String, String>,
     ancestor_sets: &HashMap<String, HashSet<String>>,
     method_name_sets: &HashMap<String, HashSet<String>>,
@@ -2142,8 +2129,8 @@ fn emit_class(
     }
 
     // Methods — sorted: constructor first, then instance, static, getters, setters.
-    let mut sorted_methods: Vec<&(FuncId, &Function)> = group.methods.iter().collect();
-    sorted_methods.sort_by_key(|(_, f)| match f.method_kind {
+    let mut sorted_methods: Vec<FuncId> = group.methods.clone();
+    sorted_methods.sort_by_key(|&fid| match module.functions[fid].method_kind {
         MethodKind::Constructor => 0,
         MethodKind::Instance => 1,
         MethodKind::Getter => 2,
@@ -2152,17 +2139,17 @@ fn emit_class(
         MethodKind::Free => 5,
     });
 
-    let qualified = qualified_class_name(group.class_def);
+    let qualified = qualified_class_name(&group.class_def);
     let empty_ancestors = HashSet::new();
     let ancestors = ancestor_sets.get(&qualified).unwrap_or(&empty_ancestors);
     let empty_methods = HashSet::new();
     let method_names = method_name_sets.get(&qualified).unwrap_or(&empty_methods);
 
-    for (i, &(_fid, func)) in sorted_methods.iter().enumerate() {
+    for (i, &fid) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(func, class_names, ancestors, method_names, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2171,7 +2158,7 @@ fn emit_class(
 
 /// Emit a single method inside a class body.
 fn emit_class_method(
-    func: &Function,
+    func: &mut Function,
     class_names: &HashMap<String, String>,
     ancestors: &HashSet<String>,
     method_names: &HashSet<String>,
@@ -2441,7 +2428,7 @@ mod tests {
     fn build_and_emit(build: impl FnOnce(&mut ModuleBuilder)) -> String {
         let mut mb = ModuleBuilder::new("test");
         build(&mut mb);
-        emit_module_to_string(&mb.build()).unwrap()
+        emit_module_to_string(&mut mb.build()).unwrap()
     }
 
     #[test]
@@ -2720,8 +2707,8 @@ mod tests {
         let module = mb.build();
 
         // Run mem2reg IR pass, then emit.
-        let result = Mem2Reg.apply(module).unwrap();
-        let out = emit_module_to_string(&result.module).unwrap();
+        let mut result = Mem2Reg.apply(module).unwrap();
+        let out = emit_module_to_string(&mut result.module).unwrap();
 
         // The alloc/store/load should be eliminated; return refers to the
         // original parameter directly.
@@ -2959,8 +2946,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         // Class declaration with extends.
         assert!(
@@ -3033,8 +3020,8 @@ mod tests {
         fb.ret(None);
         mb.add_function(fb.build());
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(out.contains("export class Foo {"), "Should have class:\n{out}");
         assert!(
@@ -3105,8 +3092,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        emit_module_to_dir(&module, dir.path()).unwrap();
+        let mut module = mb.build();
+        emit_module_to_dir(&mut module, dir.path()).unwrap();
 
         // Check nested file exists.
         let class_file = dir
@@ -3184,8 +3171,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        emit_module_to_dir(&module, dir.path()).unwrap();
+        let mut module = mb.build();
+        emit_module_to_dir(&mut module, dir.path()).unwrap();
 
         let swamp_file = dir.path().join("frame1/classes/Scenes/Swamp.ts");
         let content = fs::read_to_string(&swamp_file).unwrap();
@@ -3228,8 +3215,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("super();"),
@@ -3307,8 +3294,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("new Widget()"),
@@ -3435,8 +3422,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("this.hp"),
@@ -3496,8 +3483,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("this.player"),
@@ -3587,8 +3574,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             !out.contains("this.power"),
@@ -3697,8 +3684,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("this.temp = "),
@@ -3941,8 +3928,8 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        let module = mb.build();
-        let out = emit_module_to_string(&module).unwrap();
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module).unwrap();
 
         assert!(
             out.contains("this.isNaga()"),

@@ -16,12 +16,12 @@ impl Backend for TypeScriptBackend {
         "typescript"
     }
 
-    fn emit(&self, input: BackendInput) -> Result<(), CoreError> {
+    fn emit(&self, mut input: BackendInput) -> Result<(), CoreError> {
         fs::create_dir_all(&input.output_dir)?;
 
         runtime::emit_runtime(&input.output_dir)?;
 
-        for module in &input.modules {
+        for module in &mut input.modules {
             emit::emit_module(module, &input.output_dir)?;
         }
 
