@@ -147,16 +147,11 @@ identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
   `value_names` — we just need to use it during AST lowering. Standard out-of-SSA
   (phi elimination + copy coalescing via interference graph).
 
-- [ ] **SE inline flush architecture** — `side_effecting_inlines` is a flat
-  HashMap that gets flushed at every block boundary (`lower_block_instructions`
-  calls `flush_side_effecting_inlines` at the top). This destroys inline
-  opportunities when a SE expression from a preceding shape (e.g. LogicalAnd phi)
-  is consumed by the very next shape (e.g. IfElse condition). Result:
-  `const v17 = (x > 0) && (x < 1); v24 = v17 ? 1 : x` instead of
-  `v24 = ((x > 0) && (x < 1)) ? 1 : x`. The cross-shape deferral mechanism
-  is fundamentally wrong — intra-block SE inlining should be local analysis,
-  and cross-shape values (LogicalAnd/Or phis) need a separate mechanism not
-  subject to block-boundary flushing.
+- [x] **SE inline flush architecture** — Solved via AST-level single-use const
+  folding (`fold_single_use_consts`). Instead of fixing the lowerer's flush
+  mechanism, we let it produce conservative named variables, then fold
+  single-use `const x = expr; use(x)` → `use(expr)` as a post-pass. This
+  trivially recovers all inline opportunities lost by block-boundary flushing.
 
 - [x] **Compound assignment detection** — AST-to-AST pass to rewrite
   `x = x + y` → `x += y`, `x = x - 1` → `x -= 1`, etc. Straightforward
