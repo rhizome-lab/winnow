@@ -1157,14 +1157,28 @@ fn emit_shape(
                 emit_shape(ctx, func, then_body, &mut discard, "")?;
                 emit_shape(ctx, func, else_body, &mut discard, "")?;
 
-                let cond_expr = ctx.val(*cond);
-                let then_expr = ctx.val(then_src);
-                let else_expr = ctx.val(else_src);
-                let _ = writeln!(
-                    out,
-                    "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
-                    ctx.val_name(dst)
-                );
+                // Try Math.max / Math.min before falling back to ternary.
+                if let Some(minmax) =
+                    try_minmax(func, *block, *cond, then_src, else_src)
+                {
+                    let (name, a, b) = minmax;
+                    let _ = writeln!(
+                        out,
+                        "{indent}{} = {name}({}, {});",
+                        ctx.val_name(dst),
+                        ctx.val(a),
+                        ctx.val(b),
+                    );
+                } else {
+                    let cond_expr = ctx.val(*cond);
+                    let then_expr = ctx.val(then_src);
+                    let else_expr = ctx.val(else_src);
+                    let _ = writeln!(
+                        out,
+                        "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
+                        ctx.val_name(dst)
+                    );
+                }
             } else {
                 let cond_expr = ctx.val(*cond);
 
@@ -1444,14 +1458,27 @@ fn emit_shape_strip_trailing_return(
                 emit_shape(ctx, func, then_body, &mut discard, "")?;
                 emit_shape(ctx, func, else_body, &mut discard, "")?;
 
-                let cond_expr = ctx.val(*cond);
-                let then_expr = ctx.val(then_src);
-                let else_expr = ctx.val(else_src);
-                let _ = writeln!(
-                    out,
-                    "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
-                    ctx.val_name(dst)
-                );
+                if let Some(minmax) =
+                    try_minmax(func, *block, *cond, then_src, else_src)
+                {
+                    let (name, a, b) = minmax;
+                    let _ = writeln!(
+                        out,
+                        "{indent}{} = {name}({}, {});",
+                        ctx.val_name(dst),
+                        ctx.val(a),
+                        ctx.val(b),
+                    );
+                } else {
+                    let cond_expr = ctx.val(*cond);
+                    let then_expr = ctx.val(then_src);
+                    let else_expr = ctx.val(else_src);
+                    let _ = writeln!(
+                        out,
+                        "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
+                        ctx.val_name(dst)
+                    );
+                }
             } else {
                 let cond_expr = ctx.val(*cond);
 
@@ -1554,6 +1581,88 @@ fn emit_arg_assigns(
             ctx.val(assign.dst),
             ctx.val(assign.src)
         );
+    }
+}
+
+/// Detect `cond ? a : b` patterns that are `Math.max` or `Math.min`.
+///
+/// Given `Cmp(kind, lhs, rhs)` as the condition and `then_val`/`else_val` as
+/// the ternary arms, recognizes:
+///   - `lhs >= rhs ? lhs : rhs` → `Math.max(lhs, rhs)`
+///   - `lhs >= rhs ? rhs : lhs` → `Math.min(lhs, rhs)`
+///   - (and the Gt/Le/Lt variants)
+///
+/// Also handles the common case where the Cmp operand and ternary arm are
+/// different ValueIds but numerically equal constants (e.g. `Int(1)` vs
+/// `Float(1.0)` from bytecode decompilation).
+///
+/// Returns `(&str, ValueId, ValueId)` — the function name and its two args.
+/// The args use the ternary-arm ValueIds for better inlining.
+fn try_minmax(
+    func: &Function,
+    block: BlockId,
+    cond: ValueId,
+    then_val: ValueId,
+    else_val: ValueId,
+) -> Option<(&'static str, ValueId, ValueId)> {
+    // Find the Cmp instruction that defines cond in this block.
+    let blk = &func.blocks[block];
+    let cmp = blk.insts.iter().rev().find_map(|&inst_id| {
+        let inst = &func.insts[inst_id];
+        if inst.result == Some(cond) {
+            if let Op::Cmp(kind, lhs, rhs) = &inst.op {
+                return Some((*kind, *lhs, *rhs));
+            }
+        }
+        None
+    })?;
+    let (kind, lhs, rhs) = cmp;
+
+    // Check if two ValueIds are equivalent: same id or same numeric constant.
+    let equiv = |a: ValueId, b: ValueId| -> bool {
+        if a == b {
+            return true;
+        }
+        let as_f64 = |v: ValueId| -> Option<f64> {
+            func.insts.iter().find_map(|(_, inst)| {
+                if inst.result == Some(v) {
+                    match &inst.op {
+                        Op::Const(Constant::Int(n)) => Some(*n as f64),
+                        Op::Const(Constant::UInt(n)) => Some(*n as f64),
+                        Op::Const(Constant::Float(n)) => Some(*n),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+        };
+        matches!((as_f64(a), as_f64(b)), (Some(x), Some(y)) if x == y)
+    };
+
+    // "then wins" means the then-branch takes the value that satisfies the comparison.
+    //   Ge/Gt: lhs is the "winner" → then=lhs means max, then=rhs means min
+    //   Le/Lt: rhs is the "winner" (lhs is small) → then=lhs means min, then=rhs means max
+    match kind {
+        CmpKind::Ge | CmpKind::Gt => {
+            if equiv(then_val, lhs) && equiv(else_val, rhs) {
+                Some(("Math.max", then_val, else_val))
+            } else if equiv(then_val, rhs) && equiv(else_val, lhs) {
+                Some(("Math.min", then_val, else_val))
+            } else {
+                None
+            }
+        }
+        CmpKind::Le | CmpKind::Lt => {
+            if equiv(then_val, lhs) && equiv(else_val, rhs) {
+                Some(("Math.min", then_val, else_val))
+            } else if equiv(then_val, rhs) && equiv(else_val, lhs) {
+                Some(("Math.max", then_val, else_val))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
