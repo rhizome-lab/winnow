@@ -91,12 +91,7 @@ impl Default for LoweringConfig {
 }
 
 impl LoweringConfig {
-    /// "Literal" preset — faithful 1:1 translation. Ternaries, logical
-    /// short-circuit operators, and while-condition hoisting are kept because
-    /// they accurately represent what the bytecode does. Only pattern-matching
-    /// optimizations that introduce constructs not in the original bytecode
-    /// (e.g. Math.max/min) are disabled.
-    pub fn literal() -> Self {
+    fn literal() -> Self {
         Self {
             ternary: true,
             minmax: false,
@@ -105,8 +100,7 @@ impl LoweringConfig {
         }
     }
 
-    /// "Optimized" preset — all pattern-matching optimizations enabled.
-    pub fn optimized() -> Self {
+    fn optimized() -> Self {
         Self {
             ternary: true,
             minmax: true,
@@ -114,14 +108,68 @@ impl LoweringConfig {
             while_condition_hoisting: true,
         }
     }
+}
 
-    /// Create from a preset name. Returns `None` for unknown presets.
-    pub fn from_preset(name: &str) -> Option<Self> {
-        match name {
-            "literal" => Some(Self::literal()),
-            "optimized" => Some(Self::optimized()),
-            _ => None,
+/// A named preset that configures the entire pipeline: both transform passes
+/// and AST lowering optimizations.
+///
+/// - **`literal`**: Faithful 1:1 translation. Skips optimization passes
+///   (constant folding, DCE, cfg-simplify, redundant cast elimination) and
+///   disables AST-level rewrites like Math.max/min detection. Structural
+///   passes (type inference, mem2reg, coroutine lowering) still run because
+///   they're needed for correct output.
+///
+/// - **`optimized`** (default): All transform passes and AST-level
+///   optimizations enabled.
+pub struct Preset;
+
+impl Preset {
+    /// Resolve a preset name into `(PassConfig, LoweringConfig)`.
+    ///
+    /// `skip_passes` are applied on top of the preset's base `PassConfig`,
+    /// allowing fine-grained overrides.
+    pub fn resolve(
+        name: &str,
+        skip_passes: &[&str],
+    ) -> Option<(PassConfig, LoweringConfig)> {
+        let (mut pass, lowering) = match name {
+            "literal" => (
+                PassConfig {
+                    // Structural passes — needed for correct output.
+                    type_inference: true,
+                    constraint_solve: true,
+                    coroutine_lowering: true,
+                    mem2reg: true,
+                    // Optimization passes — disabled for literal.
+                    constant_folding: false,
+                    cfg_simplify: false,
+                    redundant_cast_elimination: false,
+                    dead_code_elimination: false,
+                    fixpoint: false,
+                },
+                LoweringConfig::literal(),
+            ),
+            "optimized" => (PassConfig::default(), LoweringConfig::optimized()),
+            _ => return None,
+        };
+
+        // Apply --skip-pass overrides on top of the preset.
+        for name in skip_passes {
+            match *name {
+                "type-inference" => pass.type_inference = false,
+                "constraint-solve" => pass.constraint_solve = false,
+                "constant-folding" => pass.constant_folding = false,
+                "cfg-simplify" => pass.cfg_simplify = false,
+                "coroutine-lowering" => pass.coroutine_lowering = false,
+                "redundant-cast-elimination" => pass.redundant_cast_elimination = false,
+                "mem2reg" => pass.mem2reg = false,
+                "dead-code-elimination" => pass.dead_code_elimination = false,
+                "fixpoint" => pass.fixpoint = false,
+                _ => {}
+            }
         }
+
+        Some((pass, lowering))
     }
 }
 
@@ -184,34 +232,44 @@ mod tests {
     }
 
     #[test]
-    fn lowering_optimized_preset() {
-        let config = LoweringConfig::optimized();
-        assert!(config.ternary);
-        assert!(config.minmax);
-        assert!(config.logical_operators);
-        assert!(config.while_condition_hoisting);
+    fn preset_optimized() {
+        let (pass, lowering) = Preset::resolve("optimized", &[]).unwrap();
+        assert!(pass.constant_folding);
+        assert!(pass.cfg_simplify);
+        assert!(pass.dead_code_elimination);
+        assert!(pass.redundant_cast_elimination);
+        assert!(lowering.minmax);
+        assert!(lowering.ternary);
     }
 
     #[test]
-    fn lowering_literal_preset() {
-        let config = LoweringConfig::literal();
-        assert!(config.ternary);
-        assert!(!config.minmax);
-        assert!(config.logical_operators);
-        assert!(config.while_condition_hoisting);
+    fn preset_literal() {
+        let (pass, lowering) = Preset::resolve("literal", &[]).unwrap();
+        // Structural passes still on.
+        assert!(pass.type_inference);
+        assert!(pass.mem2reg);
+        assert!(pass.coroutine_lowering);
+        // Optimization passes off.
+        assert!(!pass.constant_folding);
+        assert!(!pass.cfg_simplify);
+        assert!(!pass.dead_code_elimination);
+        assert!(!pass.redundant_cast_elimination);
+        // Lowering: faithful patterns on, rewrites off.
+        assert!(lowering.ternary);
+        assert!(lowering.logical_operators);
+        assert!(lowering.while_condition_hoisting);
+        assert!(!lowering.minmax);
     }
 
     #[test]
-    fn lowering_default_is_optimized() {
-        let config = LoweringConfig::default();
-        assert!(config.ternary);
-        assert!(config.minmax);
+    fn preset_with_skip_overrides() {
+        let (pass, _) = Preset::resolve("optimized", &["mem2reg"]).unwrap();
+        assert!(!pass.mem2reg);
+        assert!(pass.constant_folding);
     }
 
     #[test]
-    fn lowering_from_preset() {
-        assert!(LoweringConfig::from_preset("literal").is_some());
-        assert!(LoweringConfig::from_preset("optimized").is_some());
-        assert!(LoweringConfig::from_preset("unknown").is_none());
+    fn preset_unknown_returns_none() {
+        assert!(Preset::resolve("unknown", &[]).is_none());
     }
 }

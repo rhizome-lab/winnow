@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
-use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, LoweringConfig, PassConfig};
+use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig, Preset};
 use reincarnate_core::project::{EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
@@ -43,12 +43,12 @@ enum Command {
         /// Path to the project manifest.
         #[arg(long, default_value = "reincarnate.json")]
         manifest: PathBuf,
-        /// Transform passes to skip (e.g. "type-inference", "constant-folding").
+        /// Transform passes to skip on top of the preset.
         #[arg(long = "skip-pass")]
         skip_passes: Vec<String>,
-        /// Lowering preset: "literal" (1:1 translation) or "optimized" (default).
+        /// Pipeline preset: "literal" (1:1 translation) or "optimized" (default).
         #[arg(long, default_value = "optimized")]
-        lowering_preset: String,
+        preset: String,
     },
 }
 
@@ -126,7 +126,7 @@ fn cmd_extract(manifest_path: &PathBuf, skip_passes: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], lowering_preset: &str) -> Result<()> {
+fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
     let frontend = find_frontend(&manifest.engine);
     let Some(frontend) = frontend else {
@@ -145,8 +145,9 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], lowering_preset: &s
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
-    let config = PassConfig::from_skip_list(&skip_refs);
-    let pipeline = default_pipeline(&config);
+    let (pass_config, lowering_config) = Preset::resolve(preset, &skip_refs)
+        .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset:?} (valid: \"literal\", \"optimized\")"))?;
+    let pipeline = default_pipeline(&pass_config);
 
     let mut modules = Vec::new();
     for module in output.modules {
@@ -155,9 +156,6 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], lowering_preset: &s
         modules.push(module);
     }
     eprintln!("[emit] transforms done, linking...");
-
-    let lowering_config = LoweringConfig::from_preset(lowering_preset)
-        .ok_or_else(|| anyhow::anyhow!("unknown lowering preset: {lowering_preset:?} (valid: \"literal\", \"optimized\")"))?;
 
     // Cross-module linking: validate all imports resolve.
     Linker::link(&modules).map_err(|errors| {
@@ -204,7 +202,7 @@ fn main() -> Result<()> {
         Command::Emit {
             manifest,
             skip_passes,
-            lowering_preset,
-        } => cmd_emit(manifest, skip_passes, lowering_preset),
+            preset,
+        } => cmd_emit(manifest, skip_passes, preset),
     }
 }
