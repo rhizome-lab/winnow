@@ -84,6 +84,9 @@ struct LowerCtx {
     /// Set of ValueIds whose inline expressions involve side effects.
     /// Tracks which deferred inlines carry side-effecting sub-expressions.
     side_effecting_inlines: HashMap<ValueId, Expr>,
+    /// When true, the next ForLoop's init_assigns should be skipped because
+    /// a preceding IfElse's trailing assigns already set the loop header params.
+    skip_loop_init_assigns: bool,
 }
 
 impl LowerCtx {
@@ -112,6 +115,7 @@ impl LowerCtx {
             entry_params,
             referenced_block_params: HashSet::new(),
             side_effecting_inlines: HashMap::new(),
+            skip_loop_init_assigns: false,
         }
     }
 
@@ -1029,8 +1033,33 @@ fn lower_shape_into(
         }
 
         Shape::Seq(parts) => {
-            for part in parts {
+            for (i, part) in parts.iter().enumerate() {
+                // When a non-Block shape (e.g. IfElse) directly precedes a
+                // ForLoop, the preceding shape's trailing assigns already set
+                // the loop header's block params. The ForLoop's init_assigns
+                // would duplicate them (and reference stale values), so we
+                // suppress them.
+                let next_is_loop = matches!(
+                    parts.get(i + 1),
+                    Some(Shape::WhileLoop { .. })
+                        | Some(Shape::ForLoop { .. })
+                        | Some(Shape::Loop { .. })
+                );
+                if next_is_loop && !matches!(part, Shape::Block(_)) {
+                    ctx.skip_loop_init_assigns = true;
+                }
+
                 lower_shape_into(ctx, func, part, stmts);
+
+                // After a Block shape, emit branch-arg assignments for its
+                // Br terminator — but only when the next shape doesn't already
+                // capture those assigns (ForLoop/WhileLoop handle their own
+                // init assigns via the structurizer).
+                if let Shape::Block(block_id) = part {
+                    if !next_is_loop {
+                        emit_block_br_assigns(ctx, func, *block_id, stmts);
+                    }
+                }
             }
         }
 
@@ -1142,25 +1171,43 @@ fn lower_shape_into(
             cond_negated,
             body,
         } => {
-            let mut loop_body = Vec::new();
-            lower_block_instructions(ctx, func, *header, &mut loop_body);
+            let mut header_stmts = Vec::new();
+            lower_block_instructions(ctx, func, *header, &mut header_stmts);
 
-            let break_expr = if *cond_negated {
-                ctx.build_val(func, *cond)
+            if header_stmts.is_empty() {
+                // All header instructions were inlined — hoist condition
+                // into `while (cond) { body }`.
+                let cond_expr = if *cond_negated {
+                    negate_cond_expr(ctx, func, *header, *cond)
+                } else {
+                    ctx.build_val(func, *cond)
+                };
+                let mut body_stmts = lower_shape(ctx, func, body);
+                strip_trailing_continue(&mut body_stmts);
+                stmts.push(Stmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                });
             } else {
-                negate_cond_expr(ctx, func, *header, *cond)
-            };
-            loop_body.push(Stmt::If {
-                cond: break_expr,
-                then_body: vec![Stmt::Break],
-                else_body: Vec::new(),
-            });
+                // Header has materialized statements — fall back to
+                // `while (true) { header; if (!cond) break; body }`.
+                let break_expr = if *cond_negated {
+                    ctx.build_val(func, *cond)
+                } else {
+                    negate_cond_expr(ctx, func, *header, *cond)
+                };
+                header_stmts.push(Stmt::If {
+                    cond: break_expr,
+                    then_body: vec![Stmt::Break],
+                    else_body: Vec::new(),
+                });
 
-            let mut body_stmts = lower_shape(ctx, func, body);
-            strip_trailing_continue(&mut body_stmts);
-            loop_body.append(&mut body_stmts);
+                let mut body_stmts = lower_shape(ctx, func, body);
+                strip_trailing_continue(&mut body_stmts);
+                header_stmts.append(&mut body_stmts);
 
-            stmts.push(Stmt::Loop { body: loop_body });
+                stmts.push(Stmt::Loop { body: header_stmts });
+            }
         }
 
         Shape::ForLoop {
@@ -1171,29 +1218,49 @@ fn lower_shape_into(
             update_assigns,
             body,
         } => {
-            lower_arg_assigns(ctx, func, init_assigns, stmts);
-
-            let mut loop_body = Vec::new();
-            lower_block_instructions(ctx, func, *header, &mut loop_body);
-
-            let break_expr = if *cond_negated {
-                ctx.build_val(func, *cond)
+            if ctx.skip_loop_init_assigns {
+                ctx.skip_loop_init_assigns = false;
             } else {
-                negate_cond_expr(ctx, func, *header, *cond)
-            };
-            loop_body.push(Stmt::If {
-                cond: break_expr,
-                then_body: vec![Stmt::Break],
-                else_body: Vec::new(),
-            });
+                lower_arg_assigns(ctx, func, init_assigns, stmts);
+            }
 
-            let mut body_stmts = lower_shape(ctx, func, body);
-            strip_trailing_continue(&mut body_stmts);
-            loop_body.append(&mut body_stmts);
+            let mut header_stmts = Vec::new();
+            lower_block_instructions(ctx, func, *header, &mut header_stmts);
 
-            lower_arg_assigns(ctx, func, update_assigns, &mut loop_body);
+            if header_stmts.is_empty() {
+                // All header instructions were inlined — use while(cond).
+                let cond_expr = if *cond_negated {
+                    negate_cond_expr(ctx, func, *header, *cond)
+                } else {
+                    ctx.build_val(func, *cond)
+                };
+                let mut body_stmts = lower_shape(ctx, func, body);
+                strip_trailing_continue(&mut body_stmts);
+                lower_arg_assigns(ctx, func, update_assigns, &mut body_stmts);
+                stmts.push(Stmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                });
+            } else {
+                let break_expr = if *cond_negated {
+                    ctx.build_val(func, *cond)
+                } else {
+                    negate_cond_expr(ctx, func, *header, *cond)
+                };
+                header_stmts.push(Stmt::If {
+                    cond: break_expr,
+                    then_body: vec![Stmt::Break],
+                    else_body: Vec::new(),
+                });
 
-            stmts.push(Stmt::Loop { body: loop_body });
+                let mut body_stmts = lower_shape(ctx, func, body);
+                strip_trailing_continue(&mut body_stmts);
+                header_stmts.append(&mut body_stmts);
+
+                lower_arg_assigns(ctx, func, update_assigns, &mut header_stmts);
+
+                stmts.push(Stmt::Loop { body: header_stmts });
+            }
         }
 
         Shape::Loop { header: _, body } => {
@@ -1367,6 +1434,43 @@ fn negate_cond_expr(
 // ---------------------------------------------------------------------------
 // Arg assigns
 // ---------------------------------------------------------------------------
+
+/// Emit branch-arg assignments from a block's unconditional Br terminator.
+///
+/// When a block ends with `Br(target, args)`, the args correspond to the
+/// target block's parameters. We emit assignments `target_param = arg` for
+/// each non-identity pair (skipping pass-throughs where src and dst share
+/// the same debug name or ValueId).
+fn emit_block_br_assigns(
+    ctx: &mut LowerCtx,
+    func: &Function,
+    block_id: BlockId,
+    stmts: &mut Vec<Stmt>,
+) {
+    let block = &func.blocks[block_id];
+    let Some(&last_inst) = block.insts.last() else {
+        return;
+    };
+    if let Op::Br { target, ref args } = func.insts[last_inst].op {
+        let target_block = &func.blocks[target];
+        for (param, &src) in target_block.params.iter().zip(args.iter()) {
+            // Skip identity assignments.
+            if param.value == src {
+                continue;
+            }
+            let dst_name = func.value_names.get(&param.value);
+            let src_name = func.value_names.get(&src);
+            if dst_name.is_some() && dst_name == src_name {
+                continue;
+            }
+            ctx.referenced_block_params.insert(param.value);
+            stmts.push(Stmt::Assign {
+                target: Expr::Var(ctx.value_name(param.value)),
+                value: ctx.build_val(func, src),
+            });
+        }
+    }
+}
 
 fn lower_arg_assigns(
     ctx: &mut LowerCtx,

@@ -1216,7 +1216,7 @@ mod tests {
         });
 
         assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
-        assert!(out.contains("while (true)"), "Should have while loop:\n{out}");
+        assert!(out.contains("while ("), "Should have while loop:\n{out}");
     }
 
     #[test]
@@ -1254,9 +1254,9 @@ mod tests {
         });
 
         assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
-        // For-loop emits as while(true) with init assigns before and
+        // For-loop emits as while(cond) with init assigns before and
         // update assigns inside.
-        assert!(out.contains("while (true)"), "Should have loop:\n{out}");
+        assert!(out.contains("while ("), "Should have loop:\n{out}");
         // Init assigns header param v0 from inlined const 0.
         assert!(out.contains("v0 = 0;"), "Should have init assign:\n{out}");
         // Update assigns header param v0 from inlined v0 + 1.
