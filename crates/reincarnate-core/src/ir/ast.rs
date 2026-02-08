@@ -12,7 +12,7 @@ use super::ty::Type;
 use super::value::Constant;
 
 /// A high-level expression (no side effects except calls).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// Literal constant.
     Literal(Constant),

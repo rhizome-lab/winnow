@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod ast_passes;
 pub mod block;
 pub mod builder;
 pub mod coroutine;
