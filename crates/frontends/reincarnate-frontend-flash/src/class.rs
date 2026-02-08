@@ -277,12 +277,13 @@ fn translate_class_method(
         }
         param_names.push(None); // `this` — backend handles via self_value
     }
+    // We intentionally ignore HAS_PARAM_NAMES from the ABC method_info.
+    // Some Flash compilers reindex the string pool after writing param_name
+    // references, leaving stale indices that resolve to type names ("Number",
+    // "Boolean") or unrelated constants.  Op::Debug opcodes provide correct
+    // local-variable names; Mem2Reg transfers alloc-slot names to values.
     for param in &method.params {
         param_types.push(resolve_type(pool, &param.kind));
-        // Note: we intentionally ignore HAS_PARAM_NAMES from the ABC method_info.
-        // In practice these string pool indices are unreliable (observed pointing
-        // to unrelated constants).  Op::Debug opcodes provide correct register
-        // names; Mem2Reg transfers alloc-slot names to parameter values.
         param_names.push(None);
     }
 
