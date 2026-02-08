@@ -1144,48 +1144,71 @@ fn emit_shape(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            let cond_expr = ctx.val(*cond);
+            // Check for ternary pattern: both branches are assign-only with a
+            // single shared dst, and their block bodies have no emitted statements.
+            if let Some((dst, then_src, else_src)) = try_ternary_assigns(
+                ctx,
+                func,
+                (then_assigns, then_body, then_trailing_assigns),
+                (else_assigns, else_body, else_trailing_assigns),
+            ) {
+                // Process trivial bodies so inline expressions get registered.
+                let mut discard = String::new();
+                emit_shape(ctx, func, then_body, &mut discard, "")?;
+                emit_shape(ctx, func, else_body, &mut discard, "")?;
 
-            // Emit both branches to buffers so we can detect truly empty output.
-            let inner = format!("{indent}  ");
-            let mut then_buf = String::new();
-            emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
-            emit_shape(ctx, func, then_body, &mut then_buf, &inner)?;
-            emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
+                let cond_expr = ctx.val(*cond);
+                let then_expr = ctx.val(then_src);
+                let else_expr = ctx.val(else_src);
+                let _ = writeln!(
+                    out,
+                    "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
+                    ctx.val_name(dst)
+                );
+            } else {
+                let cond_expr = ctx.val(*cond);
 
-            let mut else_buf = String::new();
-            emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
-            emit_shape(ctx, func, else_body, &mut else_buf, &inner)?;
-            emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
+                // Emit both branches to buffers so we can detect truly empty output.
+                let inner = format!("{indent}  ");
+                let mut then_buf = String::new();
+                emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
+                emit_shape(ctx, func, then_body, &mut then_buf, &inner)?;
+                emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
 
-            let then_empty = then_buf.trim().is_empty();
-            let else_empty = else_buf.trim().is_empty();
+                let mut else_buf = String::new();
+                emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
+                emit_shape(ctx, func, else_body, &mut else_buf, &inner)?;
+                emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
 
-            match (then_empty, else_empty) {
-                (true, true) => {
-                    // Both branches empty — skip the entire if.
-                }
-                (false, true) => {
-                    // Only then has content — no else.
-                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
-                    out.push_str(&then_buf);
-                    let _ = writeln!(out, "{indent}}}");
-                }
-                (true, false) => {
-                    // Fallback: then became empty at render time despite
-                    // structurizer normalization. Negate and show else.
-                    let neg = negate_cond(ctx, func, *block, *cond);
-                    let _ = writeln!(out, "{indent}if ({neg}) {{");
-                    out.push_str(&else_buf);
-                    let _ = writeln!(out, "{indent}}}");
-                }
-                (false, false) => {
-                    // Both branches have content — full if/else.
-                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
-                    out.push_str(&then_buf);
-                    let _ = writeln!(out, "{indent}}} else {{");
-                    out.push_str(&else_buf);
-                    let _ = writeln!(out, "{indent}}}");
+                let then_empty = then_buf.trim().is_empty();
+                let else_empty = else_buf.trim().is_empty();
+
+                match (then_empty, else_empty) {
+                    (true, true) => {
+                        // Both branches empty — skip the entire if.
+                    }
+                    (false, true) => {
+                        // Only then has content — no else.
+                        let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
+                        out.push_str(&then_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
+                    (true, false) => {
+                        // Fallback: then became empty at render time despite
+                        // structurizer normalization. Negate and show else.
+                        let neg = negate_cond(ctx, func, *block, *cond);
+                        let _ = writeln!(out, "{indent}if ({neg}) {{");
+                        out.push_str(&else_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
+                    (false, false) => {
+                        // Both branches have content — full if/else.
+                        let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
+                        out.push_str(&then_buf);
+                        let _ = writeln!(out, "{indent}}} else {{");
+                        out.push_str(&else_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
                 }
             }
         }
@@ -1410,44 +1433,76 @@ fn emit_shape_strip_trailing_return(
             // Emit the block's non-terminator instructions first.
             emit_block_instructions(ctx, func, *block, out, indent)?;
 
-            let cond_expr = ctx.val(*cond);
+            if let Some((dst, then_src, else_src)) = try_ternary_assigns(
+                ctx,
+                func,
+                (then_assigns, then_body, then_trailing_assigns),
+                (else_assigns, else_body, else_trailing_assigns),
+            ) {
+                // Process trivial bodies so inline expressions get registered.
+                let mut discard = String::new();
+                emit_shape(ctx, func, then_body, &mut discard, "")?;
+                emit_shape(ctx, func, else_body, &mut discard, "")?;
 
-            // Emit both branches to buffers so we can detect truly empty output.
-            let inner = format!("{indent}  ");
-            let mut then_buf = String::new();
-            emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
-            emit_shape_strip_trailing_return(ctx, func, then_body, &mut then_buf, &inner)?;
-            emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
+                let cond_expr = ctx.val(*cond);
+                let then_expr = ctx.val(then_src);
+                let else_expr = ctx.val(else_src);
+                let _ = writeln!(
+                    out,
+                    "{indent}{} = {cond_expr} ? {then_expr} : {else_expr};",
+                    ctx.val_name(dst)
+                );
+            } else {
+                let cond_expr = ctx.val(*cond);
 
-            let mut else_buf = String::new();
-            emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
-            emit_shape_strip_trailing_return(ctx, func, else_body, &mut else_buf, &inner)?;
-            emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
+                let inner = format!("{indent}  ");
+                let mut then_buf = String::new();
+                emit_arg_assigns(ctx, then_assigns, &mut then_buf, &inner);
+                emit_shape_strip_trailing_return(
+                    ctx,
+                    func,
+                    then_body,
+                    &mut then_buf,
+                    &inner,
+                )?;
+                emit_arg_assigns(ctx, then_trailing_assigns, &mut then_buf, &inner);
 
-            let then_empty = then_buf.trim().is_empty();
-            let else_empty = else_buf.trim().is_empty();
+                let mut else_buf = String::new();
+                emit_arg_assigns(ctx, else_assigns, &mut else_buf, &inner);
+                emit_shape_strip_trailing_return(
+                    ctx,
+                    func,
+                    else_body,
+                    &mut else_buf,
+                    &inner,
+                )?;
+                emit_arg_assigns(ctx, else_trailing_assigns, &mut else_buf, &inner);
 
-            match (then_empty, else_empty) {
-                (true, true) => {
-                    // Both branches empty — skip the entire if.
-                }
-                (false, true) => {
-                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
-                    out.push_str(&then_buf);
-                    let _ = writeln!(out, "{indent}}}");
-                }
-                (true, false) => {
-                    let neg = negate_cond(ctx, func, *block, *cond);
-                    let _ = writeln!(out, "{indent}if ({neg}) {{");
-                    out.push_str(&else_buf);
-                    let _ = writeln!(out, "{indent}}}");
-                }
-                (false, false) => {
-                    let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
-                    out.push_str(&then_buf);
-                    let _ = writeln!(out, "{indent}}} else {{");
-                    out.push_str(&else_buf);
-                    let _ = writeln!(out, "{indent}}}");
+                let then_empty = then_buf.trim().is_empty();
+                let else_empty = else_buf.trim().is_empty();
+
+                match (then_empty, else_empty) {
+                    (true, true) => {
+                        // Both branches empty — skip the entire if.
+                    }
+                    (false, true) => {
+                        let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
+                        out.push_str(&then_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
+                    (true, false) => {
+                        let neg = negate_cond(ctx, func, *block, *cond);
+                        let _ = writeln!(out, "{indent}if ({neg}) {{");
+                        out.push_str(&else_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
+                    (false, false) => {
+                        let _ = writeln!(out, "{indent}if ({cond_expr}) {{");
+                        out.push_str(&then_buf);
+                        let _ = writeln!(out, "{indent}}} else {{");
+                        out.push_str(&else_buf);
+                        let _ = writeln!(out, "{indent}}}");
+                    }
                 }
             }
             Ok(())
@@ -1499,6 +1554,78 @@ fn emit_arg_assigns(
             ctx.val(assign.dst),
             ctx.val(assign.src)
         );
+    }
+}
+
+/// Detect an assign-only IfElse that can be emitted as a ternary.
+///
+/// Returns `Some((dst, then_src, else_src))` when both branches have trivial
+/// block bodies (no emitted statements) and exactly one assignment each to the
+/// same destination variable.
+///
+/// Each branch is `(leading_assigns, body, trailing_assigns)`.
+fn try_ternary_assigns(
+    ctx: &EmitCtx,
+    func: &Function,
+    then_branch: (&[BlockArgAssign], &Shape, &[BlockArgAssign]),
+    else_branch: (&[BlockArgAssign], &Shape, &[BlockArgAssign]),
+) -> Option<(ValueId, ValueId, ValueId)> {
+    let (then_assigns, then_body, then_trailing) = then_branch;
+    let (else_assigns, else_body, else_trailing) = else_branch;
+
+    // Collect all assigns per side.
+    let then_all: Vec<_> = then_assigns.iter().chain(then_trailing).collect();
+    let else_all: Vec<_> = else_assigns.iter().chain(else_trailing).collect();
+
+    // Must be exactly one assign on each side to the same dst.
+    if then_all.len() != 1 || else_all.len() != 1 {
+        return None;
+    }
+    let then_a = then_all[0];
+    let else_a = else_all[0];
+    if ctx.val_name(then_a.dst) != ctx.val_name(else_a.dst) {
+        return None;
+    }
+
+    // Both bodies must be trivial: a Block whose non-terminator instructions
+    // all get inlined (no emitted statements).
+    if !is_trivial_body(ctx, func, then_body) || !is_trivial_body(ctx, func, else_body) {
+        return None;
+    }
+
+    Some((then_a.dst, then_a.src, else_a.src))
+}
+
+/// Check if a shape body would produce no emitted statements.
+///
+/// A `Block(b)` is trivial when every non-terminator instruction either has
+/// no result or will be inlined at its use site (single-use).
+fn is_trivial_body(ctx: &EmitCtx, func: &Function, shape: &Shape) -> bool {
+    match shape {
+        Shape::Block(b) => {
+            let block = &func.blocks[*b];
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id];
+                match &inst.op {
+                    Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => break,
+                    _ => {
+                        if let Some(r) = inst.result {
+                            if !ctx.should_inline(r)
+                                && ctx.use_counts.get(&r).copied().unwrap_or(0) > 0
+                            {
+                                return false;
+                            }
+                        } else {
+                            // Void instruction (side effect) — not trivial.
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        }
+        Shape::Seq(parts) => parts.iter().all(|p| is_trivial_body(ctx, func, p)),
+        _ => false,
     }
 }
 
