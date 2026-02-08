@@ -134,6 +134,43 @@ examples in the test project (`~/cc-project/comparison-notes.md`).
   code after `continue`, wrong variable assignments, and confused array
   accesses. Related to the `["rt:?"]` bug.
 
+### Medium-High Priority (readability)
+
+These are the main gaps between our output and ffdec-quality decompilation,
+identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
+
+- [ ] **Out-of-SSA variable coalescing** — SSA creates a new ValueId for each
+  definition (`v11 = Math.round(damage)` instead of `damage = Math.round(damage)`).
+  Multiple SSA values sharing the same debug name should be coalesced back into a
+  single mutable variable when they don't interfere (aren't live simultaneously).
+  This is the single biggest readability gap vs ffdec. The information is all in
+  `value_names` — we just need to use it during AST lowering. Standard out-of-SSA
+  (phi elimination + copy coalescing via interference graph).
+
+- [ ] **SE inline flush architecture** — `side_effecting_inlines` is a flat
+  HashMap that gets flushed at every block boundary (`lower_block_instructions`
+  calls `flush_side_effecting_inlines` at the top). This destroys inline
+  opportunities when a SE expression from a preceding shape (e.g. LogicalAnd phi)
+  is consumed by the very next shape (e.g. IfElse condition). Result:
+  `const v17 = (x > 0) && (x < 1); v24 = v17 ? 1 : x` instead of
+  `v24 = ((x > 0) && (x < 1)) ? 1 : x`. The cross-shape deferral mechanism
+  is fundamentally wrong — intra-block SE inlining should be local analysis,
+  and cross-shape values (LogicalAnd/Or phis) need a separate mechanism not
+  subject to block-boundary flushing.
+
+- [ ] **Compound assignment detection** — AST-to-AST pass to rewrite
+  `x = x + y` → `x += y`, `x = x - 1` → `x -= 1`, etc. Straightforward
+  pattern match on `Stmt::Assign` where the value is a `Binary` with one
+  operand equal to the target. Also `HP = HP - v` → `HP -= v`.
+
+- [ ] **Block-param decl/init merging** — When the ternary rewrite converts
+  `if (c) { x = a } else { x = b }` → `x = c ? a : b`, the variable `x`
+  is already declared as `let x: T;` at the top (block-param decl system).
+  The result is a split `let x; ... x = c ? a : b` instead of a combined
+  `let x = c ? a : b`. Could be a post-pass that merges `let x;` + first
+  `x = init` into `let x = init` when the decl has no init and there's a
+  single dominating assignment.
+
 ### Low Priority (polish)
 
 - [ ] **Redundant type casts** — Eliminate `as number` etc. when the expression
