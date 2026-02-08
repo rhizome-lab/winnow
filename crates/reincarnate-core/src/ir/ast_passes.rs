@@ -202,6 +202,197 @@ fn match_compound_assign(target: &Expr, value: &Expr) -> Option<Stmt> {
 }
 
 // ---------------------------------------------------------------------------
+// Declaration/init merging
+// ---------------------------------------------------------------------------
+
+/// Merge uninitialized `let x: T;` declarations with their first assignment.
+///
+/// Rewrites:
+/// ```text
+/// let x: number;
+/// ...            // no references to x
+/// x = expr;
+/// ```
+/// into:
+/// ```text
+/// ...
+/// let x: number = expr;
+/// ```
+///
+/// The merged declaration is placed at the assignment's original position
+/// (not at the top) to preserve correct evaluation order when the init
+/// expression references other variables.
+///
+/// Only operates on top-level statements — does not recurse into nested bodies
+/// (block-param declarations only appear at the function top level).
+pub fn merge_decl_init(body: &mut Vec<Stmt>) {
+    loop {
+        if !try_merge_one_decl(body) {
+            break;
+        }
+    }
+}
+
+/// Try to merge a single uninit VarDecl with its first assignment.
+/// Returns `true` if a merge was performed.
+fn try_merge_one_decl(body: &mut Vec<Stmt>) -> bool {
+    for i in 0..body.len() {
+        let (name, ty) = match &body[i] {
+            Stmt::VarDecl {
+                name,
+                ty,
+                init: None,
+                mutable: true,
+            } => (name.clone(), ty.clone()),
+            _ => continue,
+        };
+
+        // Find the first top-level statement after the decl that references this var.
+        for j in (i + 1)..body.len() {
+            if !stmt_references_var(&body[j], &name) {
+                continue;
+            }
+
+            // First reference found. Is it a plain `name = value;`?
+            let is_plain_assign = matches!(
+                &body[j],
+                Stmt::Assign { target: Expr::Var(tname), value }
+                    if tname == &name && !expr_references_var(value, &name)
+            );
+
+            if !is_plain_assign {
+                break; // first reference isn't a mergeable assign
+            }
+
+            // Safe to merge. Remove the uninit decl at i.
+            body.remove(i);
+            // The assign shifted left by 1.
+            let assign_idx = j - 1;
+            // Extract the value and replace with an initialized VarDecl.
+            let value = match std::mem::replace(&mut body[assign_idx], Stmt::Break) {
+                Stmt::Assign { value, .. } => value,
+                _ => unreachable!(),
+            };
+            body[assign_idx] = Stmt::VarDecl {
+                name,
+                ty,
+                init: Some(value),
+                mutable: true,
+            };
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Variable reference checking
+// ---------------------------------------------------------------------------
+
+/// Whether a statement references a named variable (in any position).
+fn stmt_references_var(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::VarDecl {
+            name: n,
+            init,
+            ..
+        } => n == name || init.as_ref().is_some_and(|e| expr_references_var(e, name)),
+
+        Stmt::Assign { target, value } => {
+            expr_references_var(target, name) || expr_references_var(value, name)
+        }
+
+        Stmt::CompoundAssign { target, value, .. } => {
+            expr_references_var(target, name) || expr_references_var(value, name)
+        }
+
+        Stmt::Expr(e) => expr_references_var(e, name),
+
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            expr_references_var(cond, name)
+                || then_body.iter().any(|s| stmt_references_var(s, name))
+                || else_body.iter().any(|s| stmt_references_var(s, name))
+        }
+
+        Stmt::While { cond, body } => {
+            expr_references_var(cond, name) || body.iter().any(|s| stmt_references_var(s, name))
+        }
+
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+        } => {
+            init.iter().any(|s| stmt_references_var(s, name))
+                || expr_references_var(cond, name)
+                || update.iter().any(|s| stmt_references_var(s, name))
+                || body.iter().any(|s| stmt_references_var(s, name))
+        }
+
+        Stmt::Loop { body } => body.iter().any(|s| stmt_references_var(s, name)),
+
+        Stmt::Return(e) => e.as_ref().is_some_and(|e| expr_references_var(e, name)),
+
+        Stmt::Dispatch { blocks, .. } => blocks
+            .iter()
+            .any(|(_, stmts)| stmts.iter().any(|s| stmt_references_var(s, name))),
+
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak { .. } => false,
+    }
+}
+
+/// Whether an expression references a named variable.
+fn expr_references_var(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(n) => n == name,
+        Expr::Literal(_) | Expr::GlobalRef(_) => false,
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_references_var(lhs, name) || expr_references_var(rhs, name)
+        }
+        Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
+            expr_references_var(lhs, name) || expr_references_var(rhs, name)
+        }
+        Expr::Unary { expr: inner, .. }
+        | Expr::Cast { expr: inner, .. }
+        | Expr::TypeCheck { expr: inner, .. }
+        | Expr::Not(inner)
+        | Expr::CoroutineResume(inner) => expr_references_var(inner, name),
+        Expr::Field { object, .. } => expr_references_var(object, name),
+        Expr::Index { collection, index } => {
+            expr_references_var(collection, name) || expr_references_var(index, name)
+        }
+        Expr::Call { args, .. } | Expr::CoroutineCreate { args, .. } => {
+            args.iter().any(|a| expr_references_var(a, name))
+        }
+        Expr::CallIndirect { callee, args } => {
+            expr_references_var(callee, name) || args.iter().any(|a| expr_references_var(a, name))
+        }
+        Expr::SystemCall { args, .. } => args.iter().any(|a| expr_references_var(a, name)),
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            expr_references_var(cond, name)
+                || expr_references_var(then_val, name)
+                || expr_references_var(else_val, name)
+        }
+        Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
+            elems.iter().any(|e| expr_references_var(e, name))
+        }
+        Expr::StructInit { fields, .. } => {
+            fields.iter().any(|(_, v)| expr_references_var(v, name))
+        }
+        Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_references_var(e, name)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -740,6 +931,193 @@ mod tests {
                 assert_eq!(*op, BinOp::BitOr);
             }
             other => panic!("Expected CompoundAssign, got: {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Decl/init merge tests
+    // -----------------------------------------------------------------------
+
+    fn uninit_decl(name: &str) -> Stmt {
+        Stmt::VarDecl {
+            name: name.to_string(),
+            ty: Some(crate::ir::ty::Type::Int(64)),
+            init: None,
+            mutable: true,
+        }
+    }
+
+    #[test]
+    fn merge_decl_basic() {
+        // let x; x = 5;  →  let x = 5;
+        let mut body = vec![uninit_decl("x"), assign(var("x"), int(5))];
+
+        merge_decl_init(&mut body);
+
+        assert_eq!(body.len(), 1);
+        match &body[0] {
+            Stmt::VarDecl {
+                name, init, mutable, ..
+            } => {
+                assert_eq!(name, "x");
+                assert_eq!(*init, Some(int(5)));
+                assert!(*mutable);
+            }
+            other => panic!("Expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_decl_with_gap() {
+        // let x; const y = 10; x = 5;  →  const y = 10; let x = 5;
+        let y_decl = Stmt::VarDecl {
+            name: "y".to_string(),
+            ty: None,
+            init: Some(int(10)),
+            mutable: false,
+        };
+        let mut body = vec![uninit_decl("x"), y_decl, assign(var("x"), int(5))];
+
+        merge_decl_init(&mut body);
+
+        assert_eq!(body.len(), 2);
+        // y decl is first (x's uninit decl was removed from index 0).
+        assert!(matches!(&body[0], Stmt::VarDecl { name, .. } if name == "y"));
+        // x decl is at index 1 (replaced the assign).
+        match &body[1] {
+            Stmt::VarDecl { name, init, .. } => {
+                assert_eq!(name, "x");
+                assert_eq!(*init, Some(int(5)));
+            }
+            other => panic!("Expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_decl_no_merge_first_ref_is_read() {
+        // let x; y = x + 1; x = 5;  →  no merge (x read before assigned)
+        let mut body = vec![
+            uninit_decl("x"),
+            assign(
+                var("y"),
+                Expr::Binary {
+                    op: BinOp::Add,
+                    lhs: Box::new(var("x")),
+                    rhs: Box::new(int(1)),
+                },
+            ),
+            assign(var("x"), int(5)),
+        ];
+
+        merge_decl_init(&mut body);
+
+        // Should remain unchanged — first reference to x is a read in y's assign.
+        assert_eq!(body.len(), 3);
+        assert!(matches!(&body[0], Stmt::VarDecl { init: None, .. }));
+    }
+
+    #[test]
+    fn merge_decl_no_merge_self_reference() {
+        // let x; x = x + 1;  →  no merge (value references x)
+        let mut body = vec![
+            uninit_decl("x"),
+            assign(
+                var("x"),
+                Expr::Binary {
+                    op: BinOp::Add,
+                    lhs: Box::new(var("x")),
+                    rhs: Box::new(int(1)),
+                },
+            ),
+        ];
+
+        merge_decl_init(&mut body);
+
+        assert_eq!(body.len(), 2);
+        assert!(matches!(&body[0], Stmt::VarDecl { init: None, .. }));
+    }
+
+    #[test]
+    fn merge_decl_no_merge_inside_if() {
+        // let x; if (c) { x = 1; } else { x = 2; }  →  no merge (in nested body)
+        let mut body = vec![
+            uninit_decl("x"),
+            Stmt::If {
+                cond: var("c"),
+                then_body: vec![assign(var("x"), int(1))],
+                else_body: vec![assign(var("x"), int(2))],
+            },
+        ];
+
+        merge_decl_init(&mut body);
+
+        // First ref is the If statement (which references x), not a plain Assign.
+        assert_eq!(body.len(), 2);
+        assert!(matches!(&body[0], Stmt::VarDecl { init: None, .. }));
+    }
+
+    #[test]
+    fn merge_decl_ternary() {
+        // let x; x = c ? a : b;  →  let x = c ? a : b;
+        let mut body = vec![
+            uninit_decl("x"),
+            assign(
+                var("x"),
+                Expr::Ternary {
+                    cond: Box::new(var("c")),
+                    then_val: Box::new(var("a")),
+                    else_val: Box::new(var("b")),
+                },
+            ),
+        ];
+
+        merge_decl_init(&mut body);
+
+        assert_eq!(body.len(), 1);
+        match &body[0] {
+            Stmt::VarDecl { name, init, .. } => {
+                assert_eq!(name, "x");
+                assert!(matches!(init, Some(Expr::Ternary { .. })));
+            }
+            other => panic!("Expected VarDecl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_decl_preserves_order() {
+        // let x; let y; y = 5; x = y + 1;
+        // → let y = 5; let x = y + 1;
+        // (y merged first since it appears first with a mergeable assign)
+        let mut body = vec![
+            uninit_decl("x"),
+            uninit_decl("y"),
+            assign(var("y"), int(5)),
+            assign(
+                var("x"),
+                Expr::Binary {
+                    op: BinOp::Add,
+                    lhs: Box::new(var("y")),
+                    rhs: Box::new(int(1)),
+                },
+            ),
+        ];
+
+        merge_decl_init(&mut body);
+
+        assert_eq!(body.len(), 2);
+        match &body[0] {
+            Stmt::VarDecl { name, init, .. } => {
+                assert_eq!(name, "y");
+                assert_eq!(*init, Some(int(5)));
+            }
+            other => panic!("Expected VarDecl for y, got: {other:?}"),
+        }
+        match &body[1] {
+            Stmt::VarDecl { name, init, .. } => {
+                assert_eq!(name, "x");
+                assert!(init.is_some());
+            }
+            other => panic!("Expected VarDecl for x, got: {other:?}"),
         }
     }
 }

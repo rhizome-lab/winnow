@@ -51,6 +51,7 @@ pub fn lower_function(func: &Function, shape: &Shape, config: &LoweringConfig) -
         ast_passes::rewrite_minmax(&mut full_body);
     }
     ast_passes::rewrite_compound_assign(&mut full_body);
+    ast_passes::merge_decl_init(&mut full_body);
 
     AstFunction {
         name: func.name.clone(),

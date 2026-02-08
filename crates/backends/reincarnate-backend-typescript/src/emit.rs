@@ -1266,8 +1266,8 @@ mod tests {
         // For-loop emits as while(cond) with init assigns before and
         // update assigns inside.
         assert!(out.contains("while ("), "Should have loop:\n{out}");
-        // Init assigns header param v0 from inlined const 0.
-        assert!(out.contains("v0 = 0;"), "Should have init assign:\n{out}");
+        // Init assigns header param v0 from inlined const 0 (merged into decl).
+        assert!(out.contains("let v0: number = 0;"), "Should have init assign:\n{out}");
         // Update assigns header param v0 from inlined v0 + 1 (compound assignment).
         assert!(out.contains("v0 += 1;"), "Should have update assign:\n{out}");
     }
