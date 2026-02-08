@@ -2007,7 +2007,12 @@ fn emit_block_param_declarations(
     out: &mut String,
     body: &str,
 ) {
-    let mut declared: HashSet<String> = HashSet::new();
+    // Pre-seed with function parameter names to avoid redeclaring them.
+    let mut declared: HashSet<String> = func.blocks[func.entry]
+        .params
+        .iter()
+        .map(|p| ctx.val(func, p.value).to_string())
+        .collect();
     for (block_id, block) in func.blocks.iter() {
         if block_id == func.entry {
             continue;
@@ -2834,7 +2839,12 @@ fn emit_block_param_declarations_indented(
     indent: &str,
     body: &str,
 ) {
-    let mut declared: HashSet<String> = HashSet::new();
+    // Pre-seed with function parameter names to avoid redeclaring them.
+    let mut declared: HashSet<String> = func.blocks[func.entry]
+        .params
+        .iter()
+        .map(|p| ctx.val(func, p.value).to_string())
+        .collect();
     for (block_id, block) in func.blocks.iter() {
         if block_id == func.entry {
             continue;

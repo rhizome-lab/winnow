@@ -1773,11 +1773,11 @@ fn translate_op(
                     let idx = *register as usize + debug_reg_offset;
                     if idx < locals.len() {
                         if idx < num_params {
-                            // Name the param value directly so the function
-                            // signature gets the correct name.  Don't name
-                            // the alloc slot — it would create a conflicting
-                            // `let` declaration in the emitted output.
-                            fb.name_value(fb.param(idx), name);
+                            // Name the param value for the function signature,
+                            // AND name the alloc slot so Mem2Reg can transfer
+                            // the name to phi values when the param is reassigned.
+                            fb.name_value(fb.param(idx), name.clone());
+                            fb.name_value(locals[idx], name);
                         } else {
                             fb.name_value(locals[idx], name);
                         }

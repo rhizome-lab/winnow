@@ -670,6 +670,14 @@ fn collapse_same_target_brif(func: &mut Function) -> bool {
                     Type::Dynamic
                 };
                 let result_val = func.value_types.push(param_ty);
+                // Transfer the block param's name to the Select result.
+                let param_idx = unified_args.len();
+                if param_idx < func.blocks[target].params.len() {
+                    let param_val = func.blocks[target].params[param_idx].value;
+                    if let Some(name) = func.value_names.get(&param_val).cloned() {
+                        func.value_names.insert(result_val, name);
+                    }
+                }
                 let select_inst = func.insts.push(Inst {
                     op: Op::Select {
                         cond,
