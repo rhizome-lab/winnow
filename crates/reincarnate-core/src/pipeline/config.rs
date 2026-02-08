@@ -143,7 +143,7 @@ impl Preset {
                     // Optimization passes — disabled for literal.
                     constant_folding: false,
                     cfg_simplify: false,
-                    redundant_cast_elimination: false,
+                    redundant_cast_elimination: true,
                     dead_code_elimination: false,
                     fixpoint: false,
                 },
@@ -253,7 +253,7 @@ mod tests {
         assert!(!pass.constant_folding);
         assert!(!pass.cfg_simplify);
         assert!(!pass.dead_code_elimination);
-        assert!(!pass.redundant_cast_elimination);
+        assert!(pass.redundant_cast_elimination);
         // Lowering: faithful patterns on, rewrites off.
         assert!(lowering.ternary);
         assert!(lowering.logical_operators);
