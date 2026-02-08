@@ -5,7 +5,7 @@
 //! 2. Create IR blocks (exception handler entries get a `Dynamic` param)
 //! 3. Walk opcodes, maintaining virtual operand stack, scope stack, and local registers
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use reincarnate_core::ir::{
     BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, Type, ValueId, Visibility,
@@ -96,6 +96,15 @@ pub fn translate_method_body(
         }
     }
 
+    // Track which registers have already been named by Op::Debug so we only
+    // keep the first name.  AVM2 reuses registers for unrelated local
+    // variables later in the method body — taking the last name would
+    // mis-label earlier variables.  Parameter registers (0..num_params) are
+    // pre-marked because the AS3 compiler doesn't emit Op::Debug for params
+    // (it relies on HAS_PARAM_NAMES); any Op::Debug for a param register is
+    // a reused local variable, not the parameter itself.
+    let mut named_registers: HashSet<u8> = (0..num_params as u8).collect();
+
     let mut stack: Vec<ValueId> = Vec::new();
     let mut scope_stack = ScopeStack::new();
 
@@ -158,6 +167,7 @@ pub fn translate_method_body(
             &mut scope_stack,
             &mut locals,
             &mut block_param_values,
+            &mut named_registers,
         );
     }
 
@@ -317,6 +327,7 @@ fn translate_op(
     scope_stack: &mut ScopeStack,
     locals: &mut [ValueId],
     block_param_values: &mut HashMap<usize, Vec<ValueId>>,
+    named_registers: &mut HashSet<u8>,
 ) {
     let loc = &ops[op_idx];
     match &loc.op {
@@ -1642,7 +1653,7 @@ fn translate_op(
             register_name,
             register,
         } => {
-            if *is_local_register {
+            if *is_local_register && named_registers.insert(*register) {
                 let name = pool_string(pool, register_name);
                 if !name.is_empty() {
                     let idx = *register as usize;

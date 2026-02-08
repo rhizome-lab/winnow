@@ -5,7 +5,7 @@ use reincarnate_core::ir::{
 };
 use swf::avm2::types::{AbcFile, ConstantPool, Index, Trait, TraitKind};
 
-use crate::multiname::{pool_string, resolve_multiname_index, resolve_multiname_structured, resolve_type, NsKind};
+use crate::multiname::{resolve_multiname_index, resolve_multiname_structured, resolve_type, NsKind};
 use crate::translate::translate_method_body;
 
 /// Information about a translated class.
@@ -279,8 +279,11 @@ fn translate_class_method(
     }
     for param in &method.params {
         param_types.push(resolve_type(pool, &param.kind));
-        let name = param.name.as_ref().map(|idx| pool_string(pool, idx)).filter(|s| !s.is_empty());
-        param_names.push(name);
+        // Note: we intentionally ignore HAS_PARAM_NAMES from the ABC method_info.
+        // In practice these string pool indices are unreliable (observed pointing
+        // to unrelated constants).  Op::Debug opcodes provide correct register
+        // names; Mem2Reg transfers alloc-slot names to parameter values.
+        param_names.push(None);
     }
 
     let return_type = resolve_type(pool, &method.return_type);
