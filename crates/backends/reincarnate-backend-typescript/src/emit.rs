@@ -1051,21 +1051,19 @@ fn emit_function(
 }
 
 
-/// Negate a condition for `if` emission.
+/// Negate a condition for emission as a break/if guard.
 ///
-/// The structurizer normalizes `Not(x)` conditions by swapping branches,
-/// so conditions reaching here should generally not be `Not` values.
-/// We still strip `Not` as a safety net to avoid emitting `!!x`.
-///
-/// For `Cmp` conditions that would be inlined, we flip the comparison
-/// operator (e.g. `>=` → `<`) instead of wrapping with `!`.
+/// The structurizer handles `Not` stripping (swapping branches) and
+/// single-use `Cmp` flipping (inverting the operator in the IR).
+/// This function is a formatting-only fallback for multi-use `Cmp`
+/// conditions and plain bool values that the structurizer couldn't
+/// pre-negate.
 fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) -> String {
     for &inst_id in &func.blocks[block].insts {
         let inst = &func.insts[inst_id];
         if inst.result == Some(cond) {
-            match &inst.op {
-                Op::Not(inner) => return ctx.val(*inner),
-                Op::Cmp(kind, a, b) if ctx.should_inline(cond) => {
+            if let Op::Cmp(kind, a, b) = &inst.op {
+                if ctx.should_inline(cond) {
                     let op = match kind.inverse() {
                         CmpKind::Eq => "===",
                         CmpKind::Ne => "!==",
@@ -1076,8 +1074,8 @@ fn negate_cond(ctx: &EmitCtx, func: &Function, block: BlockId, cond: ValueId) ->
                     };
                     return format!("{} {} {}", ctx.operand(*a), op, ctx.operand(*b));
                 }
-                _ => break,
             }
+            break;
         }
     }
     format!("!{}", ctx.operand(cond))
