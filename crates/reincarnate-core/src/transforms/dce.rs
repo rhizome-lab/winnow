@@ -211,7 +211,127 @@ fn eliminate_dead_code(func: &mut Function) -> bool {
             func.blocks[block_id].params.clear();
         }
     }
+
+    // Phase 5: Remove unused block parameters from reachable blocks.
+    //
+    // A block parameter is dead if its value is never used by any non-branch-arg
+    // operand (conditions, computations, stores, calls, returns, etc.). Values
+    // that only appear as branch arguments forwarding to other block params form
+    // dead chains — iterate until no more dead params are found.
+    changed |= eliminate_dead_block_params(func, &reachable);
+
     changed
+}
+
+/// Iteratively remove dead block parameters until convergence.
+fn eliminate_dead_block_params(func: &mut Function, reachable: &HashSet<BlockId>) -> bool {
+    let mut any_changed = false;
+
+    loop {
+        // Collect values used by non-branch-arg operands in live instructions.
+        let used_values: HashSet<ValueId> = reachable
+            .iter()
+            .flat_map(|&bid| func.blocks[bid].insts.iter())
+            .flat_map(|&iid| non_branch_arg_operands(&func.insts[iid].op))
+            .collect();
+
+        // Find blocks with dead parameters and record which indices to keep.
+        let mut dead_param_indices: HashMap<BlockId, Vec<bool>> = HashMap::new();
+        for &block_id in reachable {
+            if block_id == func.entry {
+                continue; // Entry params are function signature — always keep.
+            }
+            let params = &func.blocks[block_id].params;
+            if params.is_empty() {
+                continue;
+            }
+            let keep: Vec<bool> = params
+                .iter()
+                .map(|p| used_values.contains(&p.value))
+                .collect();
+            if keep.iter().any(|&k| !k) {
+                dead_param_indices.insert(block_id, keep);
+            }
+        }
+
+        if dead_param_indices.is_empty() {
+            break;
+        }
+
+        any_changed = true;
+
+        // Remove dead params from blocks.
+        for (&block_id, keep) in &dead_param_indices {
+            let mut i = 0;
+            func.blocks[block_id].params.retain(|_| {
+                let k = keep[i];
+                i += 1;
+                k
+            });
+        }
+
+        // Update branch arguments in all live instructions.
+        for &block_id in reachable {
+            for &inst_id in &func.blocks[block_id].insts.clone() {
+                strip_dead_branch_args(&mut func.insts[inst_id].op, &dead_param_indices);
+            }
+        }
+    }
+
+    any_changed
+}
+
+/// Extract operands excluding branch arguments (which only forward values to
+/// block params). Returns conditions, discriminants, and all non-branch operands.
+fn non_branch_arg_operands(op: &Op) -> Vec<ValueId> {
+    match op {
+        Op::Br { .. } => vec![],
+        Op::BrIf { cond, .. } => vec![*cond],
+        Op::Switch { value, .. } => vec![*value],
+        _ => value_operands(op),
+    }
+}
+
+/// Remove branch arguments at indices where the target block's parameter was
+/// eliminated.
+fn strip_dead_branch_args(op: &mut Op, dead: &HashMap<BlockId, Vec<bool>>) {
+    fn filter_args(target: BlockId, args: &mut Vec<ValueId>, dead: &HashMap<BlockId, Vec<bool>>) {
+        if let Some(keep) = dead.get(&target) {
+            let mut i = 0;
+            args.retain(|_| {
+                // If args is shorter than keep, extra entries don't apply.
+                // If args is longer (shouldn't happen), keep extras as-is.
+                let k = keep.get(i).copied().unwrap_or(true);
+                i += 1;
+                k
+            });
+        }
+    }
+
+    match op {
+        Op::Br { target, args } => {
+            filter_args(*target, args, dead);
+        }
+        Op::BrIf {
+            then_target,
+            then_args,
+            else_target,
+            else_args,
+            ..
+        } => {
+            filter_args(*then_target, then_args, dead);
+            filter_args(*else_target, else_args, dead);
+        }
+        Op::Switch {
+            cases, default, ..
+        } => {
+            for (_, target, args) in cases.iter_mut() {
+                filter_args(*target, args, dead);
+            }
+            filter_args(default.0, &mut default.1, dead);
+        }
+        _ => {}
+    }
 }
 
 impl Transform for DeadCodeElimination {
