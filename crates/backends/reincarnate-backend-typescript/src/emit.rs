@@ -336,6 +336,9 @@ struct EmitCtx {
     /// instructions absorbed by shape optimizations (Math.max, ternary) never
     /// consume their operands' inline expressions.
     lazy_inlines: HashMap<ValueId, InstId>,
+    /// Constant values that are always inlined regardless of use count.
+    /// Unlike `lazy_inlines`/`inline_exprs`, entries are NOT removed on read.
+    constant_inlines: HashMap<ValueId, String>,
 }
 
 impl EmitCtx {
@@ -362,6 +365,7 @@ impl EmitCtx {
             alloc_inits,
             skip_stores,
             lazy_inlines: HashMap::new(),
+            constant_inlines: HashMap::new(),
         }
     }
 
@@ -394,6 +398,7 @@ impl EmitCtx {
             alloc_inits,
             skip_stores,
             lazy_inlines: HashMap::new(),
+            constant_inlines: HashMap::new(),
         }
     }
 
@@ -433,6 +438,9 @@ impl EmitCtx {
                 return expr;
             }
         }
+        if let Some(expr) = self.constant_inlines.get(&v) {
+            return expr.clone();
+        }
         if let Some(name) = self.value_names.get(&v) {
             name.clone()
         } else {
@@ -471,6 +479,9 @@ impl EmitCtx {
                     expr
                 };
             }
+        }
+        if let Some(expr) = self.constant_inlines.get(&v) {
+            return expr.clone();
         }
         if let Some(name) = self.value_names.get(&v) {
             name.clone()
@@ -1691,6 +1702,13 @@ fn emit_block_instructions(
                     if is_deferrable(&inst.op) {
                         if count == 0 {
                             // Dead pure instruction — skip entirely.
+                            continue;
+                        }
+                        // Always inline constants — they're trivially cheap.
+                        // Store in constant_inlines (not lazy_inlines, which
+                        // consumes entries on first use).
+                        if let Op::Const(ref c) = inst.op {
+                            ctx.constant_inlines.insert(r, emit_constant(c));
                             continue;
                         }
                         if count == 1
