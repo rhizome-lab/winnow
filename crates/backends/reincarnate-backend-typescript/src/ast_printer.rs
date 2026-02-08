@@ -663,6 +663,12 @@ fn print_call(fname: &str, args: &[Expr], ctx: &PrintCtx) -> String {
         };
     }
 
+    // Global dotted call (e.g. Math.max, Math.min) — not a method dispatch.
+    if fname.contains('.') {
+        let args_str: Vec<_> = args.iter().map(|a| print_expr(a, ctx)).collect();
+        return format!("{fname}({})", args_str.join(", "));
+    }
+
     if !args.is_empty() {
         // Unqualified call with receiver: args[0].method(args[1..])
         let receiver = &args[0];
