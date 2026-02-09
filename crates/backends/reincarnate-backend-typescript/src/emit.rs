@@ -12,6 +12,24 @@ use reincarnate_core::pipeline::LoweringConfig;
 use crate::runtime::SYSTEM_NAMES;
 use crate::types::ts_type;
 
+/// Flash standard library class names available from the runtime.
+///
+/// When a class references one of these as a superclass or type but the class
+/// is not defined in the current module, the emitter generates an import from
+/// the Flash runtime barrel (`runtime/flash`).
+const FLASH_STDLIB_CLASSES: &[&str] = &[
+    "ByteArray",
+    "DisplayObject",
+    "DisplayObjectContainer",
+    "Event",
+    "EventDispatcher",
+    "Font",
+    "InteractiveObject",
+    "MovieClip",
+    "Proxy",
+    "Sprite",
+];
+
 /// Emit a single module into `output_dir`.
 ///
 /// If the module has classes, emits a directory with one file per class plus
@@ -255,7 +273,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             group.methods.iter().map(|&fid| &module.functions[fid]),
         );
         emit_runtime_imports_for(systems, &mut out, depth);
-        emit_intra_imports(group, module, &segments, &registry, &mut out);
+        emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
         emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -467,10 +485,12 @@ fn collect_class_references(
     group: &ClassGroup,
     module: &Module,
     registry: &ClassRegistry,
-) -> (BTreeSet<String>, BTreeSet<String>) {
+) -> (BTreeSet<String>, BTreeSet<String>, BTreeSet<String>, BTreeSet<String>) {
     let self_name = &group.class_def.name;
     let mut value_refs = BTreeSet::new();
     let mut type_refs = BTreeSet::new();
+    let mut ext_value_refs = BTreeSet::new();
+    let mut ext_type_refs = BTreeSet::new();
 
     // Super class reference — runtime value (extends).
     if let Some(sc) = &group.class_def.super_class {
@@ -478,22 +498,24 @@ fn collect_class_references(
         if short != self_name {
             if let Some(entry) = registry.lookup(sc) {
                 value_refs.insert(entry.short_name.clone());
+            } else if FLASH_STDLIB_CLASSES.contains(&short) {
+                ext_value_refs.insert(short.to_string());
             }
         }
     }
 
     // Struct fields (class instance fields) — type-only.
     for (_name, ty) in &group.struct_def.fields {
-        collect_type_ref(ty, self_name, registry, &mut type_refs);
+        collect_type_ref(ty, self_name, registry, &mut type_refs, &mut ext_type_refs);
     }
 
     // Scan all method bodies for type references.
     for &fid in &group.methods {
         let func = &module.functions[fid];
-        collect_type_refs_from_function(func, self_name, registry, &mut value_refs, &mut type_refs);
+        collect_type_refs_from_function(func, self_name, registry, &mut value_refs, &mut type_refs, &mut ext_value_refs, &mut ext_type_refs);
     }
 
-    (value_refs, type_refs)
+    (value_refs, type_refs, ext_value_refs, ext_type_refs)
 }
 
 /// Scan a function's instructions and signature for type references.
@@ -503,11 +525,13 @@ fn collect_type_refs_from_function(
     registry: &ClassRegistry,
     value_refs: &mut BTreeSet<String>,
     type_refs: &mut BTreeSet<String>,
+    ext_value_refs: &mut BTreeSet<String>,
+    ext_type_refs: &mut BTreeSet<String>,
 ) {
     // Return type and param types — type-only.
-    collect_type_ref(&func.sig.return_ty, self_name, registry, type_refs);
+    collect_type_ref(&func.sig.return_ty, self_name, registry, type_refs, ext_type_refs);
     for ty in &func.sig.params {
-        collect_type_ref(ty, self_name, registry, type_refs);
+        collect_type_ref(ty, self_name, registry, type_refs, ext_type_refs);
     }
 
     // Instructions.
@@ -515,11 +539,11 @@ fn collect_type_refs_from_function(
         match &inst.op {
             // TypeCheck emits `instanceof` — runtime value reference.
             Op::TypeCheck(_, ty) => {
-                collect_type_ref(ty, self_name, registry, value_refs);
+                collect_type_ref(ty, self_name, registry, value_refs, ext_value_refs);
             }
             // Alloc and Cast are type assertions only — type-only.
             Op::Alloc(ty) | Op::Cast(_, ty) => {
-                collect_type_ref(ty, self_name, registry, type_refs);
+                collect_type_ref(ty, self_name, registry, type_refs, ext_type_refs);
             }
             // GetField with a class name → runtime value reference (used with `new`).
             Op::GetField { field, .. } => {
@@ -529,6 +553,7 @@ fn collect_type_refs_from_function(
                         self_name,
                         registry,
                         value_refs,
+                        ext_value_refs,
                     );
                 }
             }
@@ -538,16 +563,18 @@ fn collect_type_refs_from_function(
 
     // value_types — type-only.
     for (_vid, ty) in func.value_types.iter() {
-        collect_type_ref(ty, self_name, registry, type_refs);
+        collect_type_ref(ty, self_name, registry, type_refs, ext_type_refs);
     }
 }
 
 /// If a type references a class in the registry, add its short name.
+/// If not in the registry but in `FLASH_STDLIB_CLASSES`, add to `ext_refs`.
 fn collect_type_ref(
     ty: &Type,
     self_name: &str,
     registry: &ClassRegistry,
     refs: &mut BTreeSet<String>,
+    ext_refs: &mut BTreeSet<String>,
 ) {
     match ty {
         Type::Struct(name) | Type::Enum(name) => {
@@ -555,37 +582,39 @@ fn collect_type_ref(
             if short != self_name {
                 if let Some(entry) = registry.lookup(name) {
                     refs.insert(entry.short_name.clone());
+                } else if FLASH_STDLIB_CLASSES.contains(&short) {
+                    ext_refs.insert(short.to_string());
                 }
             }
         }
         Type::Array(inner) | Type::Option(inner) => {
-            collect_type_ref(inner, self_name, registry, refs);
+            collect_type_ref(inner, self_name, registry, refs, ext_refs);
         }
         Type::Map(k, v) => {
-            collect_type_ref(k, self_name, registry, refs);
-            collect_type_ref(v, self_name, registry, refs);
+            collect_type_ref(k, self_name, registry, refs, ext_refs);
+            collect_type_ref(v, self_name, registry, refs, ext_refs);
         }
         Type::Tuple(elems) => {
             for elem in elems {
-                collect_type_ref(elem, self_name, registry, refs);
+                collect_type_ref(elem, self_name, registry, refs, ext_refs);
             }
         }
         Type::Function(sig) => {
-            collect_type_ref(&sig.return_ty, self_name, registry, refs);
+            collect_type_ref(&sig.return_ty, self_name, registry, refs, ext_refs);
             for p in &sig.params {
-                collect_type_ref(p, self_name, registry, refs);
+                collect_type_ref(p, self_name, registry, refs, ext_refs);
             }
         }
         Type::Coroutine {
             yield_ty,
             return_ty,
         } => {
-            collect_type_ref(yield_ty, self_name, registry, refs);
-            collect_type_ref(return_ty, self_name, registry, refs);
+            collect_type_ref(yield_ty, self_name, registry, refs, ext_refs);
+            collect_type_ref(return_ty, self_name, registry, refs, ext_refs);
         }
         Type::Union(types) => {
             for t in types {
-                collect_type_ref(t, self_name, registry, refs);
+                collect_type_ref(t, self_name, registry, refs, ext_refs);
             }
         }
         _ => {}
@@ -598,21 +627,54 @@ fn emit_intra_imports(
     module: &Module,
     source_segments: &[String],
     registry: &ClassRegistry,
+    depth: usize,
     out: &mut String,
 ) {
-    let (value_refs, type_refs) = collect_class_references(group, module, registry);
-    if value_refs.is_empty() && type_refs.is_empty() {
+    let (value_refs, type_refs, ext_value_refs, ext_type_refs) =
+        collect_class_references(group, module, registry);
+    let has_intra = !value_refs.is_empty() || !type_refs.is_empty();
+    let has_ext = !ext_value_refs.is_empty() || !ext_type_refs.is_empty();
+    if !has_intra && !has_ext {
         return;
     }
 
-    // Value imports first (runtime-needed).
+    // External Flash stdlib imports from the runtime barrel.
+    if has_ext {
+        let prefix = "../".repeat(depth + 1);
+        let prefix = prefix.trim_end_matches('/');
+
+        // Value imports.
+        let ext_vals: Vec<&str> = ext_value_refs.iter().map(|s| s.as_str()).collect();
+        if !ext_vals.is_empty() {
+            let _ = writeln!(
+                out,
+                "import {{ {} }} from \"{prefix}/runtime/flash\";",
+                ext_vals.join(", ")
+            );
+        }
+        // Type-only imports (not already covered by value imports).
+        let ext_types: Vec<&str> = ext_type_refs
+            .iter()
+            .filter(|s| !ext_value_refs.contains(*s))
+            .map(|s| s.as_str())
+            .collect();
+        if !ext_types.is_empty() {
+            let _ = writeln!(
+                out,
+                "import type {{ {} }} from \"{prefix}/runtime/flash\";",
+                ext_types.join(", ")
+            );
+        }
+    }
+
+    // Intra-module value imports.
     for short_name in &value_refs {
         if let Some(entry) = registry.classes.get(short_name) {
             let rel = relative_import_path(source_segments, &entry.path_segments);
             let _ = writeln!(out, "import {{ {short_name} }} from \"{rel}\";");
         }
     }
-    // Type-only imports (names not already in value_refs).
+    // Intra-module type-only imports (names not already in value_refs).
     for short_name in &type_refs {
         if value_refs.contains(short_name) {
             continue;
