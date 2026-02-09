@@ -164,12 +164,12 @@ identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
 
 ### Remaining `vN` Identifiers
 
-1 unique vN identifier remains across emitted TypeScript (down from 683 → 77
-→ 28 → 19 → 4 → 1). Pass order: self_assigns → dup_assigns → forwarding_stubs → ternary →
-minmax → [fixpoint: forward_sub → ternary → absorb_phi → narrow → merge → fold] →
-compound_assign → post_increment. Three former vN (item, hug, returnDamage, itype)
-were actually named variables whose debug names weren't reaching the emitter;
-fixed by propagating names through Cast/Copy in flush_pending_reads and EmitCtx.
+0 unique vN identifiers remain across emitted TypeScript (down from 683 → 77
+→ 28 → 19 → 4 → 1 → 0). Pass order: self_assigns → dup_assigns → forwarding_stubs →
+ternary → minmax → [fixpoint: forward_sub → ternary → absorb_phi → narrow → merge →
+fold] → compound_assign → post_increment. Debug name propagation through
+Cast/Copy fixed 3 named variables (item, hug, returnDamage, itype).
+absorb_phi_condition Case C eliminated the last (v115 in Mutations).
 
 #### Pattern 1: Non-adjacent const before side-effect (13 vars)
 
@@ -328,19 +328,18 @@ accept — it's a single case and also non-adjacent (Pattern 1 applies too).
 | Pattern | Vars | Fix | Effort | Status |
 |---------|------|-----|--------|--------|
 | 1. Non-adjacent const before side-effect | 13 | Sink past local-only assigns | Medium | Done |
-| 2. Split-path phi boolean | 6 | Absorb into assigning branch | Medium | Done (6/7, Case C skipped) |
+| 2. Split-path phi boolean | 6 | Absorb into assigning branch | Medium | Done (all cases including C) |
 | 3. Dup alias (object field set) | 4 | Relax sinking for pure paths | Medium | Done |
 | 4. Operand-stack pre-increment | 4 | Alias analysis or accept | Hard | Accept for now |
 | 5. Property capture before side effect | 2 | Same fix as Pattern 3 | Medium | Done |
 | 6. Method ref capture (far use) | 2 | Accept | N/A | Correct as-is |
 | 7. Return value capture | 1 | Accept | N/A | Correct as-is |
 | 8. Constant rand(1) | 1 | Constant fold | Easy | Accept (also non-adj) |
-| **Total** | **1** *(was 291)* | | | |
+| **Total** | **0** *(was 291)* | | | |
 
-Patterns 1, 2, 3, 5 done. Debug name propagation eliminated 3 more (item, hug,
-returnDamage, itype — these were named in AS3 source but names didn't reach emitter).
-1 unique vN remains from clean emit (683 → 1):
-- v115 (Mutations): Pattern 2 Case C — neither branch exits, needs code duplication
+All patterns resolved. 0 unique vN remain from clean emit (683 → 0).
+Debug name propagation through Cast/Copy fixed item, hug, returnDamage, itype.
+absorb_phi_condition Case C (with else-body duplication) eliminated v115.
 
 ### Architecture — Hybrid Lowering via Structured IR
 
@@ -435,11 +434,10 @@ program analysis or conservative assumptions.
 
 #### Requires control flow analysis
 
-- [ ] **Pattern 2 Case C (absorb_phi_condition)** — The one remaining Case C
-  instance (Mutations v115) needs the condition-use `if` body duplicated
-  into both branches. FFDec does this; we skip it because code duplication
-  is a different trade-off than decompilers usually make. Could be enabled
-  with a size threshold (e.g., only duplicate if body is ≤ N statements).
+- [x] **Pattern 2 Case C (absorb_phi_condition)** — Done. Duplicates the
+  use-site's else body into the outer else branch. Safety: checks that the
+  phi variable has no refs between its declaration and the outer if, to
+  avoid incorrectly matching general-purpose variables.
 - [ ] **Inline closures** — Filter/map callbacks extracted as named function
   references instead of being inlined as arrow functions. Requires knowing
   the function is only passed once.
@@ -449,8 +447,7 @@ program analysis or conservative assumptions.
 
 #### Naming & readability (non-semantic)
 
-- [ ] **Rename remaining vN** — The 1 remaining vN (v115 in Mutations) could
-  get a descriptive name via heuristic (e.g., `hasSpeedChange`). Cosmetic only.
+- [x] **All vN eliminated** — 0 unique vN remain. No renaming needed.
 - [x] **Op::Debug name propagation** — Fixed. 3 of 4 remaining vN were
   actually named variables (`item`, `hug`, `returnDamage`, `itype`). Root
   cause: Mem2Reg transferred names to Cast results, but the emitter lazily
