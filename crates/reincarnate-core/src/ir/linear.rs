@@ -994,13 +994,15 @@ pub fn lower_function_linear(
     }
 
     // Fixpoint: forward sub enables ternary, ternary enables narrow/merge/fold,
-    // fold may remove statements that enable further forward sub.
+    // fold may remove statements that enable further forward sub, absorb_phi
+    // merges split-path conditions into their assigning branch.
     loop {
         let before = ast_passes::count_stmts(&full_body);
         ast_passes::forward_substitute(&mut full_body);
         if config.ternary {
             ast_passes::rewrite_ternary(&mut full_body);
         }
+        ast_passes::absorb_phi_condition(&mut full_body);
         ast_passes::narrow_var_scope(&mut full_body);
         ast_passes::merge_decl_init(&mut full_body);
         ast_passes::fold_single_use_consts(&mut full_body);

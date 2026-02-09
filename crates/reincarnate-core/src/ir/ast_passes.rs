@@ -1465,6 +1465,194 @@ pub fn eliminate_duplicate_assigns(body: &mut Vec<Stmt>) {
     }
 }
 
+/// Check whether every path through a body exits unconditionally
+/// (return, break, continue, or labeled break).
+fn body_always_exits(body: &[Stmt]) -> bool {
+    match body.last() {
+        Some(Stmt::Return(_) | Stmt::Break | Stmt::Continue | Stmt::LabeledBreak { .. }) => true,
+        Some(Stmt::If {
+            then_body,
+            else_body,
+            ..
+        }) => !else_body.is_empty() && body_always_exits(then_body) && body_always_exits(else_body),
+        _ => false,
+    }
+}
+
+/// Absorb split-path phi conditions into their assigning branch.
+///
+/// Matches:
+/// ```text
+/// let vN: T;
+/// ...
+/// if (C) { ...; vN = E; } else { B; }
+/// if (vN) { D; }
+/// ```
+/// and rewrites to:
+/// ```text
+/// ...
+/// if (C) { ...; if (E) { D; } } else { B; }
+/// ```
+///
+/// When the `if (vN)` has an else body and the then-body always exits,
+/// the else body is pulled out as the continuation after the outer if.
+///
+/// This eliminates split-path phi booleans that are assigned in one
+/// branch and left undefined (= false) on fallthrough paths.
+pub fn absorb_phi_condition(body: &mut Vec<Stmt>) {
+    loop {
+        if !try_absorb_phi_condition(body) {
+            break;
+        }
+    }
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                absorb_phi_condition(then_body);
+                absorb_phi_condition(else_body);
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body } => {
+                absorb_phi_condition(body);
+            }
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                absorb_phi_condition(init);
+                absorb_phi_condition(update);
+                absorb_phi_condition(body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    absorb_phi_condition(block_body);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn try_absorb_phi_condition(body: &mut Vec<Stmt>) -> bool {
+    for i in 0..body.len().saturating_sub(1) {
+        // Match: if (C) { ...; vN = E; } else { B; }
+        let var_name = match &body[i] {
+            Stmt::If { then_body, .. } => match then_body.last() {
+                Some(Stmt::Assign {
+                    target: Expr::Var(name),
+                    ..
+                }) => name.clone(),
+                _ => continue,
+            },
+            _ => continue,
+        };
+
+        // Must have a corresponding uninit decl earlier in this scope.
+        let decl_idx = (0..i).rev().find(|&j| {
+            matches!(
+                &body[j],
+                Stmt::VarDecl { name, init: None, .. } if name == &var_name
+            )
+        });
+        let Some(decl_idx) = decl_idx else {
+            continue;
+        };
+
+        // vN must not appear in the else_body at all.
+        let else_refs = match &body[i] {
+            Stmt::If { else_body, .. } => else_body
+                .iter()
+                .map(|s| count_var_refs_in_stmt(s, &var_name))
+                .sum::<usize>(),
+            _ => unreachable!(),
+        };
+        if else_refs > 0 {
+            continue;
+        }
+
+        // Next statement must be if (expr_with_vN) { D } [else { D2 }].
+        let (use_cond, use_then, use_else) = match &body[i + 1] {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => (cond, then_body, else_body),
+            _ => continue,
+        };
+
+        // use_cond must reference vN exactly once.
+        if count_var_refs_in_expr(use_cond, &var_name) != 1 {
+            continue;
+        }
+
+        // No refs to vN anywhere after body[i+1].
+        let refs_after: usize = body[i + 2..]
+            .iter()
+            .map(|s| count_var_refs_in_stmt(s, &var_name))
+            .sum();
+        if refs_after != 0 {
+            continue;
+        }
+
+        // Case A: use_else is empty — simple absorption.
+        // Case B: use_else non-empty, use_then always exits — pull else out.
+        // Otherwise: skip (would require code duplication).
+        if !use_else.is_empty() && !body_always_exits(use_then) {
+            continue;
+        }
+
+        // Clone values before mutating.
+        let assign_value = match &body[i] {
+            Stmt::If { then_body, .. } => match then_body.last() {
+                Some(Stmt::Assign { value, .. }) => value.clone(),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let mut new_cond = use_cond.clone();
+        let use_then = use_then.clone();
+        let use_else = use_else.clone();
+
+        // Substitute E for vN in the condition.
+        let mut replacement = Some(assign_value);
+        substitute_var_in_expr(&mut new_cond, &var_name, &mut replacement);
+
+        // Build the merged if (no else — Case B's else becomes continuation).
+        let merged_if = Stmt::If {
+            cond: new_cond,
+            then_body: use_then,
+            else_body: vec![],
+        };
+
+        // Modify outer if's then_body: remove vN = E, append merged_if.
+        if let Stmt::If { then_body, .. } = &mut body[i] {
+            then_body.pop();
+            then_body.push(merged_if);
+        }
+
+        // Remove the if(vN) statement.
+        body.remove(i + 1);
+
+        // Case B: insert use_else as continuation after body[i].
+        if !use_else.is_empty() {
+            for (j, stmt) in use_else.into_iter().enumerate() {
+                body.insert(i + 1 + j, stmt);
+            }
+        }
+
+        // Remove the uninit decl.
+        body.remove(decl_idx);
+
+        return true;
+    }
+    false
+}
+
 /// Negate an expression, folding into comparisons when possible.
 fn negate_expr(expr: Expr) -> Expr {
     match expr {
