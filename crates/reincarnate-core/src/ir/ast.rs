@@ -1,10 +1,11 @@
 //! High-level AST types for backend code generation.
 //!
 //! The AST sits between the SSA-based IR and target-language source code.
-//! A shared lowering pass (`lower_ast`) converts `Shape + Function` into
-//! `Vec<Stmt>`, handling expression inlining, dead code elimination, and
-//! control-flow pattern detection once. Each backend only pretty-prints
-//! the AST to its target syntax.
+//! The hybrid lowering pipeline (`linear`) converts `Shape + Function` into
+//! `Vec<Stmt>` in three phases (linearize → resolve → emit), handling
+//! expression inlining, dead code elimination, and control-flow pattern
+//! detection once. Each backend only pretty-prints the AST to its target
+//! syntax.
 
 use super::func::{MethodKind, Visibility};
 use super::inst::CmpKind;

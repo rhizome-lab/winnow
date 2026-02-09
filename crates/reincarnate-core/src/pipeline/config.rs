@@ -81,9 +81,6 @@ pub struct LoweringConfig {
     /// Hoist loop conditions into `while (cond)` instead of
     /// `while (true) { if (!cond) break; ... }`.
     pub while_condition_hoisting: bool,
-    /// Use the hybrid three-phase lowering pipeline (LinearStmt) instead of
-    /// the monolithic `lower_ast` path.
-    pub use_linear_lowering: bool,
 }
 
 impl Default for LoweringConfig {
@@ -100,7 +97,6 @@ impl LoweringConfig {
             minmax: false,
             logical_operators: true,
             while_condition_hoisting: true,
-            use_linear_lowering: false,
         }
     }
 
@@ -110,7 +106,6 @@ impl LoweringConfig {
             minmax: true,
             logical_operators: true,
             while_condition_hoisting: true,
-            use_linear_lowering: false,
         }
     }
 }

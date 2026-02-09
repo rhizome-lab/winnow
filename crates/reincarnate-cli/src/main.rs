@@ -49,9 +49,6 @@ enum Command {
         /// Pipeline preset: "literal" (1:1 translation) or "optimized" (default).
         #[arg(long, default_value = "optimized")]
         preset: String,
-        /// Use the experimental hybrid (LinearStmt) lowering pipeline.
-        #[arg(long)]
-        linear_lowering: bool,
     },
 }
 
@@ -129,7 +126,7 @@ fn cmd_extract(manifest_path: &PathBuf, skip_passes: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str, linear_lowering: bool) -> Result<()> {
+fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
     let frontend = find_frontend(&manifest.engine);
     let Some(frontend) = frontend else {
@@ -148,9 +145,8 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str, linea
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
-    let (pass_config, mut lowering_config) = Preset::resolve(preset, &skip_refs)
+    let (pass_config, lowering_config) = Preset::resolve(preset, &skip_refs)
         .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset:?} (valid: \"literal\", \"optimized\")"))?;
-    lowering_config.use_linear_lowering = linear_lowering;
     let pipeline = default_pipeline(&pass_config);
 
     let mut modules = Vec::new();
@@ -207,7 +203,6 @@ fn main() -> Result<()> {
             manifest,
             skip_passes,
             preset,
-            linear_lowering,
-        } => cmd_emit(manifest, skip_passes, preset, *linear_lowering),
+        } => cmd_emit(manifest, skip_passes, preset),
     }
 }

@@ -239,6 +239,11 @@ fn linearize_into(
             let mut body_stmts = Vec::new();
             linearize_into(func, body, &mut body_stmts, false);
 
+            // The body's back-edge block emits br assigns via emit_br_assigns,
+            // but ForLoop captures those same assigns in update_assigns.
+            // Strip the duplicates from the body.
+            strip_back_edge_assigns(&mut body_stmts, update_assigns);
+
             let mut update_stmts = Vec::new();
             emit_arg_assigns(update_assigns, &mut update_stmts);
 
@@ -388,6 +393,28 @@ fn emit_arg_assigns(assigns: &[BlockArgAssign], out: &mut Vec<LinearStmt>) {
             dst: assign.dst,
             src: assign.src,
         });
+    }
+}
+
+/// Remove trailing Assign stmts (before any Continue) that duplicate `update` entries.
+///
+/// In a ForLoop body, `emit_br_assigns` on the back-edge block produces Assign stmts
+/// for the header's block params, but ForLoop already captures these in `update_assigns`.
+/// This strips the duplicates so they aren't emitted twice.
+fn strip_back_edge_assigns(body: &mut Vec<LinearStmt>, update: &[BlockArgAssign]) {
+    let mut end = body.len();
+    if matches!(body.last(), Some(LinearStmt::Continue)) {
+        end -= 1;
+    }
+    while end > 0 {
+        if let LinearStmt::Assign { dst, src } = &body[end - 1] {
+            if update.iter().any(|a| a.dst == *dst && a.src == *src) {
+                body.remove(end - 1);
+                end -= 1;
+                continue;
+            }
+        }
+        break;
     }
 }
 
