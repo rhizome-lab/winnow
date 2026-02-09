@@ -162,6 +162,45 @@ identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
   `let x = c ? a : b`. Post-pass merges uninit decls with their first
   dominating assignment. 43% of split let decls merged (1768/4081).
 
+### Architecture — Hybrid Lowering via Structured IR
+
+The current `lower_ast.rs` (~1000 lines) interleaves three concerns: control
+flow lowering, expression inlining, and side-effect ordering. This causes
+cascading bugs — inlining decisions interact with ternary detection, name
+coalescing, self-assignment elimination, and shape processing in ways that are
+hard to reason about.
+
+Replace with a three-phase hybrid pipeline:
+
+- [ ] **Phase 1: Shape → `LinearStmt`** — Walk the Shape tree and produce a
+  flat `Vec<LinearStmt>` where every instruction is a `Def(ValueId, Op)`,
+  control flow comes from shapes (`If(ValueId, Vec, Vec)`, `While`, etc.),
+  and branch args become `Assign(ValueId, ValueId)`. No inlining decisions.
+  Trivial ~200-line shape walk.
+
+- [ ] **Phase 2: Pure resolution on `LinearStmt`** — Single pass over the
+  structured IR. Pure single-use values (`use_count == 1 && is_pure`) are
+  substituted into their consumer (ValueId → expression tree). Constants
+  always substituted. Scope lookups + cascading GetField marked as
+  always-rebuild. Dead pure code dropped. Self-assignments detected via
+  ValueId equality. Name coalescing annotated (shared ValueIds → mutable
+  assignment). This handles 90% of inlining with zero side-effect concerns.
+
+- [ ] **Phase 3: `LinearStmt` → AST** — Resolve remaining ValueIds to
+  variable names. Side-effecting single-use values inlined if no
+  intervening side effects (the only hard case, now isolated to ~10% of
+  values). Multi-use values get `const`/`let` declarations. Produces
+  `Vec<Stmt>` for existing AST passes.
+
+Existing AST passes (ternary, compound assign, const fold, decl/init merge,
+self-assign elimination) continue unchanged on the output AST.
+
+Benefits: eliminates `lazy_inlines`, `side_effecting_inlines`,
+`always_inlines`, `se_flush_declared`, `skip_loop_init_assigns`, and the
+flush mechanisms. Pure inlining is provably correct (no ordering concerns).
+Side-effect handling is isolated. `LinearStmt` is thinner than the AST
+(ValueId refs vs String names) — net memory reduction vs current `LowerCtx`.
+
 ### Low Priority (polish)
 
 - [ ] **Redundant type casts** — Eliminate `as number` etc. when the expression
