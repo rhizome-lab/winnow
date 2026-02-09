@@ -50,7 +50,7 @@ fn generate_index_html(modules: &[Module]) -> String {
 </head>
 <body>
   <canvas id="reincarnate-canvas" width="800" height="600"></canvas>
-  <script type="module" src="./main.ts"></script>
+  <script type="module" src="./dist/bundle.js"></script>
 </body>
 </html>
 "#
@@ -77,7 +77,7 @@ const PACKAGE_JSON: &str = r#"{
   "type": "module",
   "scripts": {
     "build": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm",
-    "dev": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm --servedir=."
+    "serve": "esbuild main.ts --bundle --outdir=dist --format=esm --serve --servedir=."
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
@@ -324,6 +324,6 @@ mod tests {
         let html = generate_index_html(&[module]);
         assert!(html.contains("reincarnate-canvas"));
         assert!(html.contains("<title>my_game</title>"));
-        assert!(html.contains("main.ts"));
+        assert!(html.contains("dist/bundle.js"));
     }
 }
