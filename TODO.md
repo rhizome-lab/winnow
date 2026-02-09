@@ -164,8 +164,8 @@ identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
 
 ### Remaining `vN` Identifiers
 
-28 unique vN identifiers remain across emitted TypeScript (down from 683 → 77
-→ 28). Pass order: self_assigns → dup_assigns → forwarding_stubs → ternary →
+18 unique vN identifiers remain across emitted TypeScript (down from 683 → 77
+→ 28 → 18). Pass order: self_assigns → dup_assigns → forwarding_stubs → ternary →
 minmax → [fixpoint: forward_sub → ternary → narrow → merge → fold] →
 compound_assign → post_increment.
 
@@ -327,15 +327,15 @@ accept — it's a single case and also non-adjacent (Pattern 1 applies too).
 |---------|------|-----|--------|--------|
 | 1. Non-adjacent const before side-effect | 13 | Alias analysis or rename | Hard | Accept for now |
 | 2. Split-path phi boolean | 6 | AST dominator check | Medium | TODO |
-| 3. Dup alias (object field set) | 4 | Relax sinking for pure paths | Medium | TODO |
+| 3. Dup alias (object field set) | 4 | Relax sinking for pure paths | Medium | Done |
 | 4. Operand-stack pre-increment | 4 | Alias analysis or accept | Hard | Accept for now |
-| 5. Property capture before side effect | 2 | Same fix as Pattern 3 | Medium | TODO |
+| 5. Property capture before side effect | 2 | Same fix as Pattern 3 | Medium | Done |
 | 6. Method ref capture (far use) | 2 | Accept | N/A | Correct as-is |
 | 7. Return value capture | 1 | Accept | N/A | Correct as-is |
 | 8. Constant rand(1) | 1 | Constant fold | Easy | Accept (also non-adj) |
-| **Total** | **28** *(was 291)* | | | |
+| **Total** | **18** *(was 291)* | | | |
 
-Patterns 3+5 share a fix (relax sinking for pure paths, ~30 lines, 6 vars).
+Patterns 3+5 done (relaxed sinking for pure paths, 10 vars eliminated).
 Pattern 2 needs AST dominator analysis (~40 lines, 6 vars). Patterns 1, 4,
 6, 7 are correct as-is or need alias analysis beyond current scope.
 
