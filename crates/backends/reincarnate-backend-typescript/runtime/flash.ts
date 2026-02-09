@@ -5,15 +5,39 @@ export { Flash_Exception } from "./flash_exception";
 export { Flash_Iterator } from "./flash_iterator";
 export { Flash_Memory } from "./flash_memory";
 export { Flash_XML } from "./flash_xml";
+export { Point, Rectangle, Matrix } from "./flash_geom";
 export {
-  ByteArray,
-  DisplayObject,
-  DisplayObjectContainer,
   Event,
+  TextEvent,
+  ErrorEvent,
+  MouseEvent,
+  KeyboardEvent,
+  FocusEvent,
+  ProgressEvent,
+  IOErrorEvent,
+  SecurityErrorEvent,
+  HTTPStatusEvent,
+  AsyncErrorEvent,
+  TimerEvent,
+} from "./flash_events";
+export {
   EventDispatcher,
-  Font,
+  Graphics,
+  DisplayObject,
   InteractiveObject,
-  MovieClip,
-  Proxy,
+  DisplayObjectContainer,
   Sprite,
+  MovieClip,
+  LoaderInfo,
+  Loader,
+  Stage,
 } from "./flash_display";
+export {
+  TextFieldType,
+  TextFieldAutoSize,
+  TextFormat,
+  TextField,
+  Font,
+} from "./flash_text";
+export { URLRequest, SharedObject } from "./flash_net";
+export { ByteArray, Timer, Proxy } from "./flash_utils";
