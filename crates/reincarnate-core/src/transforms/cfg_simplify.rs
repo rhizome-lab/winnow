@@ -364,6 +364,10 @@ fn merge_blocks(func: &mut Function) -> bool {
         let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
         for (param_val, arg_val) in b_params.iter().zip(br_args.iter()) {
             subst.insert(*param_val, *arg_val);
+            // Propagate name from B's param to the substitution value.
+            if let Some(name) = func.value_names.get(param_val).cloned() {
+                func.value_names.entry(*arg_val).or_insert(name);
+            }
         }
 
         // Take B's instructions.
@@ -537,6 +541,10 @@ fn eliminate_trivial_params(func: &mut Function) -> bool {
 
             if is_trivial {
                 if let Some(v) = uniform_value {
+                    // Propagate name from param to the single incoming value.
+                    if let Some(name) = func.value_names.get(&param.value).cloned() {
+                        func.value_names.entry(v).or_insert(name);
+                    }
                     subst.insert(param.value, v);
                     trivial_indices.push(i);
                 }

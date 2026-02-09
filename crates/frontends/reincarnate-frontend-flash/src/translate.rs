@@ -177,6 +177,19 @@ pub fn translate_method_body(
         );
     }
 
+    // Synthesize names for unnamed local registers (matching ffdec's `_locN`
+    // convention).  Op::Debug only covers a subset of registers; this fills
+    // the rest so mem2reg can propagate a name through all SSA values.
+    for (i, &slot) in locals.iter().enumerate() {
+        if i < num_params {
+            continue; // params already named
+        }
+        if fb.has_name(slot) {
+            continue; // already named by Op::Debug
+        }
+        fb.name_value(slot, format!("_loc{}", i + debug_reg_offset));
+    }
+
     Ok(fb.build())
 }
 

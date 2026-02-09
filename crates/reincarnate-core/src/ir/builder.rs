@@ -125,6 +125,11 @@ impl FunctionBuilder {
         self.func.value_names.insert(v, name);
     }
 
+    /// Check whether a value already has a debug name.
+    pub fn has_name(&self, v: ValueId) -> bool {
+        self.func.value_names.contains_key(&v)
+    }
+
     /// Consume the builder and return the constructed `Function`.
     pub fn build(self) -> Function {
         self.func
