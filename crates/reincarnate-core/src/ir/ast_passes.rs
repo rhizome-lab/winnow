@@ -233,6 +233,29 @@ fn try_fold_one_const(body: &mut Vec<Stmt>) -> bool {
             .map(|s| count_var_refs_in_stmt(s, &name))
             .sum();
 
+        // Dead declaration: zero reads after the decl.
+        if total_refs == 0 {
+            let init = match &body[i] {
+                Stmt::VarDecl {
+                    init: Some(init), ..
+                } => init,
+                _ => unreachable!(),
+            };
+            if expr_has_side_effects(init) {
+                // Preserve side effects: convert to expression statement.
+                let init = match body.remove(i) {
+                    Stmt::VarDecl {
+                        init: Some(expr), ..
+                    } => expr,
+                    _ => unreachable!(),
+                };
+                body.insert(i, Stmt::Expr(init));
+            } else {
+                body.remove(i);
+            }
+            return true;
+        }
+
         if total_refs != 1 {
             continue;
         }
