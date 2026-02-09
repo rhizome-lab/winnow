@@ -1166,8 +1166,8 @@ fn try_eliminate_one_stub(body: &mut Vec<Stmt>) -> bool {
 /// Remove no-op self-assignments (`x = x;`) produced by out-of-SSA coalescing.
 ///
 /// When multiple SSA values share a name, pass-through branches emit `x = x`
-/// which is a no-op. This must run AFTER ternary detection so that pass-through
-/// branches are available for ternary pattern matching.
+/// which is a no-op. This runs BEFORE ternary detection so that self-assigns
+/// don't bloat if/else branches and prevent ternary pattern matching.
 pub fn eliminate_self_assigns(body: &mut Vec<Stmt>) {
     for stmt in body.iter_mut() {
         match stmt {

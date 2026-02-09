@@ -981,15 +981,17 @@ pub fn lower_function_linear(
     full_body.append(&mut body);
 
     // AST-to-AST rewrite passes.
+    // Cleanup first: self-assigns and stubs block ternary detection by adding
+    // extra statements to if/else branches.
+    ast_passes::eliminate_self_assigns(&mut full_body);
+    ast_passes::eliminate_duplicate_assigns(&mut full_body);
+    ast_passes::eliminate_forwarding_stubs(&mut full_body);
     if config.ternary {
         ast_passes::rewrite_ternary(&mut full_body);
     }
     if config.minmax {
         ast_passes::rewrite_minmax(&mut full_body);
     }
-    ast_passes::eliminate_self_assigns(&mut full_body);
-    ast_passes::eliminate_duplicate_assigns(&mut full_body);
-    ast_passes::eliminate_forwarding_stubs(&mut full_body);
 
     // Fixpoint: narrowing enables merge, merge enables fold, fold may remove
     // statements that enable further narrowing.
@@ -1773,9 +1775,8 @@ impl<'a> EmitCtx<'a> {
         }
         let target_name = self.value_name(dst);
         let value = self.build_val(src);
-        // Don't skip name-based self-assignments here — the ternary rewrite
-        // needs both branches to have assignments. Standalone self-assigns
-        // are cleaned up by eliminate_self_assigns after ternary rewriting.
+        // Name-based self-assignments are cleaned up by eliminate_self_assigns
+        // which runs before ternary rewrite.
         self.referenced_block_params.insert(dst);
         stmts.push(Stmt::Assign {
             target: Expr::Var(target_name),
