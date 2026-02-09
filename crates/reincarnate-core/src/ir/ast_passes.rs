@@ -297,11 +297,27 @@ fn try_fold_one_const(body: &mut Vec<Stmt>) -> bool {
                     } => init,
                     _ => unreachable!(),
                 };
-                let can_sink = is_stable_path(init)
+                // Stable path (Var/Field chain): sink past non-overlapping
+                // field assignments.
+                let can_sink_path = is_stable_path(init)
                     && body[i + 1..use_idx]
                         .iter()
                         .all(|s| !stmt_assigns_to_prefix_of(s, init));
-                if !can_sink {
+                // Operand-stack temporary: if all intervening statements only
+                // assign to local variables that the init doesn't reference,
+                // the const was an AVM2 operand-stack artifact. Sink it to
+                // reconstruct original source order.
+                let can_sink_past_locals = !can_sink_path
+                    && body[i + 1..use_idx].iter().all(|s| match s {
+                        Stmt::Assign {
+                            target: Expr::Var(t),
+                            ..
+                        } => !expr_references_var(init, t),
+                        Stmt::VarDecl { name: n, .. } => !expr_references_var(init, n),
+                        Stmt::Expr(_) => true,
+                        _ => false,
+                    });
+                if !can_sink_path && !can_sink_past_locals {
                     continue;
                 }
             }
