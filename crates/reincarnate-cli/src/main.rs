@@ -55,8 +55,21 @@ enum Command {
 fn load_manifest(path: &PathBuf) -> Result<ProjectManifest> {
     let file = File::open(path).with_context(|| format!("failed to open manifest: {}", path.display()))?;
     let reader = BufReader::new(file);
-    let manifest: ProjectManifest =
+    let mut manifest: ProjectManifest =
         serde_json::from_reader(reader).with_context(|| format!("failed to parse manifest: {}", path.display()))?;
+
+    // Resolve relative paths against the manifest's parent directory.
+    if let Some(base) = path.canonicalize()?.parent() {
+        if manifest.source.is_relative() {
+            manifest.source = base.join(&manifest.source);
+        }
+        for target in &mut manifest.targets {
+            if target.output_dir.is_relative() {
+                target.output_dir = base.join(&target.output_dir);
+            }
+        }
+    }
+
     Ok(manifest)
 }
 
