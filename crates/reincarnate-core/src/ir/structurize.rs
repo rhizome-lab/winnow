@@ -530,6 +530,13 @@ impl<'a> Structurizer<'a> {
                 .last()
                 .map(|last| self.trailing_merge_assigns(last, merge))
                 .unwrap_or_default(),
+            Shape::LogicalOr { phi, .. } | Shape::LogicalAnd { phi, .. } => {
+                if self.func.blocks[merge].params.iter().any(|p| p.value == *phi) {
+                    vec![BlockArgAssign { dst: *phi, src: *phi }]
+                } else {
+                    vec![]
+                }
+            }
             _ => vec![],
         }
     }

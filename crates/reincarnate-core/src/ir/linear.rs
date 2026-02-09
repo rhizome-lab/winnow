@@ -1945,10 +1945,12 @@ impl<'a> EmitCtx<'a> {
                 value: self.build_val(cond),
             }];
             let mut else_stmts = body_stmts;
-            else_stmts.push(Stmt::Assign {
-                target: Expr::Var(self.value_name(phi)),
-                value: self.build_val(rhs),
-            });
+            if rhs != phi {
+                else_stmts.push(Stmt::Assign {
+                    target: Expr::Var(self.value_name(phi)),
+                    value: self.build_val(rhs),
+                });
+            }
             self.referenced_block_params.insert(phi);
             stmts.push(Stmt::If {
                 cond: cond_expr,
@@ -1980,10 +1982,12 @@ impl<'a> EmitCtx<'a> {
         } else {
             let cond_expr = self.build_val(cond);
             let mut then_stmts = body_stmts;
-            then_stmts.push(Stmt::Assign {
-                target: Expr::Var(self.value_name(phi)),
-                value: self.build_val(rhs),
-            });
+            if rhs != phi {
+                then_stmts.push(Stmt::Assign {
+                    target: Expr::Var(self.value_name(phi)),
+                    value: self.build_val(rhs),
+                });
+            }
             let else_stmts = vec![Stmt::Assign {
                 target: Expr::Var(self.value_name(phi)),
                 value: self.build_val(cond),
