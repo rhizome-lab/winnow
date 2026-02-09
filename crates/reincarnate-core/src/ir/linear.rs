@@ -1023,6 +1023,9 @@ struct EmitCtx<'a> {
     se_flush_declared: HashSet<ValueId>,
     /// Block-param ValueIds referenced during emission.
     referenced_block_params: HashSet<ValueId>,
+    /// Pending-lazy values protected from flush_pending_reads (header reads
+    /// that shouldn't be flushed into nested bodies).
+    flush_protected: HashSet<ValueId>,
 }
 
 impl<'a> EmitCtx<'a> {
@@ -1172,6 +1175,7 @@ impl<'a> EmitCtx<'a> {
             side_effecting_inlines: HashMap::new(),
             se_flush_declared: HashSet::new(),
             referenced_block_params: HashSet::new(),
+            flush_protected: HashSet::new(),
         }
     }
 
@@ -1441,11 +1445,12 @@ impl<'a> EmitCtx<'a> {
         let to_flush: Vec<(ValueId, InstId)> = self
             .pending_lazy
             .iter()
-            .filter(|(_, &iid)| {
-                matches!(
-                    self.func.insts[iid].op,
-                    Op::GetField { .. } | Op::GetIndex { .. } | Op::Load(..)
-                )
+            .filter(|(&v, &iid)| {
+                !self.flush_protected.contains(&v)
+                    && matches!(
+                        self.func.insts[iid].op,
+                        Op::GetField { .. } | Op::GetIndex { .. } | Op::Load(..)
+                    )
             })
             .map(|(&v, &iid)| (v, iid))
             .collect();
@@ -1764,11 +1769,27 @@ impl<'a> EmitCtx<'a> {
     ) {
         self.flush_side_effecting_inlines(stmts);
 
+        // Protect header-level pending reads from flush_pending_reads inside
+        // bodies. Without this, a memory write inside a body flushes ALL pending
+        // reads — including header-block values like the condition — materializing
+        // them as `const vN = expr` inside the body (use-before-def).
+        // Only add values not already protected (nesting safety: inner emit_if
+        // must not strip protections that outer emit_if added).
+        let newly_protected: Vec<ValueId> = self
+            .pending_lazy
+            .keys()
+            .filter(|v| !self.flush_protected.contains(v))
+            .copied()
+            .collect();
+        self.flush_protected.extend(newly_protected.iter().copied());
+
         // Emit bodies first so we know whether to negate the condition.
-        // The condition is defined in the header block, so emitting the
-        // bodies won't disturb its pending_lazy entry.
         let then_stmts = self.emit_stmts(then_body);
         let else_stmts = self.emit_stmts(else_body);
+
+        for v in &newly_protected {
+            self.flush_protected.remove(v);
+        }
 
         let then_empty = then_stmts.is_empty();
         let else_empty = else_stmts.is_empty();
