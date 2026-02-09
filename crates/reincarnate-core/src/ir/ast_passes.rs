@@ -836,6 +836,184 @@ fn expr_references_var(expr: &Expr, name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Scope narrowing
+// ---------------------------------------------------------------------------
+
+/// Push uninitialized `let` declarations into the innermost scope that uses them.
+///
+/// When a `let vN: T;` at the current scope is referenced only inside a single
+/// child scope body (one if-branch, one loop body, etc.), move the declaration
+/// into that child body. This enables `merge_decl_init` and `fold_single_use_consts`
+/// to operate on the declaration once it shares scope with its assignment/use.
+///
+/// Recurses into nested scopes after narrowing.
+pub fn narrow_var_scope(body: &mut Vec<Stmt>) {
+    // Narrow at this level first.
+    loop {
+        if !try_narrow_one(body) {
+            break;
+        }
+    }
+    // Then recurse into nested bodies.
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                narrow_var_scope(then_body);
+                narrow_var_scope(else_body);
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body } => {
+                narrow_var_scope(body);
+            }
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                narrow_var_scope(init);
+                narrow_var_scope(update);
+                narrow_var_scope(body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    narrow_var_scope(block_body);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Try to narrow a single uninit VarDecl into a child scope.
+/// Returns `true` if a narrowing was performed.
+fn try_narrow_one(body: &mut Vec<Stmt>) -> bool {
+    for i in 0..body.len() {
+        let (name, ty) = match &body[i] {
+            Stmt::VarDecl {
+                name,
+                ty,
+                init: None,
+                mutable: true,
+            } => (name.clone(), ty.clone()),
+            _ => continue,
+        };
+
+        // Find which statements after the decl reference this variable.
+        let ref_indices: Vec<usize> = (i + 1..body.len())
+            .filter(|&j| stmt_references_var(&body[j], &name))
+            .collect();
+
+        if ref_indices.len() != 1 {
+            continue;
+        }
+
+        let j = ref_indices[0];
+
+        // The single referencing statement must have child bodies we can push into.
+        // Find which single child body contains ALL references.
+        if let Some(target_body) = find_unique_child_body(&mut body[j], &name) {
+            // Insert the uninit decl at the top of that child body.
+            target_body.insert(
+                0,
+                Stmt::VarDecl {
+                    name,
+                    ty,
+                    init: None,
+                    mutable: true,
+                },
+            );
+            // Remove the original decl.
+            body.remove(i);
+            return true;
+        }
+    }
+    false
+}
+
+/// If ALL references to `name` in `stmt` are inside exactly one child body,
+/// return a mutable reference to that body. Otherwise return `None`.
+fn find_unique_child_body<'a>(stmt: &'a mut Stmt, name: &str) -> Option<&'a mut Vec<Stmt>> {
+    match stmt {
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            // References in the condition are not inside a child body.
+            if expr_references_var(cond, name) {
+                return None;
+            }
+            let in_then = then_body.iter().any(|s| stmt_references_var(s, name));
+            let in_else = else_body.iter().any(|s| stmt_references_var(s, name));
+            match (in_then, in_else) {
+                (true, false) => Some(then_body),
+                (false, true) => Some(else_body),
+                _ => None, // both or neither
+            }
+        }
+        Stmt::While { cond, body } => {
+            if expr_references_var(cond, name) {
+                return None;
+            }
+            if body.iter().any(|s| stmt_references_var(s, name)) {
+                Some(body)
+            } else {
+                None
+            }
+        }
+        Stmt::Loop { body } => {
+            if body.iter().any(|s| stmt_references_var(s, name)) {
+                Some(body)
+            } else {
+                None
+            }
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+        } => {
+            if expr_references_var(cond, name) {
+                return None;
+            }
+            let in_init = init.iter().any(|s| stmt_references_var(s, name));
+            let in_update = update.iter().any(|s| stmt_references_var(s, name));
+            let in_body = body.iter().any(|s| stmt_references_var(s, name));
+            let count = usize::from(in_init) + usize::from(in_update) + usize::from(in_body);
+            if count != 1 {
+                return None;
+            }
+            if in_init {
+                Some(init)
+            } else if in_body {
+                Some(body)
+            } else {
+                Some(update)
+            }
+        }
+        Stmt::Dispatch { blocks, .. } => {
+            let mut found = None;
+            for (idx, (_, block_body)) in blocks.iter().enumerate() {
+                if block_body.iter().any(|s| stmt_references_var(s, name)) {
+                    if found.is_some() {
+                        return None; // multiple blocks reference it
+                    }
+                    found = Some(idx);
+                }
+            }
+            found.map(|idx| &mut blocks[idx].1)
+        }
+        // Not a compound statement — can't narrow into it.
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Self-assignment elimination
 // ---------------------------------------------------------------------------
 
