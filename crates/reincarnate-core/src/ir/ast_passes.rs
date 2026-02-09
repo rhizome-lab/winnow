@@ -2035,6 +2035,173 @@ pub fn eliminate_unreachable_after_exit(body: &mut Vec<Stmt>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Simplify ternary to logical operators
+// ---------------------------------------------------------------------------
+
+/// Simplify `cond ? then_val : cond` → `cond && then_val`,
+/// and `cond ? cond : else_val` → `cond || else_val`.
+///
+/// Recurses bottom-up into all sub-expressions and then into nested
+/// statement bodies.
+pub fn simplify_ternary_to_logical(body: &mut [Stmt]) {
+    for stmt in body.iter_mut() {
+        simplify_ternary_in_stmt(stmt);
+    }
+}
+
+fn simplify_ternary_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::VarDecl { init, .. } => {
+            if let Some(e) = init {
+                simplify_ternary_in_expr(e);
+            }
+        }
+        Stmt::Assign { target, value } => {
+            simplify_ternary_in_expr(target);
+            simplify_ternary_in_expr(value);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            simplify_ternary_in_expr(target);
+            simplify_ternary_in_expr(value);
+        }
+        Stmt::Expr(e) => {
+            simplify_ternary_in_expr(e);
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            simplify_ternary_in_expr(cond);
+            simplify_ternary_to_logical(then_body);
+            simplify_ternary_to_logical(else_body);
+        }
+        Stmt::While { cond, body } => {
+            simplify_ternary_in_expr(cond);
+            simplify_ternary_to_logical(body);
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+        } => {
+            simplify_ternary_to_logical(init);
+            simplify_ternary_in_expr(cond);
+            simplify_ternary_to_logical(update);
+            simplify_ternary_to_logical(body);
+        }
+        Stmt::Loop { body } => {
+            simplify_ternary_to_logical(body);
+        }
+        Stmt::Return(Some(e)) => {
+            simplify_ternary_in_expr(e);
+        }
+        Stmt::Dispatch { blocks, .. } => {
+            for (_, block_body) in blocks {
+                simplify_ternary_to_logical(block_body);
+            }
+        }
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::LabeledBreak { .. } => {}
+    }
+}
+
+fn simplify_ternary_in_expr(expr: &mut Expr) {
+    // Recurse into sub-expressions first (bottom-up).
+    match expr {
+        Expr::Literal(_) | Expr::Var(_) | Expr::GlobalRef(_) => {}
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            simplify_ternary_in_expr(lhs);
+            simplify_ternary_in_expr(rhs);
+        }
+        Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
+            simplify_ternary_in_expr(lhs);
+            simplify_ternary_in_expr(rhs);
+        }
+        Expr::Unary { expr: inner, .. }
+        | Expr::Cast { expr: inner, .. }
+        | Expr::TypeCheck { expr: inner, .. }
+        | Expr::Not(inner)
+        | Expr::CoroutineResume(inner)
+        | Expr::PostIncrement(inner) => {
+            simplify_ternary_in_expr(inner);
+        }
+        Expr::Field { object, .. } => {
+            simplify_ternary_in_expr(object);
+        }
+        Expr::Index { collection, index } => {
+            simplify_ternary_in_expr(collection);
+            simplify_ternary_in_expr(index);
+        }
+        Expr::Call { args, .. } | Expr::CoroutineCreate { args, .. } => {
+            for a in args {
+                simplify_ternary_in_expr(a);
+            }
+        }
+        Expr::CallIndirect { callee, args } => {
+            simplify_ternary_in_expr(callee);
+            for a in args {
+                simplify_ternary_in_expr(a);
+            }
+        }
+        Expr::SystemCall { args, .. } => {
+            for a in args {
+                simplify_ternary_in_expr(a);
+            }
+        }
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            simplify_ternary_in_expr(cond);
+            simplify_ternary_in_expr(then_val);
+            simplify_ternary_in_expr(else_val);
+        }
+        Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
+            for e in elems {
+                simplify_ternary_in_expr(e);
+            }
+        }
+        Expr::StructInit { fields, .. } => {
+            for (_, v) in fields {
+                simplify_ternary_in_expr(v);
+            }
+        }
+        Expr::Yield(v) => {
+            if let Some(e) = v {
+                simplify_ternary_in_expr(e);
+            }
+        }
+    }
+
+    // After recursion, check if this is a simplifiable ternary.
+    if let Expr::Ternary { cond, then_val, else_val } = expr {
+        if **cond == **else_val {
+            // cond ? then_val : cond → cond && then_val
+            let dummy = Expr::Literal(Constant::Null);
+            let old = std::mem::replace(expr, dummy);
+            if let Expr::Ternary { cond, then_val, .. } = old {
+                *expr = Expr::LogicalAnd {
+                    lhs: cond,
+                    rhs: then_val,
+                };
+            }
+        } else if **cond == **then_val {
+            // cond ? cond : else_val → cond || else_val
+            let dummy = Expr::Literal(Constant::Null);
+            let old = std::mem::replace(expr, dummy);
+            if let Expr::Ternary { cond, else_val, .. } = old {
+                *expr = Expr::LogicalOr {
+                    lhs: cond,
+                    rhs: else_val,
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

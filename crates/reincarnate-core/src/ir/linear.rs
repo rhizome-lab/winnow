@@ -1004,6 +1004,7 @@ pub fn lower_function_linear(
         if config.ternary {
             ast_passes::rewrite_ternary(&mut full_body);
         }
+        ast_passes::simplify_ternary_to_logical(&mut full_body);
         ast_passes::absorb_phi_condition(&mut full_body);
         ast_passes::narrow_var_scope(&mut full_body);
         ast_passes::merge_decl_init(&mut full_body);
