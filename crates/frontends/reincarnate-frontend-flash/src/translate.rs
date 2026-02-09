@@ -177,6 +177,30 @@ pub fn translate_method_body(
         );
     }
 
+    // Infer names for unnamed parameters (methods without Op::Debug info).
+    let inferred = infer_param_names(func_name, &sig, has_self);
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..num_params {
+        let param_val = fb.param(i);
+        if fb.has_name(param_val) {
+            continue;
+        }
+        if has_self && i == 0 {
+            continue; // skip `this`
+        }
+        let real_idx = if has_self { i - 1 } else { i };
+        if let Some(Some(name)) = inferred.get(real_idx) {
+            fb.name_value(param_val, name.clone());
+            // Also name the alloc slot so Mem2Reg can propagate the name.
+            fb.name_value(locals[i], name.clone());
+        } else {
+            let display_idx = if has_self { i } else { i + 1 };
+            let name = format!("param{display_idx}");
+            fb.name_value(param_val, name.clone());
+            fb.name_value(locals[i], name);
+        }
+    }
+
     // Synthesize names for unnamed local registers (matching ffdec's `_locN`
     // convention).  Op::Debug only covers a subset of registers; this fills
     // the rest so mem2reg can propagate a name through all SSA values.
@@ -191,6 +215,140 @@ pub fn translate_method_body(
     }
 
     Ok(fb.build())
+}
+
+/// Infer parameter names for methods that lack Op::Debug info.
+///
+/// Four layers of inference, applied per-param in priority order:
+/// 1. Method-name table (exact match on bare method name + param count)
+/// 2. Pattern rules (suffix matching on method name)
+/// 3. Type-based inference (derive name from Struct type)
+/// 4. Generic fallback (param1, param2, …)
+fn infer_param_names(method_name: &str, sig: &FunctionSig, has_self: bool) -> Vec<Option<String>> {
+    let bare = method_name.rsplit("::").next().unwrap_or(method_name);
+    // Real param count excludes `this`.
+    let skip = if has_self { 1 } else { 0 };
+    let real_params: Vec<&Type> = sig.params.iter().skip(skip).collect();
+    let count = real_params.len();
+
+    // Layer 1: Method-name table.
+    if let Some(names) = match_method_table(bare, count) {
+        return names;
+    }
+
+    let mut result = Vec::with_capacity(count);
+
+    for (i, &ty) in real_params.iter().enumerate() {
+        // Layer 2: Pattern rules.
+        if count == 1 && (bare.ends_with("Handler") || bare.ends_with("Listener")) {
+            result.push(Some("event".to_string()));
+            continue;
+        }
+
+        // Layer 3: Type-based inference.
+        if let Some(name) = name_from_type(ty) {
+            result.push(Some(name));
+            continue;
+        }
+
+        // Layer 4: Generic fallback.
+        result.push(Some(format!("param{}", i + 1)));
+    }
+
+    result
+}
+
+/// Layer 1 lookup: exact match on bare method name + param count.
+fn match_method_table(bare: &str, count: usize) -> Option<Vec<Option<String>>> {
+    let names: &[&str] = match (bare, count) {
+        ("setSize", 2) => &["width", "height"],
+        ("move", 2) => &["x", "y"],
+        ("setStyle", 2) => &["name", "value"],
+        ("addItem", 1) => &["item"],
+        ("addItemAt", 2) => &["item", "index"],
+        ("removeItem", 1) => &["item"],
+        ("removeItemAt", 1) => &["index"],
+        ("replaceItemAt", 2) => &["item", "index"],
+        ("getItemAt", 1) => &["index"],
+        ("getItemIndex", 1) => &["item"],
+        ("itemToLabel", 1) => &["item"],
+        ("sortItemsOn", 2) => &["field", "options"],
+        ("setVerticalScrollPosition", 2) => &["position", "fireEvent"],
+        ("setHorizontalScrollPosition", 2) => &["position", "fireEvent"],
+        ("setScrollPosition", 2) => &["position", "fireEvent"],
+        ("scrollToIndex", 1) => &["index"],
+        ("drawFocus", 1) => &["focused"],
+        ("dispatchEvent", 1) => &["event"],
+        ("passEvent", 1) => &["event"],
+        ("moveSelectionHorizontally", 3) => &["code", "shiftKey", "ctrlKey"],
+        ("moveSelectionVertically", 3) => &["code", "shiftKey", "ctrlKey"],
+        ("setButton", 4) => &["index", "label", "callback", "toolTip"],
+        ("showBottomButton", 4) => &["index", "label", "callback", "toolTip"],
+        ("setMenuButton", 3) => &["name", "label", "callback"],
+        ("setStatText", 2) => &["name", "value"],
+        ("setStatBar", 2) => &["name", "value"],
+        ("setOutputText", 1) => &["text"],
+        ("selectSprite", 1) => &["index"],
+        ("getMenuButtonByName", 1) => &["name"],
+        ("indexOfButtonWithLabel", 1) => &["label"],
+        _ => return None,
+    };
+    Some(names.iter().map(|s| Some(s.to_string())).collect())
+}
+
+/// Layer 3: derive a parameter name from a `Type::Struct` class name.
+fn name_from_type(ty: &Type) -> Option<String> {
+    let class = match ty {
+        Type::Struct(name) => name,
+        _ => return None,
+    };
+
+    // Strip package prefix. Names may use "::" (e.g. "flash.net::URLRequest")
+    // or "." (e.g. "flash.events.Event") as separators.
+    let short = class
+        .rsplit("::")
+        .next()
+        .unwrap_or(class)
+        .rsplit('.')
+        .next()
+        .unwrap_or(class);
+
+    // *Event → "event"
+    if short.ends_with("Event") {
+        return Some("event".to_string());
+    }
+
+    // Detect leading acronym (consecutive uppercase, ≥2 chars).
+    let upper_len = short.chars().take_while(|c| c.is_ascii_uppercase()).count();
+    if upper_len >= 2 && upper_len < short.len() {
+        // E.g. "URLRequest" → strip "URL" → "Request" → "request"
+        let remainder = &short[upper_len - 1..]; // keep last uppercase as start
+        // But if the acronym IS the whole prefix (like URL in URLRequest),
+        // strip all but the transition char: "URLRequest" → "Request"
+        let stripped = &short[upper_len..];
+        if stripped.is_empty() {
+            // Entire name is an acronym — just lowercase it.
+            return Some(short.to_lowercase());
+        }
+        // "URLRequest" → acronym_len=3, stripped="equest", remainder="Request"
+        return Some(lower_first(remainder));
+    }
+
+    // Normal PascalCase → lowerCamelCase.
+    if short.len() > 1 && short.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return Some(lower_first(short));
+    }
+
+    None
+}
+
+/// Lowercase the first character of a string.
+fn lower_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_lowercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// Check if the block ending just before `op_idx` has already been terminated.
