@@ -910,11 +910,12 @@ fn emit_class(
     let empty_methods = HashSet::new();
     let method_names = method_name_sets.get(&qualified).unwrap_or(&empty_methods);
 
+    let suppress_super = extends.is_empty();
     for (i, &fid) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, suppress_super, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -927,6 +928,7 @@ fn emit_class_method(
     class_names: &HashMap<String, String>,
     ancestors: &HashSet<String>,
     method_names: &HashSet<String>,
+    suppress_super: bool,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -947,11 +949,12 @@ fn emit_class_method(
 
     let shape = structurize::structurize(func);
     let ast = linear::lower_function_linear(func, &shape, lowering_config);
-    let pctx = if skip_self {
+    let mut pctx = if skip_self {
         PrintCtx::for_method(class_names, ancestors, method_names)
     } else {
         PrintCtx::for_function(class_names)
     };
+    pctx.suppress_super = suppress_super;
     ast_printer::print_class_method(&ast, &raw_name, skip_self, &pctx, out);
     Ok(())
 }

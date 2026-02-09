@@ -25,6 +25,8 @@ pub struct PrintCtx {
     pub has_self: bool,
     /// Name of the `self` parameter (e.g. "v0") — mapped to `this` during printing.
     pub self_param_name: Option<String>,
+    /// Suppress `super()` calls (class has no real superclass, e.g. `extends Object`).
+    pub suppress_super: bool,
 }
 
 impl PrintCtx {
@@ -35,6 +37,7 @@ impl PrintCtx {
             method_names: HashSet::new(),
             has_self: false,
             self_param_name: None,
+            suppress_super: false,
         }
     }
 
@@ -49,6 +52,7 @@ impl PrintCtx {
             method_names: method_names.clone(),
             has_self: true,
             self_param_name: None,
+            suppress_super: false,
         }
     }
 }
@@ -128,6 +132,7 @@ pub fn print_class_method(
             method_names: ctx.method_names.clone(),
             has_self: ctx.has_self,
             self_param_name: Some(ast.params[0].0.clone()),
+            suppress_super: ctx.suppress_super,
         };
         // Ensure has_self is true when we have a self param.
         lctx.has_self = true;
@@ -139,6 +144,7 @@ pub fn print_class_method(
             method_names: ctx.method_names.clone(),
             has_self: ctx.has_self,
             self_param_name: ctx.self_param_name.clone(),
+            suppress_super: ctx.suppress_super,
         }
     };
 
@@ -263,6 +269,9 @@ fn print_stmt(stmt: &Stmt, ctx: &PrintCtx, out: &mut String, indent: &str) {
             } = expr
             {
                 if system == "Flash.Class" && method == "constructSuper" {
+                    if ctx.suppress_super {
+                        return;
+                    }
                     let rest_args: Vec<_> = args[1..]
                         .iter()
                         .map(|a| print_expr(a, ctx))
@@ -707,6 +716,9 @@ fn print_system_call(
 ) -> String {
     // constructSuper → super()
     if system == "Flash.Class" && method == "constructSuper" {
+        if ctx.suppress_super {
+            return "void 0".to_string();
+        }
         let rest_args: Vec<_> = args[1..].iter().map(|a| print_expr(a, ctx)).collect();
         return format!("super({})", rest_args.join(", "));
     }
