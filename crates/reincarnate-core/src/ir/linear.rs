@@ -1179,6 +1179,24 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
+        // Propagate names from Cast/Copy results to their source operands.
+        // Mem2Reg names the stored value (e.g. Cast(src)), but if the Cast
+        // is single-use and gets lazily inlined, its name is never used.
+        // Propagating to `src` ensures the materialized variable gets the name.
+        for (_, inst) in func.insts.iter() {
+            if let Some(result) = inst.result {
+                if let Some(name) = value_names.get(&result).cloned() {
+                    let src = match &inst.op {
+                        Op::Cast(s, _) | Op::Copy(s) => Some(*s),
+                        _ => None,
+                    };
+                    if let Some(src) = src {
+                        value_names.entry(src).or_insert(name);
+                    }
+                }
+            }
+        }
+
         // Find names shared by 2+ ValueIds.
         let mut name_counts: HashMap<&str, usize> = HashMap::new();
         for name in value_names.values() {
@@ -1482,9 +1500,58 @@ impl<'a> EmitCtx<'a> {
             .map(|(&v, &iid)| (v, iid))
             .collect();
 
+        // Build map: unnamed flush value → named Cast/Copy consumer in pending_lazy.
+        // When a GetField is flushed but its only consumer is a named Cast (e.g.
+        // Mem2Reg named the Cast from an alloc's stored value), absorb the Cast
+        // into the flush so the materialized variable gets the source-level name.
+        let named_consumers: HashMap<ValueId, (ValueId, InstId)> = self
+            .pending_lazy
+            .iter()
+            .filter_map(|(&w, &wiid)| {
+                if !self.value_names.contains_key(&w) {
+                    return None;
+                }
+                match &self.func.insts[wiid].op {
+                    Op::Cast(src, _) | Op::Copy(src) => Some((*src, (w, wiid))),
+                    _ => None,
+                }
+            })
+            .collect();
+
         for (v, iid) in to_flush {
-            // Skip if already consumed by a previous flush's build_expr_from_op
-            // (e.g., flushing v438=GetField(v437,"spe") consumed v437 via build_val).
+            if !self.pending_lazy.contains_key(&v) {
+                continue;
+            }
+
+            // If this value has no name but has a named Cast/Copy consumer in
+            // pending_lazy, materialize the consumer instead.  build_expr_from_op
+            // on the Cast will call build_val(v) which consumes v from pending_lazy.
+            if !self.value_names.contains_key(&v) {
+                if let Some(&(consumer_v, _)) = named_consumers.get(&v) {
+                    if let Some(consumer_iid) = self.pending_lazy.remove(&consumer_v) {
+                        let op = self.func.insts[consumer_iid].op.clone();
+                        if let Some(expr) = self.build_expr_from_op(&op) {
+                            let name = self.value_name(consumer_v);
+                            if self.shared_names.contains(&name) {
+                                stmts.push(Stmt::Assign {
+                                    target: Expr::Var(name),
+                                    value: expr,
+                                });
+                            } else {
+                                stmts.push(Stmt::VarDecl {
+                                    name,
+                                    ty: None,
+                                    init: Some(expr),
+                                    mutable: false,
+                                });
+                            }
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Normal flush: remove from pending and materialize.
             if self.pending_lazy.remove(&v).is_none() {
                 continue;
             }
