@@ -1515,6 +1515,20 @@ impl<'a> EmitCtx<'a> {
             return;
         }
         if self.resolve.lazy_inlines.contains(&result) {
+            // If any operand is a pending SE inline, eagerly build the
+            // expression and store as SE inline. This chains pure wrappers
+            // (e.g. Cast) into their SE operand (e.g. Call) so the flush
+            // materializes the combined expression with the correct name.
+            let has_se_operand = value_operands(op)
+                .iter()
+                .any(|v| self.side_effecting_inlines.contains_key(v));
+            if has_se_operand {
+                let op_clone = op.clone();
+                if let Some(expr) = self.build_expr_from_op(&op_clone) {
+                    self.side_effecting_inlines.insert(result, expr);
+                    return;
+                }
+            }
             self.pending_lazy.insert(result, inst_id);
             return;
         }
