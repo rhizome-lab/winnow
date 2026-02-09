@@ -166,8 +166,9 @@ identified by comparing `takeDamage` / `reduceDamage` in Player.ts.
 
 0 unique vN identifiers remain across emitted TypeScript (down from 683 → 77
 → 28 → 19 → 4 → 1 → 0). Pass order: self_assigns → dup_assigns → forwarding_stubs →
-ternary → minmax → [fixpoint: forward_sub → ternary → absorb_phi → narrow → merge →
-fold] → compound_assign → post_increment. Debug name propagation through
+invert_empty_then → eliminate_unreachable → ternary → minmax →
+[fixpoint: forward_sub → ternary → ternary_to_logical → absorb_phi → narrow →
+merge → fold] → compound_assign → post_increment. Debug name propagation through
 Cast/Copy fixed 3 named variables (item, hug, returnDamage, itype).
 absorb_phi_condition Case C eliminated the last (v115 in Mutations).
 
@@ -341,6 +342,10 @@ All patterns resolved. 0 unique vN remain from clean emit (683 → 0).
 Debug name propagation through Cast/Copy fixed item, hug, returnDamage, itype.
 absorb_phi_condition Case C (with else-body duplication) eliminated v115.
 
+Cross-SWF vN counts: cc-project 0, utg-project 0, tln-project 16,
+nff-project 2, mvol-project 6. The `simplify_ternary_to_logical` pass
+eliminated v78 from tln (was 17 → 16).
+
 ### Architecture — Hybrid Lowering via Structured IR
 
 The current `lower_ast.rs` (~1000 lines) interleaves three concerns: control
@@ -372,7 +377,8 @@ Replace with a three-phase hybrid pipeline:
   `Vec<Stmt>` for existing AST passes.
 
 Existing AST passes (ternary, compound assign, const fold, decl/init merge,
-self-assign elimination) continue unchanged on the output AST.
+self-assign elimination, empty-then inversion, unreachable elimination,
+ternary-to-logical) continue unchanged on the output AST.
 
 Benefits: eliminates `lazy_inlines`, `side_effecting_inlines`,
 `always_inlines`, `se_flush_declared`, `skip_loop_init_assigns`, and the

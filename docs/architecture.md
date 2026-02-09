@@ -167,6 +167,43 @@ String-based at IR level, resolved to concrete trait method calls at codegen. Ke
 
 Entity IDs are module-scoped: `FuncId(0)` in Module A ≠ `FuncId(0)` in Module B. Cross-module references use string-based imports. A linking pass builds the global symbol table.
 
+## AST Normalization Passes
+
+After the backend lowers IR to an AST (`Vec<Stmt>`), a pipeline of rewrite passes normalizes the output for readability. Passes run in a fixed order; some are in a fixpoint loop that iterates until no further changes occur.
+
+### Cleanup Phase (one-shot, before fixpoint)
+
+| Pass | Effect |
+|------|--------|
+| **eliminate_self_assigns** | Remove `x = x` |
+| **eliminate_duplicate_assigns** | Collapse consecutive identical assignments |
+| **eliminate_forwarding_stubs** | Remove uninit phi + immediate read into another phi |
+| **invert_empty_then** | `if (x) {} else { B }` → `if (!x) { B }` |
+| **eliminate_unreachable_after_exit** | Truncate dead code after return/break/continue or if-else where both branches exit |
+| **rewrite_ternary** | `if (c) { x = a } else { x = b }` → `x = c ? a : b` |
+| **rewrite_minmax** | `(a >= b) ? a : b` → `Math.max(a, b)` |
+
+### Fixpoint Phase
+
+Runs in a loop until statement count stabilizes:
+
+| Pass | Effect |
+|------|--------|
+| **forward_substitute** | Inline single-use adjacent assignments |
+| **rewrite_ternary** | (re-run to catch newly exposed patterns) |
+| **simplify_ternary_to_logical** | `c ? x : c` → `c && x`, `c ? c : x` → `c \|\| x` |
+| **absorb_phi_condition** | Merge split-path phi booleans into their assigning branch |
+| **narrow_var_scope** | Push uninit `let` into the single child scope where all refs live |
+| **merge_decl_init** | `let x; ... x = v` → `let x = v` |
+| **fold_single_use_consts** | Inline single-use const/let declarations |
+
+### Final Phase (one-shot, after fixpoint)
+
+| Pass | Effect |
+|------|--------|
+| **rewrite_compound_assign** | `x = x + 1` → `x += 1` |
+| **rewrite_post_increment** | Read-modify-write → `x++` |
+
 ## Multi-Platform Strategy
 
 | Platform | Rendering | Windowing | Audio |
