@@ -21,12 +21,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+use super::ast::{AstFunction, BinOp, Expr, Stmt, UnaryOp};
+use super::ast_passes;
+use super::block::BlockId;
 use super::func::Function;
 use super::inst::{InstId, Op};
 use super::structurize::{BlockArgAssign, Shape};
+use super::ty::Type;
 use super::value::{Constant, ValueId};
 
 use crate::entity::EntityRef;
+use crate::pipeline::LoweringConfig;
 use crate::transforms::util::value_operands;
 
 // -----------------------------------------------------------------------
@@ -923,6 +928,969 @@ fn scan_alloc_stores(
     }
 }
 
+// -----------------------------------------------------------------------
+// Phase 3: emit — LinearStmt → Vec<Stmt>
+// -----------------------------------------------------------------------
+
+/// Lower a function through all 3 phases of the hybrid pipeline.
+pub(crate) fn lower_function_linear(
+    func: &Function,
+    shape: &Shape,
+    config: &LoweringConfig,
+) -> AstFunction {
+    let linear = linearize(func, shape);
+    let rctx = resolve(func, &linear);
+    let mut ctx = EmitCtx::new(func, &rctx, config);
+
+    let mut body = ctx.emit_stmts(&linear);
+    strip_trailing_void_return(&mut body);
+
+    let decls = ctx.collect_block_param_decls();
+    let mut full_body = decls;
+    full_body.append(&mut body);
+
+    // AST-to-AST rewrite passes.
+    if config.ternary {
+        ast_passes::rewrite_ternary(&mut full_body);
+    }
+    if config.minmax {
+        ast_passes::rewrite_minmax(&mut full_body);
+    }
+    ast_passes::fold_single_use_consts(&mut full_body);
+    ast_passes::rewrite_compound_assign(&mut full_body);
+    ast_passes::eliminate_self_assigns(&mut full_body);
+    ast_passes::merge_decl_init(&mut full_body);
+
+    AstFunction {
+        name: func.name.clone(),
+        params: ctx.build_params(),
+        return_ty: func.sig.return_ty.clone(),
+        body: full_body,
+        is_generator: func.coroutine.is_some(),
+        visibility: func.visibility,
+        method_kind: func.method_kind,
+    }
+}
+
+// -----------------------------------------------------------------------
+// Emit context
+// -----------------------------------------------------------------------
+
+struct EmitCtx<'a> {
+    func: &'a Function,
+    config: &'a LoweringConfig,
+    resolve: &'a ResolveCtx,
+    /// Debug names for values (func.value_names + out-of-SSA coalescing).
+    value_names: HashMap<ValueId, String>,
+    /// Entry-block parameter ValueIds.
+    entry_params: HashSet<ValueId>,
+    /// Names shared by 2+ ValueIds (out-of-SSA coalesced variables).
+    shared_names: HashSet<String>,
+    /// Deferred single-use pure instructions (from Phase 2's lazy_inlines).
+    pending_lazy: HashMap<ValueId, InstId>,
+    /// Always-rebuild instructions (from Phase 2's always_inlines).
+    always_inline_map: HashMap<ValueId, InstId>,
+    /// Deferred side-effecting single-use expressions.
+    side_effecting_inlines: HashMap<ValueId, Expr>,
+    /// Values already declared by flush_side_effecting_inlines.
+    se_flush_declared: HashSet<ValueId>,
+    /// Block-param ValueIds referenced during emission.
+    referenced_block_params: HashSet<ValueId>,
+}
+
+impl<'a> EmitCtx<'a> {
+    fn new(func: &'a Function, resolve: &'a ResolveCtx, config: &'a LoweringConfig) -> Self {
+        let mut value_names: HashMap<ValueId, String> = func
+            .value_names
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        let entry_params: HashSet<ValueId> = func.blocks[func.entry]
+            .params
+            .iter()
+            .map(|p| p.value)
+            .collect();
+
+        // Out-of-SSA name coalescing: propagate phi names to branch args.
+        for (_, block) in func.blocks.iter() {
+            let Some(&last_inst) = block.insts.last() else {
+                continue;
+            };
+            let mut propagate = |target: BlockId, args: &[ValueId]| {
+                let target_block = &func.blocks[target];
+                for (param, &src) in target_block.params.iter().zip(args.iter()) {
+                    if param.value == src {
+                        continue;
+                    }
+                    if let Some(name) = func.value_names.get(&param.value) {
+                        value_names.entry(src).or_insert_with(|| name.clone());
+                    }
+                }
+            };
+            match &func.insts[last_inst].op {
+                Op::Br { target, args } => propagate(*target, args),
+                Op::BrIf {
+                    then_target,
+                    then_args,
+                    else_target,
+                    else_args,
+                    ..
+                } => {
+                    propagate(*then_target, then_args);
+                    propagate(*else_target, else_args);
+                }
+                Op::Switch {
+                    cases, default, ..
+                } => {
+                    for (_, target, args) in cases {
+                        propagate(*target, args);
+                    }
+                    propagate(default.0, &default.1);
+                }
+                _ => {}
+            }
+        }
+
+        // Find names shared by 2+ ValueIds.
+        let mut name_counts: HashMap<&str, usize> = HashMap::new();
+        for name in value_names.values() {
+            *name_counts.entry(name.as_str()).or_default() += 1;
+        }
+        let shared_names: HashSet<String> = name_counts
+            .into_iter()
+            .filter(|(_, count)| *count >= 2)
+            .map(|(name, _)| name.to_string())
+            .collect();
+
+        Self {
+            func,
+            config,
+            resolve,
+            value_names,
+            entry_params,
+            shared_names,
+            pending_lazy: HashMap::new(),
+            always_inline_map: HashMap::new(),
+            side_effecting_inlines: HashMap::new(),
+            se_flush_declared: HashSet::new(),
+            referenced_block_params: HashSet::new(),
+        }
+    }
+
+    fn value_name(&self, v: ValueId) -> String {
+        if let Some(name) = self.value_names.get(&v) {
+            name.clone()
+        } else {
+            format!("v{}", v.index())
+        }
+    }
+
+    fn use_count(&self, v: ValueId) -> usize {
+        self.resolve.use_counts.get(&v).copied().unwrap_or(0)
+    }
+
+    /// Build an expression for a value reference.
+    fn build_val(&mut self, v: ValueId) -> Expr {
+        // Constants — always inlined, not consumed.
+        if let Some(c) = self.resolve.constant_inlines.get(&v) {
+            return Expr::Literal(c.clone());
+        }
+
+        // Always-inline — rebuilt on every use.
+        if let Some(&inst_id) = self.always_inline_map.get(&v) {
+            let op = self.func.insts[inst_id].op.clone();
+            if let Some(expr) = self.build_expr_from_op(&op) {
+                return expr;
+            }
+        }
+
+        // Side-effecting inline — consumed once.
+        if let Some(expr) = self.side_effecting_inlines.remove(&v) {
+            return expr;
+        }
+
+        // Lazy inline — consumed once.
+        if let Some(inst_id) = self.pending_lazy.remove(&v) {
+            let op = self.func.insts[inst_id].op.clone();
+            if let Some(expr) = self.build_expr_from_op(&op) {
+                return expr;
+            }
+        }
+
+        // Track block-param references for declaration generation.
+        if !self.entry_params.contains(&v) && !self.se_flush_declared.contains(&v) {
+            self.referenced_block_params.insert(v);
+        }
+
+        Expr::Var(self.value_name(v))
+    }
+
+    /// Build an Expr from an Op.
+    fn build_expr_from_op(&mut self, op: &Op) -> Option<Expr> {
+        Some(match op {
+            Op::Const(c) => Expr::Literal(c.clone()),
+
+            Op::Add(a, b) => Expr::Binary {
+                op: BinOp::Add,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Sub(a, b) => Expr::Binary {
+                op: BinOp::Sub,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Mul(a, b) => Expr::Binary {
+                op: BinOp::Mul,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Div(a, b) => Expr::Binary {
+                op: BinOp::Div,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Rem(a, b) => Expr::Binary {
+                op: BinOp::Rem,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Neg(a) => Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(self.build_val(*a)),
+            },
+
+            Op::BitAnd(a, b) => Expr::Binary {
+                op: BinOp::BitAnd,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::BitOr(a, b) => Expr::Binary {
+                op: BinOp::BitOr,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::BitXor(a, b) => Expr::Binary {
+                op: BinOp::BitXor,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::BitNot(a) => Expr::Unary {
+                op: UnaryOp::BitNot,
+                expr: Box::new(self.build_val(*a)),
+            },
+            Op::Shl(a, b) => Expr::Binary {
+                op: BinOp::Shl,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::Shr(a, b) => Expr::Binary {
+                op: BinOp::Shr,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+
+            Op::Cmp(kind, a, b) => Expr::Cmp {
+                kind: *kind,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+
+            Op::Not(a) => Expr::Not(Box::new(self.build_val(*a))),
+            Op::Select {
+                cond,
+                on_true,
+                on_false,
+            } => Expr::Ternary {
+                cond: Box::new(self.build_val(*cond)),
+                then_val: Box::new(self.build_val(*on_true)),
+                else_val: Box::new(self.build_val(*on_false)),
+            },
+
+            Op::Load(ptr) => self.build_val(*ptr),
+            Op::GetField { object, field } => Expr::Field {
+                object: Box::new(self.build_val(*object)),
+                field: field.clone(),
+            },
+            Op::GetIndex { collection, index } => Expr::Index {
+                collection: Box::new(self.build_val(*collection)),
+                index: Box::new(self.build_val(*index)),
+            },
+
+            Op::Call {
+                func: fname,
+                args,
+            } => Expr::Call {
+                func: fname.clone(),
+                args: args.iter().map(|a| self.build_val(*a)).collect(),
+            },
+            Op::CallIndirect { callee, args } => Expr::CallIndirect {
+                callee: Box::new(self.build_val(*callee)),
+                args: args.iter().map(|a| self.build_val(*a)).collect(),
+            },
+            Op::SystemCall {
+                system,
+                method,
+                args,
+            } => Expr::SystemCall {
+                system: system.clone(),
+                method: method.clone(),
+                args: args.iter().map(|a| self.build_val(*a)).collect(),
+            },
+
+            Op::Cast(v, ty) => {
+                if self
+                    .func
+                    .value_types
+                    .get(*v)
+                    .map(|t| t == ty)
+                    .unwrap_or(false)
+                {
+                    self.build_val(*v)
+                } else {
+                    Expr::Cast {
+                        expr: Box::new(self.build_val(*v)),
+                        ty: ty.clone(),
+                    }
+                }
+            }
+            Op::TypeCheck(v, ty) => Expr::TypeCheck {
+                expr: Box::new(self.build_val(*v)),
+                ty: ty.clone(),
+            },
+
+            Op::StructInit { name, fields } => Expr::StructInit {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, v)| (n.clone(), self.build_val(*v)))
+                    .collect(),
+            },
+            Op::ArrayInit(elems) => {
+                Expr::ArrayInit(elems.iter().map(|v| self.build_val(*v)).collect())
+            }
+            Op::TupleInit(elems) => {
+                Expr::TupleInit(elems.iter().map(|v| self.build_val(*v)).collect())
+            }
+
+            Op::Yield(v) => Expr::Yield(v.map(|yv| Box::new(self.build_val(yv)))),
+            Op::CoroutineCreate {
+                func: fname,
+                args,
+            } => Expr::CoroutineCreate {
+                func: fname.clone(),
+                args: args.iter().map(|a| self.build_val(*a)).collect(),
+            },
+            Op::CoroutineResume(v) => Expr::CoroutineResume(Box::new(self.build_val(*v))),
+
+            Op::GlobalRef(name) => Expr::GlobalRef(name.clone()),
+            Op::Copy(src) => self.build_val(*src),
+
+            Op::Br { .. }
+            | Op::BrIf { .. }
+            | Op::Switch { .. }
+            | Op::Return(_)
+            | Op::Alloc(_)
+            | Op::Store { .. }
+            | Op::SetField { .. }
+            | Op::SetIndex { .. } => return None,
+        })
+    }
+
+    /// Negate a condition: invert Cmp if lazy-inlined, else wrap in Not.
+    fn negate_cond(&mut self, cond: ValueId) -> Expr {
+        if let Some(&inst_id) = self.pending_lazy.get(&cond) {
+            if let Op::Cmp(kind, a, b) = &self.func.insts[inst_id].op {
+                let a = *a;
+                let b = *b;
+                let kind = kind.inverse();
+                self.pending_lazy.remove(&cond);
+                return Expr::Cmp {
+                    kind,
+                    lhs: Box::new(self.build_val(a)),
+                    rhs: Box::new(self.build_val(b)),
+                };
+            }
+        }
+        Expr::Not(Box::new(self.build_val(cond)))
+    }
+
+    /// Flush all pending side-effecting inline expressions as statements.
+    fn flush_side_effecting_inlines(&mut self, stmts: &mut Vec<Stmt>) {
+        let to_flush: Vec<ValueId> = self.side_effecting_inlines.keys().copied().collect();
+        for v in to_flush {
+            let expr = self.side_effecting_inlines.remove(&v).unwrap();
+            self.se_flush_declared.insert(v);
+            let name = self.value_name(v);
+            if self.shared_names.contains(&name) {
+                stmts.push(Stmt::Assign {
+                    target: Expr::Var(name),
+                    value: expr,
+                });
+            } else {
+                stmts.push(Stmt::VarDecl {
+                    name,
+                    ty: None,
+                    init: Some(expr),
+                    mutable: false,
+                });
+            }
+        }
+    }
+
+    /// Flush deferred memory-read lazy inlines into real statements.
+    fn flush_pending_reads(&mut self, stmts: &mut Vec<Stmt>) {
+        let to_flush: Vec<(ValueId, InstId)> = self
+            .pending_lazy
+            .iter()
+            .filter(|(_, &iid)| {
+                matches!(
+                    self.func.insts[iid].op,
+                    Op::GetField { .. } | Op::GetIndex { .. } | Op::Load(..)
+                )
+            })
+            .map(|(&v, &iid)| (v, iid))
+            .collect();
+
+        for (v, iid) in to_flush {
+            self.pending_lazy.remove(&v);
+            let op = self.func.insts[iid].op.clone();
+            if let Some(expr) = self.build_expr_from_op(&op) {
+                let name = self.value_name(v);
+                if self.shared_names.contains(&name) {
+                    stmts.push(Stmt::Assign {
+                        target: Expr::Var(name),
+                        value: expr,
+                    });
+                } else {
+                    stmts.push(Stmt::VarDecl {
+                        name,
+                        ty: None,
+                        init: Some(expr),
+                        mutable: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Either inline a single-use expression or emit it as a statement.
+    fn emit_or_inline(&mut self, v: ValueId, expr: Expr, stmts: &mut Vec<Stmt>) {
+        let count = self.use_count(v);
+        if count == 1 {
+            self.side_effecting_inlines.insert(v, expr);
+        } else if count == 0 {
+            stmts.push(Stmt::Expr(expr));
+        } else {
+            self.referenced_block_params.insert(v);
+            stmts.push(Stmt::Assign {
+                target: Expr::Var(self.value_name(v)),
+                value: expr,
+            });
+        }
+    }
+
+    /// Collect block-param declarations for non-entry blocks.
+    fn collect_block_param_decls(&self) -> Vec<Stmt> {
+        let mut decls = Vec::new();
+        let mut declared = HashSet::new();
+        for p in &self.func.blocks[self.func.entry].params {
+            declared.insert(self.value_name(p.value));
+        }
+        for (block_id, block) in self.func.blocks.iter() {
+            if block_id == self.func.entry {
+                continue;
+            }
+            for param in &block.params {
+                let name = self.value_name(param.value);
+                if self.referenced_block_params.contains(&param.value)
+                    && declared.insert(name.clone())
+                {
+                    decls.push(Stmt::VarDecl {
+                        name,
+                        ty: Some(param.ty.clone()),
+                        init: None,
+                        mutable: true,
+                    });
+                }
+            }
+        }
+        decls
+    }
+
+    fn build_params(&self) -> Vec<(String, Type)> {
+        self.func.blocks[self.func.entry]
+            .params
+            .iter()
+            .map(|p| (self.value_name(p.value), p.ty.clone()))
+            .collect()
+    }
+
+    // -------------------------------------------------------------------
+    // Statement emission
+    // -------------------------------------------------------------------
+
+    fn emit_stmts(&mut self, stmts: &[LinearStmt]) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        self.emit_stmts_into(stmts, &mut out);
+        out
+    }
+
+    fn emit_stmts_into(&mut self, stmts: &[LinearStmt], out: &mut Vec<Stmt>) {
+        for stmt in stmts {
+            self.emit_one(stmt, out);
+        }
+    }
+
+    fn emit_one(&mut self, stmt: &LinearStmt, stmts: &mut Vec<Stmt>) {
+        match stmt {
+            LinearStmt::Def { result, inst_id } => self.emit_def(*result, *inst_id, stmts),
+            LinearStmt::Effect { inst_id } => self.emit_effect(*inst_id, stmts),
+            LinearStmt::Assign { dst, src } => self.emit_assign(*dst, *src, stmts),
+            LinearStmt::Return { value } => {
+                stmts.push(Stmt::Return(value.map(|v| self.build_val(v))));
+            }
+            LinearStmt::Break => stmts.push(Stmt::Break),
+            LinearStmt::Continue => stmts.push(Stmt::Continue),
+            LinearStmt::LabeledBreak { depth } => {
+                stmts.push(Stmt::LabeledBreak { depth: *depth });
+            }
+            LinearStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => self.emit_if(*cond, then_body, else_body, stmts),
+            LinearStmt::While {
+                header,
+                cond,
+                cond_negated,
+                body,
+            } => self.emit_while(header, *cond, *cond_negated, body, stmts),
+            LinearStmt::For {
+                init,
+                header,
+                cond,
+                cond_negated,
+                update,
+                body,
+            } => self.emit_for(init, header, *cond, *cond_negated, update, body, stmts),
+            LinearStmt::Loop { body } => {
+                let body_stmts = self.emit_stmts(body);
+                stmts.push(Stmt::Loop { body: body_stmts });
+            }
+            LinearStmt::LogicalOr {
+                cond,
+                phi,
+                rhs_body,
+                rhs,
+            } => self.emit_logical_or(*cond, *phi, rhs_body, *rhs, stmts),
+            LinearStmt::LogicalAnd {
+                cond,
+                phi,
+                rhs_body,
+                rhs,
+            } => self.emit_logical_and(*cond, *phi, rhs_body, *rhs, stmts),
+            LinearStmt::Dispatch { blocks, entry } => {
+                let mut dispatch_blocks = Vec::new();
+                for (id, block_stmts) in blocks {
+                    let emitted = self.emit_stmts(block_stmts);
+                    dispatch_blocks.push((*id, emitted));
+                }
+                stmts.push(Stmt::Dispatch {
+                    blocks: dispatch_blocks,
+                    entry: *entry,
+                });
+            }
+        }
+    }
+
+    fn emit_def(&mut self, result: ValueId, inst_id: InstId, stmts: &mut Vec<Stmt>) {
+        let op = &self.func.insts[inst_id].op;
+
+        // Phase 2 classified — defer or skip.
+        if self.resolve.constant_inlines.contains_key(&result) {
+            return;
+        }
+        if self.resolve.always_inlines.contains(&result) {
+            self.always_inline_map.insert(result, inst_id);
+            return;
+        }
+        if self.resolve.lazy_inlines.contains(&result) {
+            self.pending_lazy.insert(result, inst_id);
+            return;
+        }
+
+        let count = self.use_count(result);
+
+        // Dead pure.
+        if count == 0 && is_deferrable(op) {
+            return;
+        }
+
+        // Alloc → VarDecl.
+        if let Op::Alloc(ty) = op {
+            let init = self
+                .resolve
+                .alloc_inits
+                .get(&result)
+                .map(|iv| self.build_val(*iv));
+            stmts.push(Stmt::VarDecl {
+                name: self.value_name(result),
+                ty: Some(ty.clone()),
+                init,
+                mutable: true,
+            });
+            return;
+        }
+
+        // Build expression.
+        let op_clone = op.clone();
+        let expr = self
+            .build_expr_from_op(&op_clone)
+            .unwrap_or_else(|| Expr::Var(self.value_name(result)));
+        let side_effecting = is_side_effecting_op(&op_clone);
+
+        if count == 0 && side_effecting {
+            stmts.push(Stmt::Expr(expr));
+        } else if count == 1 && side_effecting {
+            self.side_effecting_inlines.insert(result, expr);
+        } else {
+            let name = self.value_name(result);
+            if self.shared_names.contains(&name) {
+                stmts.push(Stmt::Assign {
+                    target: Expr::Var(name),
+                    value: expr,
+                });
+            } else {
+                stmts.push(Stmt::VarDecl {
+                    name,
+                    ty: None,
+                    init: Some(expr),
+                    mutable: false,
+                });
+            }
+        }
+    }
+
+    fn emit_effect(&mut self, inst_id: InstId, stmts: &mut Vec<Stmt>) {
+        let op = &self.func.insts[inst_id].op;
+
+        // Flush pending reads before memory writes.
+        if is_memory_write(op) {
+            self.flush_pending_reads(stmts);
+        }
+
+        // Skip merged stores.
+        if self.resolve.skip_stores.contains(&inst_id) {
+            return;
+        }
+
+        let op = self.func.insts[inst_id].op.clone();
+        match &op {
+            Op::Store { ptr, value } => {
+                let target = self.build_val(*ptr);
+                let val = self.build_val(*value);
+                stmts.push(Stmt::Assign { target, value: val });
+            }
+            Op::SetField {
+                object,
+                field,
+                value,
+            } => {
+                let target = Expr::Field {
+                    object: Box::new(self.build_val(*object)),
+                    field: field.clone(),
+                };
+                let val = self.build_val(*value);
+                stmts.push(Stmt::Assign { target, value: val });
+            }
+            Op::SetIndex {
+                collection,
+                index,
+                value,
+            } => {
+                let target = Expr::Index {
+                    collection: Box::new(self.build_val(*collection)),
+                    index: Box::new(self.build_val(*index)),
+                };
+                let val = self.build_val(*value);
+                stmts.push(Stmt::Assign { target, value: val });
+            }
+            // Skip terminators in dispatch blocks.
+            Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => {}
+            _ => {
+                if let Some(expr) = self.build_expr_from_op(&op) {
+                    stmts.push(Stmt::Expr(expr));
+                }
+            }
+        }
+    }
+
+    fn emit_assign(&mut self, dst: ValueId, src: ValueId, stmts: &mut Vec<Stmt>) {
+        let target_name = self.value_name(dst);
+        let value = self.build_val(src);
+        // Skip self-assignment (coalesced values share the target name).
+        if matches!(&value, Expr::Var(name) if name == &target_name) {
+            return;
+        }
+        self.referenced_block_params.insert(dst);
+        stmts.push(Stmt::Assign {
+            target: Expr::Var(target_name),
+            value,
+        });
+    }
+
+    fn emit_if(
+        &mut self,
+        cond: ValueId,
+        then_body: &[LinearStmt],
+        else_body: &[LinearStmt],
+        stmts: &mut Vec<Stmt>,
+    ) {
+        self.flush_side_effecting_inlines(stmts);
+        let cond_expr = self.build_val(cond);
+
+        let then_stmts = self.emit_stmts(then_body);
+        let else_stmts = self.emit_stmts(else_body);
+
+        let then_empty = then_stmts.is_empty();
+        let else_empty = else_stmts.is_empty();
+
+        match (then_empty, else_empty) {
+            (true, true) => {}
+            (false, true) => {
+                stmts.push(Stmt::If {
+                    cond: cond_expr,
+                    then_body: then_stmts,
+                    else_body: Vec::new(),
+                });
+            }
+            (true, false) => {
+                let neg = Expr::Not(Box::new(cond_expr));
+                stmts.push(Stmt::If {
+                    cond: neg,
+                    then_body: else_stmts,
+                    else_body: Vec::new(),
+                });
+            }
+            (false, false) => {
+                stmts.push(Stmt::If {
+                    cond: cond_expr,
+                    then_body: then_stmts,
+                    else_body: else_stmts,
+                });
+            }
+        }
+    }
+
+    fn emit_while(
+        &mut self,
+        header: &[LinearStmt],
+        cond: ValueId,
+        cond_negated: bool,
+        body: &[LinearStmt],
+        stmts: &mut Vec<Stmt>,
+    ) {
+        let mut header_stmts = Vec::new();
+        self.emit_stmts_into(header, &mut header_stmts);
+
+        if self.config.while_condition_hoisting && header_stmts.is_empty() {
+            let cond_expr = if cond_negated {
+                self.negate_cond(cond)
+            } else {
+                self.build_val(cond)
+            };
+            let mut body_stmts = self.emit_stmts(body);
+            strip_trailing_continue(&mut body_stmts);
+            stmts.push(Stmt::While {
+                cond: cond_expr,
+                body: body_stmts,
+            });
+        } else {
+            let break_expr = if cond_negated {
+                self.build_val(cond)
+            } else {
+                self.negate_cond(cond)
+            };
+            header_stmts.push(Stmt::If {
+                cond: break_expr,
+                then_body: vec![Stmt::Break],
+                else_body: Vec::new(),
+            });
+            let mut body_stmts = self.emit_stmts(body);
+            strip_trailing_continue(&mut body_stmts);
+            header_stmts.append(&mut body_stmts);
+            stmts.push(Stmt::Loop { body: header_stmts });
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_for(
+        &mut self,
+        init: &[LinearStmt],
+        header: &[LinearStmt],
+        cond: ValueId,
+        cond_negated: bool,
+        update: &[LinearStmt],
+        body: &[LinearStmt],
+        stmts: &mut Vec<Stmt>,
+    ) {
+        // Emit init assigns.
+        self.emit_stmts_into(init, stmts);
+
+        let mut header_stmts = Vec::new();
+        self.emit_stmts_into(header, &mut header_stmts);
+
+        if self.config.while_condition_hoisting && header_stmts.is_empty() {
+            let cond_expr = if cond_negated {
+                self.negate_cond(cond)
+            } else {
+                self.build_val(cond)
+            };
+            let mut body_stmts = self.emit_stmts(body);
+            strip_trailing_continue(&mut body_stmts);
+            self.emit_stmts_into(update, &mut body_stmts);
+            stmts.push(Stmt::While {
+                cond: cond_expr,
+                body: body_stmts,
+            });
+        } else {
+            let break_expr = if cond_negated {
+                self.build_val(cond)
+            } else {
+                self.negate_cond(cond)
+            };
+            header_stmts.push(Stmt::If {
+                cond: break_expr,
+                then_body: vec![Stmt::Break],
+                else_body: Vec::new(),
+            });
+            let mut body_stmts = self.emit_stmts(body);
+            strip_trailing_continue(&mut body_stmts);
+            header_stmts.append(&mut body_stmts);
+            self.emit_stmts_into(update, &mut header_stmts);
+            stmts.push(Stmt::Loop { body: header_stmts });
+        }
+    }
+
+    fn emit_logical_or(
+        &mut self,
+        cond: ValueId,
+        phi: ValueId,
+        rhs_body: &[LinearStmt],
+        rhs: ValueId,
+        stmts: &mut Vec<Stmt>,
+    ) {
+        // Save SE inlines from header to prevent leaking into rhs_body.
+        let saved_se = std::mem::take(&mut self.side_effecting_inlines);
+        let body_stmts = self.emit_stmts(rhs_body);
+        let rhs_se = std::mem::replace(&mut self.side_effecting_inlines, saved_se);
+        self.side_effecting_inlines.extend(rhs_se);
+
+        if self.config.logical_operators && body_stmts.is_empty() {
+            let expr = Expr::LogicalOr {
+                lhs: Box::new(self.build_val(cond)),
+                rhs: Box::new(self.build_val(rhs)),
+            };
+            self.emit_or_inline(phi, expr, stmts);
+        } else {
+            let cond_expr = self.build_val(cond);
+            let then_stmts = vec![Stmt::Assign {
+                target: Expr::Var(self.value_name(phi)),
+                value: self.build_val(cond),
+            }];
+            let mut else_stmts = body_stmts;
+            else_stmts.push(Stmt::Assign {
+                target: Expr::Var(self.value_name(phi)),
+                value: self.build_val(rhs),
+            });
+            self.referenced_block_params.insert(phi);
+            stmts.push(Stmt::If {
+                cond: cond_expr,
+                then_body: then_stmts,
+                else_body: else_stmts,
+            });
+        }
+    }
+
+    fn emit_logical_and(
+        &mut self,
+        cond: ValueId,
+        phi: ValueId,
+        rhs_body: &[LinearStmt],
+        rhs: ValueId,
+        stmts: &mut Vec<Stmt>,
+    ) {
+        let saved_se = std::mem::take(&mut self.side_effecting_inlines);
+        let body_stmts = self.emit_stmts(rhs_body);
+        let rhs_se = std::mem::replace(&mut self.side_effecting_inlines, saved_se);
+        self.side_effecting_inlines.extend(rhs_se);
+
+        if self.config.logical_operators && body_stmts.is_empty() {
+            let expr = Expr::LogicalAnd {
+                lhs: Box::new(self.build_val(cond)),
+                rhs: Box::new(self.build_val(rhs)),
+            };
+            self.emit_or_inline(phi, expr, stmts);
+        } else {
+            let cond_expr = self.build_val(cond);
+            let mut then_stmts = body_stmts;
+            then_stmts.push(Stmt::Assign {
+                target: Expr::Var(self.value_name(phi)),
+                value: self.build_val(rhs),
+            });
+            let else_stmts = vec![Stmt::Assign {
+                target: Expr::Var(self.value_name(phi)),
+                value: self.build_val(cond),
+            }];
+            self.referenced_block_params.insert(phi);
+            stmts.push(Stmt::If {
+                cond: cond_expr,
+                then_body: then_stmts,
+                else_body: else_stmts,
+            });
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Side-effect classification
+// -----------------------------------------------------------------------
+
+fn is_side_effecting_op(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Call { .. }
+            | Op::CallIndirect { .. }
+            | Op::SystemCall { .. }
+            | Op::Yield(..)
+            | Op::CoroutineResume(..)
+    )
+}
+
+fn is_memory_write(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::SetField { .. } | Op::SetIndex { .. } | Op::Store { .. }
+    )
+}
+
+// -----------------------------------------------------------------------
+// Trailing statement stripping
+// -----------------------------------------------------------------------
+
+fn strip_trailing_continue(stmts: &mut Vec<Stmt>) {
+    if matches!(stmts.last(), Some(Stmt::Continue)) {
+        stmts.pop();
+    }
+}
+
+fn strip_trailing_void_return(stmts: &mut Vec<Stmt>) {
+    if matches!(stmts.last(), Some(Stmt::Return(None))) {
+        stmts.pop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,5 +2081,114 @@ mod tests {
         assert!(!ctx.lazy_inlines.contains(&sum));
         // doubled has 1 use — should be lazy-inlined.
         assert!(ctx.lazy_inlines.contains(&doubled));
+    }
+
+    // -- Phase 3 (full pipeline) tests --
+
+    #[test]
+    fn full_pipeline_simple_add() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("add", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let sum = fb.add(a, b);
+        fb.ret(Some(sum));
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        assert_eq!(ast.name, "add");
+        assert_eq!(ast.params.len(), 2);
+        // Single-use sum should be inlined into return.
+        assert_eq!(ast.body.len(), 1);
+        assert!(matches!(
+            &ast.body[0],
+            Stmt::Return(Some(Expr::Binary {
+                op: BinOp::Add,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn full_pipeline_constant_inlining() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let c = fb.const_int(42);
+        let sum = fb.add(a, c);
+        fb.ret(Some(sum));
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Constant and sum both inlined into return.
+        assert_eq!(ast.body.len(), 1);
+        match &ast.body[0] {
+            Stmt::Return(Some(Expr::Binary { rhs, .. })) => {
+                assert!(matches!(rhs.as_ref(), Expr::Literal(Constant::Int(42))));
+            }
+            other => panic!("Expected return with binary, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_pipeline_dead_pure_eliminated() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let _dead = fb.add(a, b);
+        fb.ret(None);
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        assert!(ast.body.is_empty(), "Expected empty body, got: {:?}", ast.body);
+    }
+
+    #[test]
+    fn full_pipeline_if_else() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("choose", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let x = fb.param(1);
+        let y = fb.param(2);
+
+        let (then_block, then_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let (else_block, else_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        fb.br_if(cond, then_block, &[x], else_block, &[y]);
+
+        fb.switch_to_block(then_block);
+        fb.ret(Some(then_vals[0]));
+
+        fb.switch_to_block(else_block);
+        fb.ret(Some(else_vals[0]));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        assert!(!ast.body.is_empty());
     }
 }
