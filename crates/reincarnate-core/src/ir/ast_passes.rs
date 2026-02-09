@@ -63,6 +63,12 @@ fn match_ternary(cond: &Expr, then_body: &[Stmt], else_body: &[Stmt]) -> Option<
         return None;
     }
 
+    // Skip identity-branch ternaries where one side is just the target variable
+    // (e.g. `x = cond ? x : y` → better as `if (!cond) { x = y; }`).
+    if then_value == then_target || else_value == then_target {
+        return None;
+    }
+
     Some(Stmt::Assign {
         target: then_target.clone(),
         value: Expr::Ternary {
