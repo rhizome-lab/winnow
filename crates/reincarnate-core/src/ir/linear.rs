@@ -19,12 +19,15 @@
 
 #![allow(dead_code)] // Phases 2 & 3 will consume these types.
 
+use std::collections::{HashMap, HashSet};
+
 use super::func::Function;
 use super::inst::{InstId, Op};
 use super::structurize::{BlockArgAssign, Shape};
-use super::value::ValueId;
+use super::value::{Constant, ValueId};
 
 use crate::entity::EntityRef;
+use crate::transforms::util::value_operands;
 
 // -----------------------------------------------------------------------
 // LinearStmt — structured IR with ValueId/InstId references
@@ -384,6 +387,542 @@ fn emit_arg_assigns(assigns: &[BlockArgAssign], out: &mut Vec<LinearStmt>) {
     }
 }
 
+// -----------------------------------------------------------------------
+// Phase 2: resolve — classify values for inlining
+// -----------------------------------------------------------------------
+
+/// Output of Phase 2: inlining classification for Phase 3.
+pub(crate) struct ResolveCtx {
+    /// Use counts after dead-code fixpoint.
+    pub use_counts: HashMap<ValueId, usize>,
+    /// Constants — always inlined, not consumed on read.
+    pub constant_inlines: HashMap<ValueId, Constant>,
+    /// Always-rebuild instructions (scope lookups + cascade).
+    pub always_inlines: HashSet<ValueId>,
+    /// Pure single-use values — consumed once at use site.
+    pub lazy_inlines: HashSet<ValueId>,
+    /// Alloc results with merged immediately-following Store.
+    pub alloc_inits: HashMap<ValueId, ValueId>,
+    /// Store InstIds merged into their preceding Alloc.
+    pub skip_stores: HashSet<InstId>,
+}
+
+/// Classify all values in linearized IR for inlining decisions.
+///
+/// Computes use counts from LinearStmt (not raw IR — terminators like
+/// Br/BrIf/Switch are absent, so their operand uses aren't counted). Runs
+/// dead-code elimination to fixpoint, then classifies each Def as constant,
+/// always-inline, lazy-inline, or materialized.
+pub(crate) fn resolve(func: &Function, stmts: &[LinearStmt]) -> ResolveCtx {
+    // Step 1: compute use counts from LinearStmt.
+    let mut use_counts = HashMap::new();
+    count_uses_in_stmts(func, stmts, &mut use_counts);
+
+    // Step 2: dead code elimination fixpoint.
+    // Removing dead pure Defs decrements their operands' counts, which can
+    // make previously multi-use values single-use (or dead). Iterate until
+    // stable — typically converges in 2-3 passes.
+    let mut dead: HashSet<ValueId> = HashSet::new();
+    loop {
+        let mut changed = false;
+        collect_dead_uses(func, stmts, &mut use_counts, &mut dead, &mut changed);
+        if !changed {
+            break;
+        }
+    }
+
+    // Step 3: classify remaining Defs.
+    let mut constant_inlines = HashMap::new();
+    let mut always_inlines = HashSet::new();
+    let mut lazy_inlines = HashSet::new();
+    classify_defs(
+        func,
+        stmts,
+        &use_counts,
+        &mut constant_inlines,
+        &mut always_inlines,
+        &mut lazy_inlines,
+    );
+
+    // Step 4: detect adjacent Alloc+Store patterns for merged init.
+    let (alloc_inits, skip_stores) = find_alloc_store_merges(func, stmts);
+
+    ResolveCtx {
+        use_counts,
+        constant_inlines,
+        always_inlines,
+        lazy_inlines,
+        alloc_inits,
+        skip_stores,
+    }
+}
+
+// -----------------------------------------------------------------------
+// Use counting
+// -----------------------------------------------------------------------
+
+/// Count value uses across all LinearStmts recursively.
+fn count_uses_in_stmts(
+    func: &Function,
+    stmts: &[LinearStmt],
+    counts: &mut HashMap<ValueId, usize>,
+) {
+    for stmt in stmts {
+        match stmt {
+            LinearStmt::Def { inst_id, .. } | LinearStmt::Effect { inst_id } => {
+                for v in value_operands(&func.insts[*inst_id].op) {
+                    *counts.entry(v).or_default() += 1;
+                }
+            }
+            LinearStmt::Assign { src, .. } => {
+                *counts.entry(*src).or_default() += 1;
+            }
+            LinearStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                *counts.entry(*cond).or_default() += 1;
+                count_uses_in_stmts(func, then_body, counts);
+                count_uses_in_stmts(func, else_body, counts);
+            }
+            LinearStmt::While {
+                header,
+                cond,
+                body,
+                ..
+            } => {
+                count_uses_in_stmts(func, header, counts);
+                *counts.entry(*cond).or_default() += 1;
+                count_uses_in_stmts(func, body, counts);
+            }
+            LinearStmt::For {
+                init,
+                header,
+                cond,
+                update,
+                body,
+                ..
+            } => {
+                count_uses_in_stmts(func, init, counts);
+                count_uses_in_stmts(func, header, counts);
+                *counts.entry(*cond).or_default() += 1;
+                count_uses_in_stmts(func, update, counts);
+                count_uses_in_stmts(func, body, counts);
+            }
+            LinearStmt::Loop { body } => {
+                count_uses_in_stmts(func, body, counts);
+            }
+            LinearStmt::Return { value } => {
+                if let Some(v) = value {
+                    *counts.entry(*v).or_default() += 1;
+                }
+            }
+            // LogicalOr/And: cond counted 2x (condition check + possible
+            // branch assignment in non-short-circuit path). Conservative;
+            // fold_single_use_consts recovers the inline in short-circuit.
+            LinearStmt::LogicalOr {
+                cond,
+                rhs_body,
+                rhs,
+                ..
+            }
+            | LinearStmt::LogicalAnd {
+                cond,
+                rhs_body,
+                rhs,
+                ..
+            } => {
+                *counts.entry(*cond).or_default() += 2;
+                count_uses_in_stmts(func, rhs_body, counts);
+                *counts.entry(*rhs).or_default() += 1;
+            }
+            LinearStmt::Dispatch { blocks, .. } => {
+                for (_, block_stmts) in blocks {
+                    count_uses_in_stmts(func, block_stmts, counts);
+                }
+            }
+            LinearStmt::Break | LinearStmt::Continue | LinearStmt::LabeledBreak { .. } => {}
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Dead code fixpoint
+// -----------------------------------------------------------------------
+
+/// Find dead deferrable Defs and decrement their operands' use counts.
+/// Sets `changed` if any new dead values were found.
+fn collect_dead_uses(
+    func: &Function,
+    stmts: &[LinearStmt],
+    counts: &mut HashMap<ValueId, usize>,
+    dead: &mut HashSet<ValueId>,
+    changed: &mut bool,
+) {
+    for stmt in stmts {
+        match stmt {
+            LinearStmt::Def { result, inst_id } => {
+                if dead.contains(result) {
+                    continue;
+                }
+                let count = counts.get(result).copied().unwrap_or(0);
+                let op = &func.insts[*inst_id].op;
+                if count == 0 && is_deferrable(op) {
+                    dead.insert(*result);
+                    for v in value_operands(op) {
+                        if let Some(c) = counts.get_mut(&v) {
+                            *c = c.saturating_sub(1);
+                        }
+                    }
+                    *changed = true;
+                }
+            }
+            LinearStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_dead_uses(func, then_body, counts, dead, changed);
+                collect_dead_uses(func, else_body, counts, dead, changed);
+            }
+            LinearStmt::While { header, body, .. } => {
+                collect_dead_uses(func, header, counts, dead, changed);
+                collect_dead_uses(func, body, counts, dead, changed);
+            }
+            LinearStmt::For {
+                init,
+                header,
+                update,
+                body,
+                ..
+            } => {
+                collect_dead_uses(func, init, counts, dead, changed);
+                collect_dead_uses(func, header, counts, dead, changed);
+                collect_dead_uses(func, update, counts, dead, changed);
+                collect_dead_uses(func, body, counts, dead, changed);
+            }
+            LinearStmt::Loop { body } => {
+                collect_dead_uses(func, body, counts, dead, changed);
+            }
+            LinearStmt::LogicalOr { rhs_body, .. }
+            | LinearStmt::LogicalAnd { rhs_body, .. } => {
+                collect_dead_uses(func, rhs_body, counts, dead, changed);
+            }
+            LinearStmt::Dispatch { blocks, .. } => {
+                for (_, block_stmts) in blocks {
+                    collect_dead_uses(func, block_stmts, counts, dead, changed);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Classification
+// -----------------------------------------------------------------------
+
+/// Whether an instruction is pure enough to defer for inlining.
+fn is_deferrable(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Const(_)
+            | Op::Add(..)
+            | Op::Sub(..)
+            | Op::Mul(..)
+            | Op::Div(..)
+            | Op::Rem(..)
+            | Op::Neg(..)
+            | Op::Not(..)
+            | Op::BitAnd(..)
+            | Op::BitOr(..)
+            | Op::BitXor(..)
+            | Op::BitNot(..)
+            | Op::Shl(..)
+            | Op::Shr(..)
+            | Op::Cmp(..)
+            | Op::Cast(..)
+            | Op::Copy(..)
+            | Op::GetField { .. }
+            | Op::GetIndex { .. }
+            | Op::Load(..)
+            | Op::Select { .. }
+            | Op::ArrayInit(..)
+            | Op::TupleInit(..)
+            | Op::StructInit { .. }
+            | Op::GlobalRef(..)
+            | Op::TypeCheck(..)
+    )
+}
+
+/// Scope-lookup calls are pure metadata — always rebuild so consumption
+/// sites (Field, Call) can detect and resolve them.
+fn is_scope_lookup_op(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::SystemCall { system, method, .. }
+            if system == "Flash.Scope"
+                && (method == "findPropStrict" || method == "findProperty")
+    )
+}
+
+/// Classify non-dead Defs into constant, always-inline, or lazy-inline.
+/// Processes stmts sequentially so always-inline cascade works.
+fn classify_defs(
+    func: &Function,
+    stmts: &[LinearStmt],
+    counts: &HashMap<ValueId, usize>,
+    constant_inlines: &mut HashMap<ValueId, Constant>,
+    always_inlines: &mut HashSet<ValueId>,
+    lazy_inlines: &mut HashSet<ValueId>,
+) {
+    for stmt in stmts {
+        match stmt {
+            LinearStmt::Def { result, inst_id } => {
+                let count = counts.get(result).copied().unwrap_or(0);
+                let op = &func.insts[*inst_id].op;
+
+                // Dead pure — skip.
+                if count == 0 && is_deferrable(op) {
+                    continue;
+                }
+
+                // Constants always inlined.
+                if let Op::Const(c) = op {
+                    constant_inlines.insert(*result, c.clone());
+                    continue;
+                }
+
+                // Scope lookups always rebuilt.
+                if is_scope_lookup_op(op) {
+                    always_inlines.insert(*result);
+                    continue;
+                }
+
+                // Cascade: GetField/GetIndex on always-inlined object.
+                let object_always_inlined = match op {
+                    Op::GetField { object, .. }
+                    | Op::GetIndex {
+                        collection: object, ..
+                    } => always_inlines.contains(object),
+                    _ => false,
+                };
+                if object_always_inlined {
+                    always_inlines.insert(*result);
+                    continue;
+                }
+
+                // Single-use deferrable → lazy inline.
+                if count == 1 && is_deferrable(op) {
+                    lazy_inlines.insert(*result);
+                }
+            }
+            LinearStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                classify_defs(
+                    func,
+                    then_body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+                classify_defs(
+                    func,
+                    else_body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+            }
+            LinearStmt::While { header, body, .. } => {
+                classify_defs(
+                    func,
+                    header,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+                classify_defs(
+                    func,
+                    body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+            }
+            LinearStmt::For {
+                init,
+                header,
+                update,
+                body,
+                ..
+            } => {
+                classify_defs(
+                    func,
+                    init,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+                classify_defs(
+                    func,
+                    header,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+                classify_defs(
+                    func,
+                    update,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+                classify_defs(
+                    func,
+                    body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+            }
+            LinearStmt::Loop { body } => {
+                classify_defs(
+                    func,
+                    body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+            }
+            LinearStmt::LogicalOr { rhs_body, .. }
+            | LinearStmt::LogicalAnd { rhs_body, .. } => {
+                classify_defs(
+                    func,
+                    rhs_body,
+                    counts,
+                    constant_inlines,
+                    always_inlines,
+                    lazy_inlines,
+                );
+            }
+            LinearStmt::Dispatch { blocks, .. } => {
+                for (_, block_stmts) in blocks {
+                    classify_defs(
+                        func,
+                        block_stmts,
+                        counts,
+                        constant_inlines,
+                        always_inlines,
+                        lazy_inlines,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Alloc+Store merging
+// -----------------------------------------------------------------------
+
+/// Find adjacent Alloc+Store pairs where the Store immediately initializes
+/// the Alloc result. Returns the mapping and the set of merged Store InstIds.
+fn find_alloc_store_merges(
+    func: &Function,
+    stmts: &[LinearStmt],
+) -> (HashMap<ValueId, ValueId>, HashSet<InstId>) {
+    let mut alloc_inits = HashMap::new();
+    let mut skip_stores = HashSet::new();
+    scan_alloc_stores(func, stmts, &mut alloc_inits, &mut skip_stores);
+    (alloc_inits, skip_stores)
+}
+
+fn scan_alloc_stores(
+    func: &Function,
+    stmts: &[LinearStmt],
+    alloc_inits: &mut HashMap<ValueId, ValueId>,
+    skip_stores: &mut HashSet<InstId>,
+) {
+    for pair in stmts.windows(2) {
+        if let (
+            LinearStmt::Def {
+                result: alloc_r,
+                inst_id: alloc_iid,
+            },
+            LinearStmt::Effect {
+                inst_id: store_iid,
+            },
+        ) = (&pair[0], &pair[1])
+        {
+            if matches!(func.insts[*alloc_iid].op, Op::Alloc(_)) {
+                if let Op::Store { ptr, value } = &func.insts[*store_iid].op {
+                    if *ptr == *alloc_r {
+                        alloc_inits.insert(*alloc_r, *value);
+                        skip_stores.insert(*store_iid);
+                    }
+                }
+            }
+        }
+    }
+    // Recurse into nested bodies.
+    for stmt in stmts {
+        match stmt {
+            LinearStmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                scan_alloc_stores(func, then_body, alloc_inits, skip_stores);
+                scan_alloc_stores(func, else_body, alloc_inits, skip_stores);
+            }
+            LinearStmt::While { header, body, .. } => {
+                scan_alloc_stores(func, header, alloc_inits, skip_stores);
+                scan_alloc_stores(func, body, alloc_inits, skip_stores);
+            }
+            LinearStmt::For {
+                init,
+                header,
+                update,
+                body,
+                ..
+            } => {
+                scan_alloc_stores(func, init, alloc_inits, skip_stores);
+                scan_alloc_stores(func, header, alloc_inits, skip_stores);
+                scan_alloc_stores(func, update, alloc_inits, skip_stores);
+                scan_alloc_stores(func, body, alloc_inits, skip_stores);
+            }
+            LinearStmt::Loop { body } => {
+                scan_alloc_stores(func, body, alloc_inits, skip_stores);
+            }
+            LinearStmt::LogicalOr { rhs_body, .. }
+            | LinearStmt::LogicalAnd { rhs_body, .. } => {
+                scan_alloc_stores(func, rhs_body, alloc_inits, skip_stores);
+            }
+            LinearStmt::Dispatch { blocks, .. } => {
+                for (_, block_stmts) in blocks {
+                    scan_alloc_stores(func, block_stmts, alloc_inits, skip_stores);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +1014,104 @@ mod tests {
             Op::Const(Constant::Int(42)) => {}
             other => panic!("Expected Const(Int(42)), got {other:?}"),
         }
+    }
+
+    // -- Phase 2 tests --
+
+    #[test]
+    fn resolve_constant_classified() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let c = fb.const_int(42);
+        let sum = fb.add(a, c);
+        fb.ret(Some(sum));
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let linear = linearize(&func, &shape);
+        let ctx = resolve(&func, &linear);
+
+        assert!(ctx.constant_inlines.contains_key(&c));
+        assert!(ctx.lazy_inlines.contains(&sum));
+        assert_eq!(ctx.use_counts.get(&c).copied().unwrap_or(0), 1);
+    }
+
+    #[test]
+    fn resolve_dead_pure_eliminated() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let _dead = fb.add(a, b); // unused
+        fb.ret(None);
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let linear = linearize(&func, &shape);
+        let ctx = resolve(&func, &linear);
+
+        // Dead add: use_count == 0, not in any inline set.
+        assert_eq!(ctx.use_counts.get(&_dead).copied().unwrap_or(0), 0);
+        assert!(!ctx.lazy_inlines.contains(&_dead));
+        assert!(!ctx.constant_inlines.contains_key(&_dead));
+    }
+
+    #[test]
+    fn resolve_cascading_dead_code() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let sum = fb.add(a, b);
+        let _neg = fb.neg(sum); // unused; sum only used by neg
+        fb.ret(None);
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let linear = linearize(&func, &shape);
+        let ctx = resolve(&func, &linear);
+
+        // Both neg and sum should be dead after fixpoint.
+        assert_eq!(ctx.use_counts.get(&_neg).copied().unwrap_or(0), 0);
+        assert_eq!(ctx.use_counts.get(&sum).copied().unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn resolve_multi_use_not_lazy() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let sum = fb.add(a, b);
+        let doubled = fb.add(sum, sum); // sum used twice
+        fb.ret(Some(doubled));
+        let func = fb.build();
+
+        let shape = Shape::Block(func.entry);
+        let linear = linearize(&func, &shape);
+        let ctx = resolve(&func, &linear);
+
+        // sum has 2 uses — should NOT be lazy-inlined.
+        assert_eq!(ctx.use_counts.get(&sum).copied().unwrap_or(0), 2);
+        assert!(!ctx.lazy_inlines.contains(&sum));
+        // doubled has 1 use — should be lazy-inlined.
+        assert!(ctx.lazy_inlines.contains(&doubled));
     }
 }
