@@ -53,6 +53,7 @@ pub fn lower_function(func: &Function, shape: &Shape, config: &LoweringConfig) -
     }
     ast_passes::fold_single_use_consts(&mut full_body);
     ast_passes::rewrite_compound_assign(&mut full_body);
+    ast_passes::eliminate_self_assigns(&mut full_body);
     ast_passes::merge_decl_init(&mut full_body);
 
     AstFunction {
@@ -1398,10 +1399,6 @@ fn lower_arg_assigns(
     for assign in assigns {
         let target_name = ctx.value_name(assign.dst);
         let value = ctx.build_val(func, assign.src);
-        // Skip self-assignment (coalesced values share the target name).
-        if matches!(&value, Expr::Var(name) if name == &target_name) {
-            continue;
-        }
         ctx.referenced_block_params.insert(assign.dst);
         stmts.push(Stmt::Assign {
             target: Expr::Var(target_name),

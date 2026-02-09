@@ -830,6 +830,54 @@ fn expr_references_var(expr: &Expr, name: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Self-assignment elimination
+// ---------------------------------------------------------------------------
+
+/// Remove no-op self-assignments (`x = x;`) produced by out-of-SSA coalescing.
+///
+/// When multiple SSA values share a name, pass-through branches emit `x = x`
+/// which is a no-op. This must run AFTER ternary detection so that pass-through
+/// branches are available for ternary pattern matching.
+pub fn eliminate_self_assigns(body: &mut Vec<Stmt>) {
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                eliminate_self_assigns(then_body);
+                eliminate_self_assigns(else_body);
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body } => {
+                eliminate_self_assigns(body);
+            }
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                eliminate_self_assigns(init);
+                eliminate_self_assigns(update);
+                eliminate_self_assigns(body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    eliminate_self_assigns(block_body);
+                }
+            }
+            _ => {}
+        }
+    }
+    body.retain(|stmt| !is_self_assign(stmt));
+}
+
+fn is_self_assign(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Assign { target: Expr::Var(t), value: Expr::Var(v) } if t == v)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
