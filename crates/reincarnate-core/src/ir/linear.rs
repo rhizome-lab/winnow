@@ -988,8 +988,19 @@ pub fn lower_function_linear(
         ast_passes::rewrite_minmax(&mut full_body);
     }
     ast_passes::eliminate_self_assigns(&mut full_body);
-    ast_passes::merge_decl_init(&mut full_body);
-    ast_passes::fold_single_use_consts(&mut full_body);
+
+    // Fixpoint: narrowing enables merge, merge enables fold, fold may remove
+    // statements that enable further narrowing.
+    loop {
+        let before = ast_passes::count_stmts(&full_body);
+        ast_passes::narrow_var_scope(&mut full_body);
+        ast_passes::merge_decl_init(&mut full_body);
+        ast_passes::fold_single_use_consts(&mut full_body);
+        if ast_passes::count_stmts(&full_body) == before {
+            break;
+        }
+    }
+
     ast_passes::rewrite_compound_assign(&mut full_body);
 
     AstFunction {

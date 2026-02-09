@@ -894,9 +894,9 @@ mod tests {
         // Structured output: if/else instead of dispatch loop.
         assert!(!out.contains("$block"), "Should not use dispatch loop:\n{out}");
         assert!(out.contains("if (v0)"), "Should have if (v0):\n{out}");
-        // Block args assignment.
-        assert!(out.contains("v3 = v1;"), "Should assign v3 = v1:\n{out}");
-        assert!(out.contains("v4 = v2;"), "Should assign v4 = v2:\n{out}");
+        // Block-param vars folded away: return v1/v2 directly.
+        assert!(out.contains("return v1;"), "Should return v1 directly:\n{out}");
+        assert!(out.contains("return v2;"), "Should return v2 directly:\n{out}");
     }
 
     #[test]

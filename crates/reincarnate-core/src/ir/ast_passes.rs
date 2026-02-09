@@ -1135,6 +1135,30 @@ fn negate_expr(expr: Expr) -> Expr {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Count total statements recursively (used as fixpoint termination check).
+pub fn count_stmts(body: &[Stmt]) -> usize {
+    body.iter()
+        .map(|s| match s {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => 1 + count_stmts(then_body) + count_stmts(else_body),
+            Stmt::While { body, .. } | Stmt::Loop { body } => 1 + count_stmts(body),
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => 1 + count_stmts(init) + count_stmts(update) + count_stmts(body),
+            Stmt::Dispatch { blocks, .. } => {
+                1 + blocks.iter().map(|(_, b)| count_stmts(b)).sum::<usize>()
+            }
+            _ => 1,
+        })
+        .sum()
+}
+
 /// Recurse a rewrite pass into all nested statement bodies.
 fn recurse_into_stmt(stmt: &mut Stmt, pass: fn(&mut [Stmt])) {
     match stmt {
