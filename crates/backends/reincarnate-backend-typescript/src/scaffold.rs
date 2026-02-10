@@ -6,17 +6,18 @@ use std::path::Path;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{EntryPoint, FuncId, MethodKind, Module, Visibility};
+use reincarnate_core::project::RuntimeConfig;
 
 use crate::emit::sanitize_ident;
 
 /// Write all scaffold files into `output_dir`.
-pub fn emit_scaffold(modules: &[Module], output_dir: &Path) -> Result<(), CoreError> {
+pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Option<&RuntimeConfig>) -> Result<(), CoreError> {
     fs::write(
         output_dir.join("index.html"),
         generate_index_html(modules),
     )?;
     fs::write(output_dir.join("tsconfig.json"), TSCONFIG)?;
-    fs::write(output_dir.join("main.ts"), generate_main(modules))?;
+    fs::write(output_dir.join("main.ts"), generate_main(modules, runtime_config))?;
     fs::write(output_dir.join("package.json"), PACKAGE_JSON)?;
     Ok(())
 }
@@ -88,10 +89,19 @@ const PACKAGE_JSON: &str = r#"{
 
 /// Generate `main.ts` — imports all modules and calls the entry point in a
 /// requestAnimationFrame game loop.
-fn generate_main(modules: &[Module]) -> String {
+fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "import {{ timing }} from \"./runtime\";");
-    let _ = writeln!(out, "import {{ stage, flashTick }} from \"./runtime/flash/runtime\";");
+    if let Some(cfg) = runtime_config {
+        for group in &cfg.scaffold.imports {
+            let _ = writeln!(
+                out,
+                "import {{ {} }} from \"./runtime/{}\";",
+                group.names.join(", "),
+                group.path,
+            );
+        }
+    }
 
     // Collect imports for all modules (same logic as before).
     let mut heuristic_entry: Option<String> = None;
@@ -102,10 +112,10 @@ fn generate_main(modules: &[Module]) -> String {
     out.push('\n');
 
     // Prefer metadata-based entry point over heuristic.
-    if let Some(code) = metadata_entry_code(modules) {
+    if let Some(code) = metadata_entry_code(modules, runtime_config) {
         out.push_str(&code);
     } else if let Some(func_name) = heuristic_entry {
-        emit_game_loop(&mut out, &func_name);
+        emit_game_loop(&mut out, &func_name, runtime_config);
     } else {
         let _ = writeln!(
             out,
@@ -206,7 +216,7 @@ fn emit_module_imports(module: &Module, out: &mut String, heuristic_entry: &mut 
 
 /// Build entry-point code from module metadata (entry_point).
 /// Returns `None` if no module has metadata, falling back to heuristic.
-fn metadata_entry_code(modules: &[Module]) -> Option<String> {
+fn metadata_entry_code(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> Option<String> {
     // Find the first module with entry point metadata.
     let module = modules.iter().find(|m| m.entry_point.is_some())?;
 
@@ -217,7 +227,9 @@ fn metadata_entry_code(modules: &[Module]) -> Option<String> {
         EntryPoint::ConstructClass(fqn) => {
             let ident = resolve_class_short_name(modules, fqn);
             let _ = writeln!(code, "const app = new {ident}();");
-            let _ = writeln!(code, "stage.addChild(app);");
+            if let Some(init) = runtime_config.and_then(|c| c.scaffold.construct_class_init.as_deref()) {
+                let _ = writeln!(code, "{init}");
+            }
         }
         EntryPoint::CallFunction(fid) => {
             if let Some(name) = func_call_name(module, *fid) {
@@ -229,7 +241,9 @@ fn metadata_entry_code(modules: &[Module]) -> Option<String> {
     // Frame loop.
     let _ = writeln!(code, "\nfunction loop() {{");
     let _ = writeln!(code, "  timing.tick();");
-    let _ = writeln!(code, "  flashTick();");
+    if let Some(tick) = runtime_config.and_then(|c| c.scaffold.tick.as_deref()) {
+        let _ = writeln!(code, "  {tick}");
+    }
     let _ = writeln!(code, "  requestAnimationFrame(loop);");
     let _ = writeln!(code, "}}");
     let _ = writeln!(code);
@@ -272,10 +286,12 @@ fn func_call_name(module: &Module, fid: FuncId) -> Option<String> {
 }
 
 /// Emit the standard game loop calling `func_name` each frame.
-fn emit_game_loop(out: &mut String, func_name: &str) {
+fn emit_game_loop(out: &mut String, func_name: &str, runtime_config: Option<&RuntimeConfig>) {
     let _ = writeln!(out, "function loop() {{");
     let _ = writeln!(out, "  timing.tick();");
-    let _ = writeln!(out, "  flashTick();");
+    if let Some(tick) = runtime_config.and_then(|c| c.scaffold.tick.as_deref()) {
+        let _ = writeln!(out, "  {tick}");
+    }
     let _ = writeln!(out, "  {func_name}();");
     let _ = writeln!(out, "  requestAnimationFrame(loop);");
     let _ = writeln!(out, "}}");
@@ -318,7 +334,7 @@ mod tests {
         mb.add_function(fb2.build());
         let module = mb.build();
 
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(main.contains("import { update } from \"./game\";"));
         assert!(main.contains("update();"));
         assert!(main.contains("requestAnimationFrame(loop);"));
@@ -337,7 +353,7 @@ mod tests {
         mb.add_function(fb.build());
         let module = mb.build();
 
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(main.contains("import { compute } from \"./utils\";"));
         assert!(main.contains("No entry point detected"));
         assert!(!main.contains("requestAnimationFrame"));
@@ -379,7 +395,7 @@ mod tests {
         });
 
         let module = mb.build();
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(
             main.contains("import { App } from \"./game\";"),
             "Should import class from barrel:\n{main}"
@@ -427,7 +443,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::ConstructClass("MyApp".into()));
         let module = mb.build();
 
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(
             main.contains("const app = new MyApp();"),
             "Should construct class:\n{main}"
@@ -457,7 +473,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::CallFunction(fid));
         let module = mb.build();
 
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(
             main.contains("start_game();"),
             "Should call function:\n{main}"
@@ -502,7 +518,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::ConstructClass("App".into()));
         let module = mb.build();
 
-        let main = generate_main(&[module]);
+        let main = generate_main(&[module], None);
         assert!(
             main.contains("const app = new App();"),
             "Should construct App:\n{main}"
