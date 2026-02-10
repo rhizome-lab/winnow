@@ -346,27 +346,44 @@ Cross-SWF vN counts: cc-project 0, utg-project 0, tln-project 16,
 nff-project 2, mvol-project 6. The `simplify_ternary_to_logical` pass
 eliminated v78 from tln (was 17 → 16).
 
-### Architecture — Library Replacement (HLE)
+### Architecture — Three-Layer Runtime (HLE)
 
-The TS backend has Flash-specific namespace detection, import routing, and
-runtime stubs hardcoded in codegen (`flash_pkg_module`, `flash_stdlib_module`,
-`emit_flash_stdlib_imports`, `runtime/flash/`). This needs to become the
-HLE library replacement architecture described in `docs/architecture.md`.
+See `docs/architecture.md` for the full design. The current runtime has two
+structural problems:
 
-**What needs to move:**
-- `runtime/flash/` → `reincarnate-frontend-flash/runtime/` (replacement
-  runtime owned by the frontend, not the backend)
-- `flash_*` functions in `emit.rs` → frontend-provided IR metadata (the
-  Flash frontend attaches import provenance, backend emits verbatim)
-- `scaffold.rs` Flash imports → frontend-provided scaffold config
+1. **No platform abstraction** — `display.ts` calls `ctx.fillRect()` directly.
+   Can't swap Canvas 2D for WebGL, can't test without a browser, can't share
+   engine logic between TS and Rust runtimes.
+2. **Backend has frontend knowledge** — `emit.rs` parses `flash.*::` namespace
+   strings to route imports. The backend should not know about Flash namespaces.
 
-**Migration steps:**
-1. Add `external_imports` metadata to `Module` — maps qualified names to
-   `{ short_name, module_path }` pairs
-2. Flash frontend populates the metadata during extraction
-3. Backend reads metadata instead of parsing `flash.*::` namespace strings
-4. Move `runtime/flash/` to the frontend crate
-5. Backend copies the declared runtime package into output generically
+**Migration plan (ordered):**
+
+- [ ] **Platform interface for TS runtime** — Extract browser API calls from
+  `display.ts`, `runtime.ts`, `text.ts`, `net.ts`, `utils.ts` into a
+  `platform/` module. API shim imports from `platform/`, not from browser
+  globals. Start with a `browser.ts` implementation (move existing calls)
+  and a `null.ts` (no-ops for testing).
+
+- [ ] **Redesign system traits** — Replace `Renderer` (sprite-level) with
+  `Graphics` (2D drawing primitives). Remove `Ui` (engine-level, not
+  platform-level). Keep Audio, Input, Timing, Persistence. The Rust traits
+  in `core/system/` define the canonical platform interface.
+
+- [ ] **Move runtime out of backend** — `runtime/flash/` currently lives in
+  `reincarnate-backend-typescript/`. Move to `runtime/flash/ts/` at the
+  workspace root. The backend copies/links the runtime into output
+  generically, without knowing what's inside it.
+
+- [ ] **IR import metadata** — Add `external_imports` to `Module` mapping
+  qualified names → `{ short_name, module_path }`. Flash frontend populates
+  during extraction. Backend reads metadata instead of parsing `flash.*::`
+  namespace strings. Eliminates `flash_pkg_module`, `flash_stdlib_module`,
+  `emit_flash_stdlib_imports` from the backend.
+
+- [ ] **Runtime package config** — Frontend declares its runtime package
+  location and entry scaffold in the project manifest. Backend copies the
+  package and wires up imports without engine-specific knowledge.
 
 Priority: before adding a second frontend that targets TypeScript.
 

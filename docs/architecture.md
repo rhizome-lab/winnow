@@ -116,50 +116,140 @@ IR metadata:      external_lib = "flash.text", short_name = "TextFormatAlign"
 The backend consumes the metadata to emit imports. It never parses namespace
 strings — that's the frontend's domain knowledge.
 
-### Replacement runtime as a swappable package
+### Three-layer runtime architecture
 
-Each frontend ships one or more **replacement runtime packages** — standalone
-libraries that implement the original runtime's API surface in the target
-language. These are separate from both the frontend and the backend:
+The replacement runtime has three distinct layers:
 
 ```
-reincarnate-frontend-flash/
-  runtime/                    ← Flash replacement runtime (TypeScript)
-    flash-display/
-    flash-events/
-    flash-text/
-    ...
-
-reincarnate-frontend-director/
-  runtime/                    ← Director replacement runtime
-    lingo-builtins/
-    ...
+Emitted user code (.ts / .rs)
+        │
+        │  imports Flash API classes
+        ▼
+┌──────────────────────────────────────────────┐
+│  API Shim Layer (engine-specific)            │
+│  MovieClip, EventDispatcher, Loader, ...     │
+│  Implements original engine semantics        │
+│  flash/display.ts, flash/events.ts, ...      │
+│                                              │
+│  Owned by: engine × target language          │
+│  (runtime/flash/ts/, runtime/flash/rs/)      │
+└────────────────┬─────────────────────────────┘
+                 │
+                 │  calls platform abstraction
+                 ▼
+┌──────────────────────────────────────────────┐
+│  Platform Interface                          │
+│  draw_image(), fill_rect(), play_sound()     │
+│  load_bytes(), save_persistent(), ...        │
+│                                              │
+│  Rust: generic traits (monomorphized)        │
+│  TS: module re-exports (tree-shaken)         │
+└────────────────┬─────────────────────────────┘
+                 │
+                 │  implemented by
+                 ▼
+┌──────────────────────────────────────────────┐
+│  Platform Implementation (per-target)        │
+│  BrowserCanvas2D, WebAudio, fetch/localStorage│
+│  WgpuRenderer, CpalAudio, winit input        │
+│  NullPlatform (testing)                      │
+│                                              │
+│  Selected at build time                      │
+└──────────────────────────────────────────────┘
 ```
 
-Key properties:
-- **Swappable** — You can have multiple implementations at different fidelity
-  levels: a minimal stub runtime for testing, a full-fidelity runtime for
-  production, an optimized native runtime that skips Flash semantics entirely
-- **Granular** — Replace `flash.display` with a Canvas2D implementation but
-  keep `flash.text` as a DOM-based implementation. Mix and match per package.
-- **Backend-agnostic** — The TypeScript replacement runtime is `.ts` files;
-  a Rust replacement runtime would be `.rs` files with the same API surface.
-  The backend copies/links whichever runtime matches its target language.
+**Layer 1: API Shim** — Implements the original engine's class hierarchy and
+semantics in the target language. Flash's `MovieClip` has frame timelines,
+display list children, and event dispatching. Director's `Sprite` has cast
+members and score-based animation. These are completely different APIs but
+both call the same platform layer to draw, play sounds, and handle input.
+The API shim is engine-specific but platform-agnostic.
 
-### Optimization through replacement
+**Layer 2: Platform Interface** — A thin abstraction over platform
+capabilities: 2D rendering, audio playback, input polling, network I/O,
+persistence. This is the boundary where swapping happens. The interface is
+engine-agnostic — Flash and Director both call `draw_image()` to put pixels
+on screen. In Rust, these are generic traits that monomorphize (zero virtual
+dispatch). In TypeScript, these are module-level function re-exports that the
+bundler resolves at build time (zero indirection — the unused implementation
+is tree-shaken away entirely).
 
-The biggest performance wins come from replacing library implementations, not
-from optimizing user code. Examples:
+**Layer 3: Platform Implementation** — Concrete implementations of the
+platform interface for each deployment target. Browser: Canvas 2D + Web
+Audio + fetch + localStorage. Desktop: wgpu + cpal + winit + filesystem.
+Testing: null platform that no-ops all I/O.
 
-| Original | Stub (correctness) | Optimized (native) |
-|----------|-------------------|-------------------|
-| `flash.display` (display list) | JS class hierarchy | Canvas2D direct draw, skip display list |
-| `flash.text.TextField` | DOM measurement | Pre-measured glyph atlas |
-| `flash.events` (bubbling) | Full capture/bubble | Flat listener dispatch |
-| `flash.net.SharedObject` | localStorage wrapper | IndexedDB with sync API |
+### Why three layers
 
-A project can start with stub implementations and progressively replace
+The naive approach (API shim directly calls browser APIs) is what the current
+runtime does. This breaks down when:
+
+- **Multiple deployment targets** — The same Flash game should run in a
+  browser (Canvas 2D) and as a native desktop app (wgpu). Without the
+  platform interface, you'd need separate API shim implementations per
+  target, duplicating all the engine logic.
+- **Testing** — You can't unit-test a display list implementation that calls
+  `ctx.fillRect()` without a browser. With the platform interface, inject a
+  null platform and test pure logic.
+- **Progressive optimization** — Swap `BrowserCanvas2D` for `BrowserWebGL`
+  or `BrowserWebGPU` without touching the API shim. Swap the full-fidelity
+  `flash.events` (capture/target/bubble) for a flat-dispatch version. Each
+  layer swaps independently.
+
+### Swappable runtime packages
+
+Each engine's API shim can have multiple implementations at different fidelity
+levels:
+
+| Package | Stub (correctness) | Full (faithful) | Optimized (native) |
+|---------|-------------------|-----------------|-------------------|
+| `flash.display` | JS class hierarchy | Full display list | Canvas2D direct draw, skip display list |
+| `flash.text` | DOM `<div>` measurement | TextField with format runs | Pre-measured glyph atlas |
+| `flash.events` | Simple listener map | Full capture/bubble | Flat listener dispatch |
+| `flash.net` | localStorage wrapper | SharedObject + URLLoader | IndexedDB with sync API |
+
+A project starts with stub implementations and progressively replaces
 individual packages with optimized versions — same user code, better runtime.
+The platform interface ensures implementations only change what's below the
+boundary.
+
+### Runtime ownership
+
+The replacement runtime is **neither frontend nor backend**. It's a third
+concern:
+
+- The **frontend** extracts bytecode and emits IR. It identifies library
+  boundaries (`flash.*::` namespaces) and attaches metadata. It does not
+  implement any runtime classes.
+- The **backend** emits target code and wires up imports to the runtime
+  package. It does not know what `MovieClip` does — it just knows the import
+  path.
+- The **runtime** implements engine semantics in the target language, calling
+  the platform interface for I/O. It is standalone — usable independently of
+  the recompiler pipeline.
+
+File layout:
+
+```
+runtime/
+  flash/
+    ts/                    ← Flash replacement runtime (TypeScript)
+      flash/
+        display.ts         ← MovieClip, Stage, DisplayObject, ...
+        events.ts          ← EventDispatcher, Event subclasses
+        text.ts            ← TextField, TextFormat, ...
+        net.ts             ← URLLoader, SharedObject, ...
+        utils.ts           ← ByteArray, Timer, Dictionary, ...
+      platform/
+        interface.ts       ← Platform interface (exported functions)
+        browser.ts         ← Browser implementation (Canvas 2D, fetch, ...)
+        null.ts            ← Null implementation (testing)
+    rs/                    ← Flash replacement runtime (Rust, future)
+      src/
+        display.rs
+        events.rs
+        ...
+```
 
 ### Pipeline with library replacement
 
@@ -178,7 +268,7 @@ Source binary
      │
      ▼
 ┌──────────┐     ┌───────────────────┐
-│ Backend   │ ←── │ Replacement runtime │  (selected per frontend × target)
+│ Backend   │ ←── │ Replacement runtime │  (selected per engine × target)
 └────┬─────┘     └───────────────────┘
      │
      ▼
@@ -221,31 +311,109 @@ Key properties:
 - **Fallback**: `Dynamic` when constraints are unsatisfiable or insufficient
 - **Per-function**: inference runs per function, cross-function via signatures
 
-## System Architecture
+## Platform Interface
 
-Pluggable systems via generic traits that monomorphize at compile time:
+The platform interface is the boundary between engine-specific logic (display
+lists, event systems, animation timelines) and target-specific I/O (canvas
+drawing, audio playback, keyboard input, file access). It must be:
+
+- **Zero-cost** — In Rust, generic traits monomorphize to direct calls. In
+  TypeScript, module-level function re-exports resolve at build time (the
+  bundler tree-shakes the unused implementation).
+- **Swappable** — Different implementations for different deployment targets.
+  The same Flash runtime runs on a browser (Canvas 2D + Web Audio) or native
+  desktop (wgpu + cpal) by swapping the platform implementation.
+- **Low-level** — The interface provides 2D drawing primitives, not engine
+  concepts. It has `draw_image()` and `fill_rect()`, not `add_to_display_list()`.
+  Engine semantics (display lists, event bubbling, frame timelines) live in
+  the API shim layer above, not here.
+
+### Platform capabilities
+
+| Capability | Methods | Purpose |
+|-----------|---------|---------|
+| **Graphics** | `set_transform`, `fill_rect`, `draw_image`, `draw_text`, `measure_text`, `begin_path`, `clip`, `save_state`, `restore_state` | 2D rendering with transforms, clipping, text |
+| **Audio** | `load_sound`, `play_sound`, `stop_sound`, `set_volume` | Sound playback and mixing |
+| **Input** | `is_key_down`, `is_mouse_down`, `mouse_position`, `poll_events` | Keyboard, mouse, touch, gamepad |
+| **Network** | `fetch_bytes`, `fetch_text` | HTTP resource loading |
+| **Persistence** | `save`, `load`, `delete`, `list_keys` | Key-value storage (save files, local storage) |
+| **Timing** | `delta_time`, `elapsed`, `frame_count`, `request_frame` | Frame pacing and time tracking |
+
+### Rust: generic traits
 
 ```rust
-trait Renderer {
-    type Texture;
-    type Surface;
-    fn draw_sprite(&mut self, texture: &Self::Texture, x: f32, y: f32);
+trait Graphics {
+    type Image;
+    fn set_transform(&mut self, matrix: [f32; 6]);
+    fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32);
+    fn draw_image(&mut self, image: &Self::Image, x: f32, y: f32, w: f32, h: f32);
+    fn draw_text(&mut self, text: &str, x: f32, y: f32, font: &str, size: f32);
     // ...
 }
 ```
 
-Systems are generic parameters on the game/app entry point. The compiler monomorphizes each combination — zero virtual dispatch at runtime. Systems can be swapped (e.g., inject touch controls for mobile, replace save/load UX, add accessibility overlays) without changing the core translated code.
+The Flash API shim is generic over the platform:
 
-### System Traits
+```rust
+struct MovieClip<G: Graphics, A: Audio> {
+    children: Vec<DisplayObjectRef>,
+    current_frame: u32,
+    // ...
+}
+```
 
-| System | Responsibility |
-|--------|---------------|
-| **Renderer** | Sprite/shape/text drawing, display list |
-| **Audio** | Sound/music playback, mixing |
-| **Input** | Keyboard, mouse, touch, gamepad |
-| **SaveLoad** | Persistence (save files, local storage) |
-| **UI** | Dialogue boxes, menus, HUD overlays |
-| **Timing** | Frame pacing, delta time, timers |
+The compiler monomorphizes each `<G, A>` combination — zero virtual dispatch.
+Platform implementations (`WgpuGraphics`, `Canvas2DGraphics`) are concrete
+types that implement the traits.
+
+### TypeScript: module re-exports
+
+```typescript
+// platform/index.ts — resolved at build time
+export { setTransform, fillRect, drawImage, drawText, ... } from "./browser";
+```
+
+The API shim imports platform functions directly:
+
+```typescript
+// flash/display.ts
+import { setTransform, fillRect, drawImage } from "../platform";
+
+export class DisplayObject {
+    render(): void {
+        setTransform(this.transform.matrix);
+        // ... draw children
+    }
+}
+```
+
+The bundler resolves `platform/index.ts` to the chosen implementation at
+build time. Tree-shaking eliminates the unused one. The result is direct
+function calls with zero indirection — equivalent to inlining the browser
+API calls, but with a clean abstraction boundary.
+
+To swap implementations, change the re-export source or use bundler path
+aliasing (Vite, webpack, esbuild all support this). No runtime cost.
+
+### Relationship to current system traits
+
+The `system/` traits in `reincarnate-core` (Renderer, Audio, Input, SaveLoad,
+Timing, Ui) were designed as the platform interface but at the wrong
+abstraction level. `Renderer::draw_sprite()` assumes a sprite-based engine,
+but Flash uses a display list. `Ui::show_message()` is an engine-level
+concept, not a platform capability.
+
+The platform interface should be redesigned as:
+- **Graphics** replaces **Renderer** — 2D drawing primitives, not sprite
+  operations. The display list is the API shim's concern.
+- **Audio** stays as-is — sound buffer management is platform-level.
+- **Input** stays as-is — key/mouse state is platform-level.
+- **Persistence** replaces **SaveLoad** — simpler key-value API without
+  serde dependency (serialization is the API shim's concern).
+- **Timing** stays as-is — frame pacing is platform-level.
+- **Ui** is removed — dialogue boxes and menus are engine-level, not
+  platform-level. Each engine's API shim implements its own UI system
+  using the graphics and input capabilities.
 
 ## IR Design
 
@@ -343,14 +511,17 @@ Runs in a loop until statement count stabilizes:
 
 ## Multi-Platform Strategy
 
-| Platform | Rendering | Windowing | Audio |
-|----------|-----------|-----------|-------|
-| Desktop (Linux/macOS/Windows) | wgpu | winit | TBD |
-| Mobile (iOS/Android) | wgpu | winit | TBD |
-| WASM | wgpu (WebGPU) | winit (canvas) | Web Audio API |
-| Web (TypeScript backend) | Canvas/WebGL | DOM | Web Audio API |
+| Platform | Graphics | Audio | Input | Persistence |
+|----------|----------|-------|-------|-------------|
+| Desktop (Linux/macOS/Windows) | wgpu | cpal | winit | filesystem |
+| Mobile (iOS/Android) | wgpu | cpal | winit | filesystem |
+| WASM (Rust backend) | wgpu (WebGPU) | Web Audio | winit (canvas) | IndexedDB |
+| Web (TypeScript backend) | Canvas 2D / WebGL | Web Audio | DOM events | localStorage |
 
-Platform differences are abstracted at the system trait level. The same IR compiles to any target by swapping system implementations.
+Platform differences are abstracted at the platform interface level. The same
+API shim (engine runtime) runs on any target by swapping the platform
+implementation. For Rust targets, the platform traits monomorphize. For
+TypeScript, the bundler resolves the platform module at build time.
 
 ## Dependencies
 
