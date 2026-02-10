@@ -1744,13 +1744,26 @@ fn translate_op(
             } else {
                 fb.const_null()
             };
-            let v = fb.system_call(
+            // hasNext2 returns [updatedObj, newIndex, hasMore]
+            let result = fb.system_call(
                 "Flash.Iterator",
                 "hasNext2",
                 &[obj, idx],
-                Type::Bool,
+                Type::Dynamic,
             );
-            stack.push(v);
+            let idx0 = fb.const_int(0);
+            let idx1 = fb.const_int(1);
+            let idx2 = fb.const_int(2);
+            let new_obj = fb.get_index(result, idx0, Type::Dynamic);
+            let new_idx = fb.get_index(result, idx1, Type::Dynamic);
+            let has_more = fb.get_index(result, idx2, Type::Bool);
+            if obj_idx < locals.len() {
+                fb.store(locals[obj_idx], new_obj);
+            }
+            if idx_idx < locals.len() {
+                fb.store(locals[idx_idx], new_idx);
+            }
+            stack.push(has_more);
         }
         Op::NextName => {
             if let (Some(idx_val), Some(obj)) = (stack.pop(), stack.pop()) {
