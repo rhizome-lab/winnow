@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::entity::PrimaryMap;
@@ -61,6 +63,19 @@ pub struct Import {
     pub alias: Option<String>,
 }
 
+/// An import of an external runtime type (e.g. a Flash stdlib class).
+///
+/// Populated by frontends so the backend can emit import statements without
+/// engine-specific namespace parsing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalImport {
+    /// Short name used in generated code (e.g. `"MovieClip"`).
+    pub short_name: String,
+    /// Module path relative to the runtime directory root
+    /// (e.g. `"flash/display"`, `"flash/runtime"`).
+    pub module_path: String,
+}
+
 /// Groups a struct (fields) with its methods into a class.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassDef {
@@ -94,6 +109,11 @@ pub struct Module {
     /// How to start the application (set by frontends that know the answer).
     #[serde(default)]
     pub entry_point: Option<EntryPoint>,
+    /// External runtime imports, keyed by qualified name (e.g.
+    /// `"flash.display::MovieClip"`).  Populated by frontends so the backend
+    /// can emit import statements without engine-specific parsing.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub external_imports: BTreeMap<String, ExternalImport>,
 }
 
 impl Module {
@@ -107,6 +127,7 @@ impl Module {
             imports: Vec::new(),
             classes: Vec::new(),
             entry_point: None,
+            external_imports: BTreeMap::new(),
         }
     }
 }

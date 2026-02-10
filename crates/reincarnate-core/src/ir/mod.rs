@@ -19,7 +19,9 @@ pub use coroutine::CoroutineInfo;
 pub use func::{FuncId, Function, MethodKind, Visibility};
 pub use inst::{CmpKind, Inst, InstId, Op, Span};
 pub use linear::lower_function_linear;
-pub use module::{ClassDef, EnumDef, EnumVariant, EntryPoint, Global, Import, Module, StructDef};
+pub use module::{
+    ClassDef, EnumDef, EnumVariant, EntryPoint, ExternalImport, Global, Import, Module, StructDef,
+};
 pub use structurize::{
     build_cfg, compute_dominators_lt, dominates, structurize, BlockArgAssign, Cfg, Shape,
 };

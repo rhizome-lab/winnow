@@ -6,7 +6,7 @@ use super::block::{Block, BlockId, BlockParam};
 use super::func::{FuncId, Function, Visibility};
 use super::inst::{CmpKind, Inst, Op};
 use super::func::MethodKind;
-use super::module::{ClassDef, EnumDef, EntryPoint, Global, Import, Module, StructDef};
+use super::module::{ClassDef, EnumDef, EntryPoint, ExternalImport, Global, Import, Module, StructDef};
 use super::ty::{FunctionSig, Type};
 use super::value::{Constant, ValueId};
 
@@ -557,6 +557,10 @@ impl ModuleBuilder {
 
     pub fn set_entry_point(&mut self, entry: EntryPoint) {
         self.module.entry_point = Some(entry);
+    }
+
+    pub fn add_external_import(&mut self, qualified_name: String, import: ExternalImport) {
+        self.module.external_imports.insert(qualified_name, import);
     }
 
     pub fn build(self) -> Module {
