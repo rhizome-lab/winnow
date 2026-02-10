@@ -566,18 +566,63 @@ export class Timer extends EventDispatcher {
 // ---------------------------------------------------------------------------
 
 /**
- * AS3 Dictionary — a key/value map that supports arbitrary keys.
+ * AS3 Dictionary — a key/value map that supports arbitrary (including object)
+ * keys.
  *
- * Uses `Object.create(null)` as the backing store so that bracket-notation
- * access works naturally for string keys (`dict[key]`).  Object-key support
- * (the primary AS3 Dictionary differentiator) is not yet implemented — all
- * current usages in the lifted codebase use string keys.
+ * Extends `Map` so that `.get()`, `.set()`, `.has()`, `.delete()`, `.keys()`,
+ * `.values()`, `.forEach()`, and `[Symbol.iterator]` all work with any key
+ * type (the primary differentiator from plain JS objects).
+ *
+ * A `Proxy` wrapper provides backward-compatible bracket-notation access for
+ * string keys (`dict[key]`), `Object.keys(dict)`, `for (k in dict)`, and
+ * `delete dict[key]`.  The emitter prefers Map methods when the type is known
+ * to be Dictionary; the Proxy covers dynamic/untyped fallback cases.
  */
-export class Dictionary {
-  [key: string]: any;
+export class Dictionary extends Map<any, any> {
   constructor(_weakKeys?: boolean) {
-    // Wipe the prototype so only explicit entries appear in for-in / ownKeys.
-    Object.setPrototypeOf(this, null);
+    super();
+    return new globalThis.Proxy(this, {
+      get(target: Dictionary, prop: string | symbol, receiver: any): any {
+        // Symbol props and Map prototype methods pass through.
+        if (typeof prop === "symbol") return Reflect.get(target, prop, receiver);
+        // Bracket access for string keys routed to Map.
+        if (target.has(prop)) return target.get(prop);
+        return Reflect.get(target, prop, receiver);
+      },
+      set(target: Dictionary, prop: string | symbol, value: any): boolean {
+        if (typeof prop === "symbol") return Reflect.set(target, prop, value);
+        target.set(prop, value);
+        return true;
+      },
+      has(target: Dictionary, prop: string | symbol): boolean {
+        if (typeof prop === "string") return target.has(prop);
+        return Reflect.has(target, prop);
+      },
+      deleteProperty(target: Dictionary, prop: string | symbol): boolean {
+        if (typeof prop === "string") return target.delete(prop);
+        return Reflect.deleteProperty(target, prop);
+      },
+      ownKeys(target: Dictionary): (string | symbol)[] {
+        return [...target.keys()].filter(
+          (k): k is string | symbol =>
+            typeof k === "string" || typeof k === "symbol",
+        );
+      },
+      getOwnPropertyDescriptor(
+        target: Dictionary,
+        prop: string | symbol,
+      ): PropertyDescriptor | undefined {
+        if (typeof prop === "string" && target.has(prop)) {
+          return {
+            value: target.get(prop),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          };
+        }
+        return Reflect.getOwnPropertyDescriptor(target, prop);
+      },
+    }) as Dictionary;
   }
 }
 

@@ -276,11 +276,14 @@ fn infer_inst_type(
         }
 
         // GetField: look up struct field type.
+        // Field names may be namespace-qualified (e.g. "pkg::Class::field"),
+        // so strip to the bare name for the struct_fields lookup.
         Op::GetField { object, field } => {
             if let Type::Struct(name) = &func.value_types[*object] {
+                let bare = field.rsplit("::").next().unwrap_or(field);
                 ctx.struct_fields
                     .get(name)
-                    .and_then(|fields| fields.get(field))
+                    .and_then(|fields| fields.get(bare).or_else(|| fields.get(field)))
                     .cloned()
                     .unwrap_or(Type::Dynamic)
             } else {

@@ -1264,6 +1264,14 @@ impl<'a> EmitCtx<'a> {
         self.resolve.use_counts.get(&v).copied().unwrap_or(0)
     }
 
+    /// Check if a value has Dictionary type (flash.utils::Dictionary).
+    fn is_dictionary(&self, v: ValueId) -> bool {
+        matches!(
+            self.func.value_types.get(v),
+            Some(Type::Struct(name)) if name.rsplit("::").next() == Some("Dictionary")
+        )
+    }
+
     /// Build an expression for a value reference.
     fn build_val(&mut self, v: ValueId) -> Expr {
         // Constants — always inlined, not consumed.
@@ -1387,10 +1395,23 @@ impl<'a> EmitCtx<'a> {
                 object: Box::new(self.build_val(*object)),
                 field: field.clone(),
             },
-            Op::GetIndex { collection, index } => Expr::Index {
-                collection: Box::new(self.build_val(*collection)),
-                index: Box::new(self.build_val(*index)),
-            },
+            Op::GetIndex { collection, index } => {
+                if self.is_dictionary(*collection) {
+                    // Dictionary → Map: dict.get(key)
+                    Expr::CallIndirect {
+                        callee: Box::new(Expr::Field {
+                            object: Box::new(self.build_val(*collection)),
+                            field: "get".into(),
+                        }),
+                        args: vec![self.build_val(*index)],
+                    }
+                } else {
+                    Expr::Index {
+                        collection: Box::new(self.build_val(*collection)),
+                        index: Box::new(self.build_val(*index)),
+                    }
+                }
+            }
 
             Op::Call {
                 func: fname,
@@ -1407,11 +1428,42 @@ impl<'a> EmitCtx<'a> {
                 system,
                 method,
                 args,
-            } => Expr::SystemCall {
-                system: system.clone(),
-                method: method.clone(),
-                args: args.iter().map(|a| self.build_val(*a)).collect(),
-            },
+            } => {
+                // Dictionary-specific rewrites for Flash.Object operations.
+                if system == "Flash.Object"
+                    && args.len() >= 2
+                    && self.is_dictionary(args[0])
+                {
+                    match method.as_str() {
+                        // deleteProperty(dict, key) → dict.delete(key)
+                        "deleteProperty" => {
+                            return Some(Expr::CallIndirect {
+                                callee: Box::new(Expr::Field {
+                                    object: Box::new(self.build_val(args[0])),
+                                    field: "delete".into(),
+                                }),
+                                args: vec![self.build_val(args[1])],
+                            });
+                        }
+                        // hasProperty(dict, key) → dict.has(key)
+                        "hasProperty" => {
+                            return Some(Expr::CallIndirect {
+                                callee: Box::new(Expr::Field {
+                                    object: Box::new(self.build_val(args[0])),
+                                    field: "has".into(),
+                                }),
+                                args: vec![self.build_val(args[1])],
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Expr::SystemCall {
+                    system: system.clone(),
+                    method: method.clone(),
+                    args: args.iter().map(|a| self.build_val(*a)).collect(),
+                }
+            }
 
             Op::Cast(v, ty) => {
                 if self
@@ -1884,12 +1936,26 @@ impl<'a> EmitCtx<'a> {
                 index,
                 value,
             } => {
-                let target = Expr::Index {
-                    collection: Box::new(self.build_val(*collection)),
-                    index: Box::new(self.build_val(*index)),
-                };
-                let val = self.build_val(*value);
-                stmts.push(Stmt::Assign { target, value: val });
+                if self.is_dictionary(*collection) {
+                    // Dictionary → Map: dict.set(key, value)
+                    let dict = self.build_val(*collection);
+                    let key = self.build_val(*index);
+                    let val = self.build_val(*value);
+                    stmts.push(Stmt::Expr(Expr::CallIndirect {
+                        callee: Box::new(Expr::Field {
+                            object: Box::new(dict),
+                            field: "set".into(),
+                        }),
+                        args: vec![key, val],
+                    }));
+                } else {
+                    let target = Expr::Index {
+                        collection: Box::new(self.build_val(*collection)),
+                        index: Box::new(self.build_val(*index)),
+                    };
+                    let val = self.build_val(*value);
+                    stmts.push(Stmt::Assign { target, value: val });
+                }
             }
             // Skip terminators in dispatch blocks.
             Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } => {}
