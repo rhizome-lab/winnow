@@ -510,6 +510,32 @@ export class Sprite extends DisplayObjectContainer {
 }
 
 // ---------------------------------------------------------------------------
+// FrameLabel + Scene
+// ---------------------------------------------------------------------------
+
+export class FrameLabel {
+  name: string;
+  frame: number;
+
+  constructor(name: string, frame: number) {
+    this.name = name;
+    this.frame = frame;
+  }
+}
+
+export class Scene {
+  name: string;
+  labels: FrameLabel[];
+  numFrames: number;
+
+  constructor(name: string, labels: FrameLabel[], numFrames: number) {
+    this.name = name;
+    this.labels = labels;
+    this.numFrames = numFrames;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // MovieClip
 // ---------------------------------------------------------------------------
 
@@ -517,47 +543,132 @@ export class MovieClip extends Sprite {
   currentFrame = 1;
   currentFrameLabel: string | null = null;
   currentLabel: string | null = null;
-  currentLabels: any[] = [];
-  currentScene: any = null;
+  currentLabels: FrameLabel[] = [];
+  currentScene: Scene | null = null;
   enabled = true;
   framesLoaded = 1;
   isPlaying = false;
-  scenes: any[] = [];
+  scenes: Scene[] = [];
   totalFrames = 1;
   trackAsMenu = false;
 
-  addFrameScript(..._args: any[]): void {}
+  /** @internal */
+  _frameScripts: Map<number, Function> = new Map();
+  /** @internal */
+  _prevFrame = 1;
 
-  gotoAndPlay(frame: number | string, _scene: string | null = null): void {
-    if (typeof frame === "number") this.currentFrame = frame;
-    this.isPlaying = true;
+  addFrameScript(...args: any[]): void {
+    // Arguments are pairs: (0-based frameIndex, callback | null)
+    for (let i = 0; i < args.length - 1; i += 2) {
+      const frameIndex = args[i] as number;
+      const callback = args[i + 1];
+      if (callback == null) {
+        this._frameScripts.delete(frameIndex + 1);
+      } else {
+        this._frameScripts.set(frameIndex + 1, callback as Function);
+      }
+    }
   }
 
-  gotoAndStop(frame: number | string, _scene: string | null = null): void {
-    if (typeof frame === "number") this.currentFrame = frame;
+  /** @internal Resolve a frame number or label string to a 1-based frame number. */
+  _resolveFrame(frame: number | string, scene: string | null = null): number {
+    if (typeof frame === "number") return frame;
+    // Search for matching label in scenes.
+    const searchScenes = scene
+      ? this.scenes.filter((s) => s.name === scene)
+      : this.scenes.length > 0 ? this.scenes : [null];
+    for (const sc of searchScenes) {
+      const labels = sc ? sc.labels : this.currentLabels;
+      for (const label of labels) {
+        if (label.name === frame) return label.frame;
+      }
+    }
+    // Fallback: try parsing as number.
+    const n = parseInt(frame, 10);
+    return isNaN(n) ? this.currentFrame : n;
+  }
+
+  /** @internal Execute frame script for current frame if one exists. */
+  _executeFrameScript(): void {
+    const script = this._frameScripts.get(this.currentFrame);
+    if (script) script.call(this);
+  }
+
+  gotoAndPlay(frame: number | string, scene: string | null = null): void {
+    this.currentFrame = this._resolveFrame(frame, scene);
+    this.isPlaying = true;
+    this._updateFrameLabel();
+    this._executeFrameScript();
+  }
+
+  gotoAndStop(frame: number | string, scene: string | null = null): void {
+    this.currentFrame = this._resolveFrame(frame, scene);
     this.isPlaying = false;
+    this._updateFrameLabel();
+    this._executeFrameScript();
   }
 
   nextFrame(): void {
-    this.currentFrame++;
+    if (this.currentFrame < this.totalFrames) this.currentFrame++;
     this.isPlaying = false;
+    this._updateFrameLabel();
+    this._executeFrameScript();
   }
 
-  nextScene(): void {}
+  nextScene(): void {
+    if (this.scenes.length === 0) return;
+    const idx = this.currentScene ? this.scenes.indexOf(this.currentScene) : -1;
+    if (idx < this.scenes.length - 1) {
+      const next = this.scenes[idx + 1];
+      this.currentScene = next;
+      // Jump to first frame of next scene.
+      if (next.labels.length > 0) {
+        this.currentFrame = next.labels[0].frame;
+      }
+    }
+  }
 
   play(): void {
     this.isPlaying = true;
   }
 
   prevFrame(): void {
-    this.currentFrame--;
+    if (this.currentFrame > 1) this.currentFrame--;
     this.isPlaying = false;
+    this._updateFrameLabel();
+    this._executeFrameScript();
   }
 
-  prevScene(): void {}
+  prevScene(): void {
+    if (this.scenes.length === 0) return;
+    const idx = this.currentScene ? this.scenes.indexOf(this.currentScene) : -1;
+    if (idx > 0) {
+      const prev = this.scenes[idx - 1];
+      this.currentScene = prev;
+      if (prev.labels.length > 0) {
+        this.currentFrame = prev.labels[0].frame;
+      }
+    }
+  }
 
   stop(): void {
     this.isPlaying = false;
+  }
+
+  /** @internal Update currentFrameLabel and currentLabel from the labels list. */
+  private _updateFrameLabel(): void {
+    this.currentFrameLabel = null;
+    this.currentLabel = null;
+    const labels = this.currentScene?.labels ?? this.currentLabels;
+    for (let i = labels.length - 1; i >= 0; i--) {
+      if (labels[i].frame <= this.currentFrame) {
+        this.currentLabel = labels[i].name;
+        if (labels[i].frame === this.currentFrame) {
+          this.currentFrameLabel = labels[i].name;
+        }
+        break;
+      }
+    }
   }
 }
 

@@ -9,6 +9,7 @@ import {
   DisplayObjectContainer,
   InteractiveObject,
   Sprite,
+  MovieClip,
   Graphics,
 } from "./display";
 import {
@@ -48,6 +49,9 @@ export function flashTick(): void {
 
   // Dispatch ENTER_FRAME first (matches Flash frame lifecycle).
   dispatchEnterFrame(stage);
+
+  // Advance playing MovieClips and execute frame scripts.
+  advanceMovieClips(stage);
 
   // Clear canvas then render.
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -208,6 +212,30 @@ function dispatchEnterFrame(node: DisplayObject): void {
     const n = node.numChildren;
     for (let i = 0; i < n; i++) {
       dispatchEnterFrame(node.getChildAt(i));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MovieClip frame advancement
+// ---------------------------------------------------------------------------
+
+function advanceMovieClips(node: DisplayObject): void {
+  if (node instanceof MovieClip) {
+    const mc = node;
+    if (mc.isPlaying && mc.totalFrames > 1) {
+      mc._prevFrame = mc.currentFrame;
+      mc.currentFrame++;
+      if (mc.currentFrame > mc.totalFrames) mc.currentFrame = 1;
+      if (mc.currentFrame !== mc._prevFrame) {
+        mc._executeFrameScript();
+      }
+    }
+  }
+  if (node instanceof DisplayObjectContainer) {
+    const n = node.numChildren;
+    for (let i = 0; i < n; i++) {
+      advanceMovieClips(node.getChildAt(i));
     }
   }
 }

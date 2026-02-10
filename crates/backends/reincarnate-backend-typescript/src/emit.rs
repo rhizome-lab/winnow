@@ -23,8 +23,8 @@ fn flash_stdlib_module(name: &str) -> Option<&'static str> {
         | "HTTPStatusEvent" | "AsyncErrorEvent" | "TimerEvent" => "events",
         // flash/display
         "EventDispatcher" | "Graphics" | "DisplayObject" | "InteractiveObject"
-        | "DisplayObjectContainer" | "Sprite" | "MovieClip" | "LoaderInfo"
-        | "Loader" | "Stage" => "display",
+        | "DisplayObjectContainer" | "Sprite" | "MovieClip" | "FrameLabel"
+        | "Scene" | "LoaderInfo" | "Loader" | "Stage" => "display",
         // flash/geom
         "Point" | "Rectangle" | "Matrix" | "ColorTransform" | "Transform" => "geom",
         // flash/text
