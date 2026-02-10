@@ -1,5 +1,6 @@
 pub mod ast_printer;
 pub mod emit;
+pub mod js_ast;
 pub mod runtime;
 pub mod scaffold;
 pub mod types;
