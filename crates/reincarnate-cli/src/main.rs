@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
-use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig, Preset};
+use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig, Preset, RuntimePackage};
 use reincarnate_core::project::{EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
@@ -80,11 +80,12 @@ fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
     }
 }
 
-/// Resolve the path to the engine-specific runtime source directory.
+/// Resolve the engine-specific runtime package.
 ///
 /// Uses `CARGO_MANIFEST_DIR` (compile-time) to locate `runtime/{engine}/{lang}/`
-/// relative to the workspace root. Returns `None` if the directory doesn't exist.
-fn resolve_runtime_dir(engine: &EngineOrigin, backend: &TargetBackend) -> Option<PathBuf> {
+/// relative to the workspace root. Loads `runtime.json` from the directory.
+/// Returns `None` if the directory or config file doesn't exist.
+fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend) -> Option<RuntimePackage> {
     let engine_name = match engine {
         EngineOrigin::Flash => "flash",
         _ => return None,
@@ -96,10 +97,15 @@ fn resolve_runtime_dir(engine: &EngineOrigin, backend: &TargetBackend) -> Option
     // CARGO_MANIFEST_DIR points to crates/reincarnate-cli/
     let cli_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let runtime_dir = cli_dir.join("../../runtime").join(engine_name).join(lang);
-    match runtime_dir.canonicalize() {
-        Ok(p) if p.is_dir() => Some(p),
-        _ => None,
-    }
+    let source_dir = match runtime_dir.canonicalize() {
+        Ok(p) if p.is_dir() => p,
+        _ => return None,
+    };
+    let config_path = source_dir.join("runtime.json");
+    let config_file = std::fs::File::open(&config_path).ok()?;
+    let config = serde_json::from_reader(std::io::BufReader::new(config_file))
+        .unwrap_or_else(|e| panic!("failed to parse {}: {e}", config_path.display()));
+    Some(RuntimePackage { source_dir, config })
 }
 
 fn find_backend(backend: &TargetBackend) -> Option<Box<dyn Backend>> {
@@ -210,7 +216,7 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Re
             assets: output.assets.clone(),
             output_dir: target.output_dir.clone(),
             lowering_config: lowering_config.clone(),
-            runtime_dir: resolve_runtime_dir(&manifest.engine, &target.backend),
+            runtime: resolve_runtime(&manifest.engine, &target.backend),
         };
         eprintln!("[emit] emitting to {}...", target.output_dir.display());
         backend
