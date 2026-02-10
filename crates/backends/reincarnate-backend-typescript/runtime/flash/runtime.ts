@@ -7,6 +7,7 @@ import {
   Stage,
   DisplayObject,
   DisplayObjectContainer,
+  InteractiveObject,
   Sprite,
   Graphics,
 } from "./display";
@@ -15,7 +16,7 @@ import {
   MouseEvent as FlashMouseEvent,
   KeyboardEvent as FlashKeyboardEvent,
 } from "./events";
-import { Rectangle } from "./geom";
+import { Point, Rectangle } from "./geom";
 
 // ---------------------------------------------------------------------------
 // Canvas + rendering context
@@ -45,12 +46,12 @@ export function flashTick(): void {
   stage.stageWidth = canvas.width;
   stage.stageHeight = canvas.height;
 
+  // Dispatch ENTER_FRAME first (matches Flash frame lifecycle).
+  dispatchEnterFrame(stage);
+
   // Clear canvas then render.
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   renderDisplayList(stage, ctx);
-
-  // Dispatch ENTER_FRAME to entire tree.
-  dispatchEnterFrame(stage);
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +213,48 @@ function dispatchEnterFrame(node: DisplayObject): void {
 }
 
 // ---------------------------------------------------------------------------
+// Hit-testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Depth-first reverse-child-order hit test. Returns the deepest
+ * InteractiveObject under (stageX, stageY), respecting visible,
+ * mouseEnabled, and mouseChildren flags.
+ */
+function hitTest(
+  container: DisplayObjectContainer,
+  stageX: number,
+  stageY: number,
+): InteractiveObject | null {
+  if (!container.visible) return null;
+  // Walk children back-to-front (highest depth first).
+  for (let i = container.numChildren - 1; i >= 0; i--) {
+    const child = container.getChildAt(i);
+    if (!child.visible) continue;
+    if (child instanceof DisplayObjectContainer) {
+      const io = child as unknown as InteractiveObject;
+      if (io.mouseChildren !== false) {
+        const hit = hitTest(child as DisplayObjectContainer, stageX, stageY);
+        if (hit) return hit;
+      }
+      // If mouseChildren is false, the container itself is the target.
+      if (child instanceof InteractiveObject && io.mouseEnabled !== false) {
+        if (child.hitTestPoint(stageX, stageY)) return child;
+      }
+    } else if (child instanceof InteractiveObject) {
+      if ((child as InteractiveObject).mouseEnabled !== false && child.hitTestPoint(stageX, stageY)) {
+        return child;
+      }
+    }
+  }
+  // Check the container itself.
+  if (container instanceof InteractiveObject && (container as InteractiveObject).mouseEnabled !== false) {
+    if (container.hitTestPoint(stageX, stageY)) return container;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // DOM → Flash mouse event routing
 // ---------------------------------------------------------------------------
 
@@ -221,13 +264,17 @@ function canvasCoords(e: MouseEvent): [number, number] {
 }
 
 function dispatchFlashMouse(type: string, e: MouseEvent): void {
-  const [lx, ly] = canvasCoords(e);
+  const [sx, sy] = canvasCoords(e);
+  // Find the deepest interactive object under the mouse.
+  const target = hitTest(stage, sx, sy) ?? stage;
+  // Compute local coordinates for the target.
+  const local = target.globalToLocal(new Point(sx, sy));
   const evt = new FlashMouseEvent(
     type,
     true,
     false,
-    lx,
-    ly,
+    local.x,
+    local.y,
     null,
     e.ctrlKey,
     e.altKey,
@@ -235,9 +282,9 @@ function dispatchFlashMouse(type: string, e: MouseEvent): void {
     e.buttons > 0,
     0,
   );
-  evt.stageX = lx;
-  evt.stageY = ly;
-  stage.dispatchEvent(evt);
+  evt.stageX = sx;
+  evt.stageY = sy;
+  target.dispatchEvent(evt);
 }
 
 canvas.addEventListener("click", (e) => dispatchFlashMouse(FlashMouseEvent.CLICK, e));
@@ -249,13 +296,15 @@ canvas.addEventListener("mouseover", (e) => dispatchFlashMouse(FlashMouseEvent.M
 canvas.addEventListener("mouseout", (e) => dispatchFlashMouse(FlashMouseEvent.MOUSE_OUT, e));
 
 canvas.addEventListener("wheel", (e) => {
-  const [lx, ly] = canvasCoords(e);
+  const [sx, sy] = canvasCoords(e);
+  const target = hitTest(stage, sx, sy) ?? stage;
+  const local = target.globalToLocal(new Point(sx, sy));
   const evt = new FlashMouseEvent(
     FlashMouseEvent.MOUSE_WHEEL,
     true,
     false,
-    lx,
-    ly,
+    local.x,
+    local.y,
     null,
     e.ctrlKey,
     e.altKey,
@@ -263,9 +312,9 @@ canvas.addEventListener("wheel", (e) => {
     false,
     e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0,
   );
-  evt.stageX = lx;
-  evt.stageY = ly;
-  stage.dispatchEvent(evt);
+  evt.stageX = sx;
+  evt.stageY = sy;
+  target.dispatchEvent(evt);
 });
 
 // ---------------------------------------------------------------------------

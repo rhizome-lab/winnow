@@ -55,14 +55,67 @@ export class EventDispatcher {
 
   dispatchEvent(event: Event): boolean {
     event.target = this;
+
+    // For bubbling events on DisplayObjects, do capture→target→bubble phases.
+    if (event.bubbles && this instanceof DisplayObject) {
+      // Build ancestor chain (root first).
+      const ancestors: DisplayObject[] = [];
+      let node = (this as unknown as DisplayObject).parent;
+      while (node) {
+        ancestors.push(node);
+        node = node.parent;
+      }
+      ancestors.reverse();
+
+      // Phase 1: CAPTURING_PHASE (eventPhase = 1)
+      event.eventPhase = 1;
+      for (const ancestor of ancestors) {
+        if (event._isPropagationStopped()) break;
+        ancestor._fireListeners(event, true);
+      }
+
+      // Phase 2: AT_TARGET (eventPhase = 2)
+      if (!event._isPropagationStopped()) {
+        event.eventPhase = 2;
+        this._fireListeners(event, false);
+      }
+
+      // Phase 3: BUBBLING_PHASE (eventPhase = 3)
+      event.eventPhase = 3;
+      for (let i = ancestors.length - 1; i >= 0; i--) {
+        if (event._isPropagationStopped()) break;
+        ancestors[i]._fireListeners(event, false);
+      }
+    } else {
+      // Non-bubbling or non-DisplayObject: target phase only.
+      event.eventPhase = 2;
+      event.currentTarget = this;
+      const list = this._listeners.get(event.type);
+      if (list) {
+        for (const entry of [...list]) {
+          entry.listener(event);
+          if (event._isImmediateStopped()) break;
+        }
+      }
+    }
+
+    return !event.isDefaultPrevented();
+  }
+
+  /** @internal Fire listeners on this object for a given phase. */
+  _fireListeners(event: Event, capturePhaseOnly: boolean): void {
     event.currentTarget = this;
     const list = this._listeners.get(event.type);
-    if (!list) return false;
+    if (!list) return;
     for (const entry of [...list]) {
+      // In capture phase (1), only fire useCapture=true listeners.
+      // In target phase (2), fire all listeners.
+      // In bubble phase (3), only fire useCapture=false listeners.
+      if (capturePhaseOnly && !entry.useCapture) continue;
+      if (!capturePhaseOnly && event.eventPhase === 3 && entry.useCapture) continue;
       entry.listener(event);
       if (event._isImmediateStopped()) break;
     }
-    return !event.isDefaultPrevented();
   }
 
   hasEventListener(type: string): boolean {
@@ -71,7 +124,16 @@ export class EventDispatcher {
   }
 
   willTrigger(type: string): boolean {
-    return this.hasEventListener(type);
+    if (this.hasEventListener(type)) return true;
+    // Walk parent chain for DisplayObjects.
+    if (this instanceof DisplayObject) {
+      let node = (this as unknown as DisplayObject).parent;
+      while (node) {
+        if (node.hasEventListener(type)) return true;
+        node = node.parent;
+      }
+    }
+    return false;
   }
 }
 
