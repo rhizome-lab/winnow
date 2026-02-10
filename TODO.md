@@ -120,11 +120,10 @@ examples in the test project (`~/cc-project/comparison-notes.md`).
   evaluation order.
 - [ ] **Negative constant resolution** — At least one `Math.max` clamp emits
   a wrong positive constant instead of the correct negative value.
-- [ ] **Non-deterministic output** — Output varies between runs for some
-  methods (e.g. Inventory::placeIn: 3 vs 8 statements). Root cause: HashMap
-  iteration in structurize.rs (cfg.succs, loops map) and cfg_simplify.rs
-  (forwards map) produces different loop detection and block forwarding
-  order. Fix: sort by BlockId before iterating, or use BTreeMap.
+- [x] **Non-deterministic output** — Fixed. Sorted all HashMap/HashSet
+  iterations by key before processing in structurize.rs (detect_loops,
+  find_exit_in_body) and linear.rs (flush_pending_reads,
+  flush_side_effecting_inlines, collect_block_param_decls, name coalescing).
 
 ### Medium Priority (output quality)
 
