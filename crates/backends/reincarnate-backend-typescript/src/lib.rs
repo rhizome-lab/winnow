@@ -20,7 +20,9 @@ impl Backend for TypeScriptBackend {
     fn emit(&self, mut input: BackendInput) -> Result<(), CoreError> {
         fs::create_dir_all(&input.output_dir)?;
 
-        runtime::emit_runtime(&input.output_dir)?;
+        if let Some(ref runtime_src) = input.runtime_dir {
+            runtime::emit_runtime(&input.output_dir, runtime_src)?;
+        }
 
         for module in &mut input.modules {
             emit::emit_module(module, &input.output_dir, &input.lowering_config)?;
