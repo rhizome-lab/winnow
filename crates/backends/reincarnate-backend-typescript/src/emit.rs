@@ -1100,11 +1100,14 @@ fn emit_class_method(
         hoist_super_call(&mut ast.body);
     }
     let is_cinit = raw_name == "cinit" && func.method_kind == MethodKind::Static;
-    let mut pctx = if skip_self || is_cinit {
-        PrintCtx::for_method(class_names, ancestors, method_names, instance_fields)
-    } else {
-        PrintCtx::for_function(class_names)
-    };
+    // All class methods need ancestors for scope resolution (static fields
+    // resolve to ClassName.field). `has_self` is set false for static methods
+    // since they don't receive `this` as parameter 0.
+    let mut pctx =
+        PrintCtx::for_method(class_names, ancestors, method_names, instance_fields);
+    if !skip_self && !is_cinit {
+        pctx.has_self = false;
+    }
     pctx.suppress_super = suppress_super;
     ast_printer::print_class_method(&ast, &raw_name, skip_self, &pctx, out);
     Ok(())

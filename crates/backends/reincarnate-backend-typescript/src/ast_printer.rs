@@ -687,11 +687,9 @@ fn class_from_scope_arg(args: &[Expr]) -> Option<String> {
 /// - Otherwise → marks as a scope lookup (bare name resolution happens
 ///   at the consumption site: Field, Call, etc.)
 fn resolve_scope_lookup(args: &[Expr], ctx: &PrintCtx) -> ScopeResolution {
-    if ctx.has_self {
-        if let Some(class_name) = class_from_scope_arg(args) {
-            if ctx.ancestors.contains(&class_name) {
-                return ScopeResolution::Ancestor(class_name);
-            }
+    if let Some(class_name) = class_from_scope_arg(args) {
+        if ctx.ancestors.contains(&class_name) {
+            return ScopeResolution::Ancestor(class_name);
         }
     }
     ScopeResolution::ScopeLookup
