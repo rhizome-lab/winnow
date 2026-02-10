@@ -1190,6 +1190,11 @@ fn translate_op(
             let prop = resolve_property(pool, index, stack);
             if let Some(obj) = stack.pop() {
                 match prop {
+                    PropertyAccess::Named(ref name) if name.starts_with("flash.utils::") => {
+                        let method = name.rsplit("::").next().unwrap_or(name);
+                        let v = fb.system_call("Flash.Utils", method, &args, Type::Dynamic);
+                        stack.push(v);
+                    }
                     PropertyAccess::Named(name) => {
                         let mut call_args = vec![obj];
                         call_args.extend(args);
@@ -1212,6 +1217,10 @@ fn translate_op(
             let prop = resolve_property(pool, index, stack);
             if let Some(obj) = stack.pop() {
                 match prop {
+                    PropertyAccess::Named(ref name) if name.starts_with("flash.utils::") => {
+                        let method = name.rsplit("::").next().unwrap_or(name);
+                        fb.system_call("Flash.Utils", method, &args, Type::Void);
+                    }
                     PropertyAccess::Named(name) => {
                         let mut call_args = vec![obj];
                         call_args.extend(args);
@@ -1232,6 +1241,11 @@ fn translate_op(
             let prop = resolve_property(pool, index, stack);
             if let Some(obj) = stack.pop() {
                 match prop {
+                    PropertyAccess::Named(ref name) if name.starts_with("flash.utils::") => {
+                        let method = name.rsplit("::").next().unwrap_or(name);
+                        let v = fb.system_call("Flash.Utils", method, &args, Type::Dynamic);
+                        stack.push(v);
+                    }
                     PropertyAccess::Named(name) => {
                         let mut call_args = vec![obj];
                         call_args.extend(args);
