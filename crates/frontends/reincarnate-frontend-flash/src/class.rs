@@ -105,7 +105,9 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         functions.push(func);
     }
 
-    // Static methods from class traits
+    // Static methods from class traits.
+    // AVM2 register 0 is always reserved (global scope for statics), so
+    // has_self = true keeps locals[] aligned with AVM2 register numbering.
     for trait_ in &class.traits {
         if let Some(method_idx) = trait_method_index(trait_) {
             let bare_name = resolve_trait_bare_name(pool, trait_, class_private_ns.as_deref());
@@ -114,7 +116,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
             let func_name = format!("{class_short_name}::{prefix}{bare_name}");
             let visibility = trait_visibility(pool, trait_);
             if let Some(mut func) =
-                translate_class_method(abc, &method_idx, &func_name, false, None)?
+                translate_class_method(abc, &method_idx, &func_name, true, None)?
             {
                 func.namespace = class_ns.clone();
                 func.class = Some(class_short_name.clone());

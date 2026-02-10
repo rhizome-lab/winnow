@@ -1091,7 +1091,11 @@ fn emit_class_method(
 
     let skip_self = matches!(
         func.method_kind,
-        MethodKind::Constructor | MethodKind::Instance | MethodKind::Getter | MethodKind::Setter
+        MethodKind::Constructor
+            | MethodKind::Instance
+            | MethodKind::Getter
+            | MethodKind::Setter
+            | MethodKind::Static
     );
 
     let shape = structurize::structurize(func);
@@ -1099,15 +1103,8 @@ fn emit_class_method(
     if func.method_kind == MethodKind::Constructor {
         hoist_super_call(&mut ast.body);
     }
-    let is_cinit = raw_name == "cinit" && func.method_kind == MethodKind::Static;
-    // All class methods need ancestors for scope resolution (static fields
-    // resolve to ClassName.field). `has_self` is set false for static methods
-    // since they don't receive `this` as parameter 0.
     let mut pctx =
         PrintCtx::for_method(class_names, ancestors, method_names, instance_fields);
-    if !skip_self && !is_cinit {
-        pctx.has_self = false;
-    }
     pctx.suppress_super = suppress_super;
     ast_printer::print_class_method(&ast, &raw_name, skip_self, &pctx, out);
     Ok(())
@@ -1612,9 +1609,11 @@ mod tests {
         fb.ret(None);
         let method_id = mb.add_function(fb.build());
 
-        // Static method: (amount: i32) -> i32
+        // Static method: (self: dyn, amount: i32) -> i32
+        // AVM2 register 0 is always reserved, so static methods include
+        // a self/scope param that the emitter skips.
         let static_sig = FunctionSig {
-            params: vec![Type::Int(32)],
+            params: vec![Type::Dynamic, Type::Int(32)],
             return_ty: Type::Int(32), ..Default::default() };
         let mut fb = FunctionBuilder::new("Fighter::create", static_sig, Visibility::Public);
         fb.set_class(
@@ -1622,7 +1621,8 @@ mod tests {
             "Fighter".into(),
             MethodKind::Static,
         );
-        let p = fb.param(0);
+        let _self = fb.param(0);
+        let p = fb.param(1);
         fb.ret(Some(p));
         let static_id = mb.add_function(fb.build());
 
@@ -1670,9 +1670,9 @@ mod tests {
             out.contains("  attack(v1: number): void {"),
             "Should have instance method:\n{out}"
         );
-        // Static method — keeps all params.
+        // Static method — skips self param (AVM2 register 0).
         assert!(
-            out.contains("  static create(v0: number): number {"),
+            out.contains("  static create(v1: number): number {"),
             "Should have static method:\n{out}"
         );
         // Getter — strips `get_` prefix, body uses `this`.
