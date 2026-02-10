@@ -370,10 +370,10 @@ structural problems:
   platform-level). Keep Audio, Input, Timing, Persistence. The Rust traits
   in `core/system/` define the canonical platform interface.
 
-- [ ] **Move runtime out of backend** — `runtime/flash/` currently lives in
-  `reincarnate-backend-typescript/`. Move to `runtime/flash/ts/` at the
-  workspace root. The backend copies/links the runtime into output
-  generically, without knowing what's inside it.
+- [x] **Move runtime out of backend** — Runtime moved from
+  `reincarnate-backend-typescript/runtime/` to `runtime/flash/ts/` at the
+  workspace root. The backend receives `runtime_dir` via `BackendInput`
+  and copies it into output generically, without knowing what's inside it.
 
 - [ ] **IR import metadata** — Add `external_imports` to `Module` mapping
   qualified names → `{ short_name, module_path }`. Flash frontend populates
