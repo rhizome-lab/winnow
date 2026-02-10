@@ -192,7 +192,7 @@ pub fn fold_single_use_consts(body: &mut Vec<Stmt>) {
                 fold_single_use_consts(then_body);
                 fold_single_use_consts(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 fold_single_use_consts(body);
             }
             Stmt::For {
@@ -558,6 +558,19 @@ fn count_var_refs_in_stmt(stmt: &Stmt, name: &str) -> usize {
             .iter()
             .map(|s| count_var_refs_in_stmt(s, name))
             .sum(),
+        Stmt::ForOf {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
+            usize::from(binding == name)
+                + count_var_refs_in_expr(iterable, name)
+                + body
+                    .iter()
+                    .map(|s| count_var_refs_in_stmt(s, name))
+                    .sum::<usize>()
+        }
         Stmt::Return(e) => e.as_ref().map_or(0, |e| count_var_refs_in_expr(e, name)),
         Stmt::Dispatch { blocks, .. } => blocks
             .iter()
@@ -710,6 +723,12 @@ fn substitute_var_in_stmt(
         Stmt::Loop { body } => body
             .iter_mut()
             .any(|s| substitute_var_in_stmt(s, name, replacement)),
+        Stmt::ForOf { iterable, body, .. } => {
+            substitute_var_in_expr(iterable, name, replacement)
+                || body
+                    .iter_mut()
+                    .any(|s| substitute_var_in_stmt(s, name, replacement))
+        }
         Stmt::Return(e) => e
             .as_mut()
             .is_some_and(|e| substitute_var_in_expr(e, name, replacement)),
@@ -758,7 +777,7 @@ pub fn forward_substitute(body: &mut Vec<Stmt>) {
                 forward_substitute(then_body);
                 forward_substitute(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 forward_substitute(body);
             }
             Stmt::For {
@@ -829,6 +848,396 @@ fn try_forward_substitute_one(body: &mut Vec<Stmt>) -> bool {
         return true;
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// For-each (hasNext2) → for-of rewrite
+// ---------------------------------------------------------------------------
+
+/// Rewrite `while (true) { hasNext2 boilerplate ... }` loops into `for (const x of ...)`.
+///
+/// Detects the pattern emitted by Flash's HasNext2 opcode:
+/// ```text
+/// while (true) {
+///   const vN = Flash_Iterator.hasNext2(obj, idx);
+///   obj = vN[0];
+///   idx = vN[1];
+///   if (!vN[2]) break;
+///   ... Flash_Iterator.nextValue(obj, idx) ... OR ... Flash_Iterator.nextName(obj, idx) ...
+/// }
+/// ```
+/// and rewrites to:
+/// ```text
+/// for (const binding of Object.values(obj)) { ... }
+/// ```
+///
+/// Recurses into all nested statement bodies.
+pub fn rewrite_foreach_loops(body: &mut [Stmt]) {
+    // Rewrite at this level first (bottom-up: recurse into children afterward
+    // since the transform replaces the Loop with ForOf).
+    let mut i = 0;
+    while i < body.len() {
+        if let Some(for_of) = try_rewrite_foreach(&body[i]) {
+            body[i] = for_of;
+        }
+        i += 1;
+    }
+    // Recurse into nested bodies.
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                rewrite_foreach_loops(then_body);
+                rewrite_foreach_loops(else_body);
+            }
+            Stmt::While { body, .. }
+            | Stmt::Loop { body }
+            | Stmt::ForOf { body, .. } => {
+                rewrite_foreach_loops(body);
+            }
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                rewrite_foreach_loops(init);
+                rewrite_foreach_loops(update);
+                rewrite_foreach_loops(body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    rewrite_foreach_loops(block_body);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Try to match and rewrite a single `Stmt::Loop` as a for-of.
+fn try_rewrite_foreach(stmt: &Stmt) -> Option<Stmt> {
+    let loop_body = match stmt {
+        Stmt::Loop { body } => body,
+        _ => return None,
+    };
+
+    // Find the hasNext2 VarDecl. It can be at position 0 (no preceding decls)
+    // or after some VarDecl/Assign statements that declare the iterator variables.
+    let hn2_idx = loop_body.iter().position(|s| {
+        matches!(
+            s,
+            Stmt::VarDecl {
+                init: Some(Expr::SystemCall { system, method, .. }),
+                ..
+            } if system == "Flash.Iterator" && method == "hasNext2"
+        )
+    })?;
+
+    // Need at least 4 statements from hn2_idx onward: hasNext2, assign[0], assign[1], if-break
+    if loop_body.len() < hn2_idx + 5 {
+        return None;
+    }
+
+    // [hn2_idx] VarDecl { name: tmp, init: SystemCall("Flash.Iterator", "hasNext2", [obj, idx]) }
+    let (tmp_name, obj_expr) = match &loop_body[hn2_idx] {
+        Stmt::VarDecl {
+            name,
+            init: Some(Expr::SystemCall { args, .. }),
+            ..
+        } if args.len() == 2 => (name.as_str(), &args[0]),
+        _ => return None,
+    };
+
+    // [hn2_idx+1] Assign { target: Var(obj_name), value: Index(Var(tmp), 0) }
+    let obj_name = match_index_assign(&loop_body[hn2_idx + 1], tmp_name, 0)?;
+
+    // [hn2_idx+2] Assign { target: Var(idx_name), value: Index(Var(tmp), 1) }
+    let idx_name = match_index_assign(&loop_body[hn2_idx + 2], tmp_name, 1)?;
+
+    // [hn2_idx+3] If { cond: Not(Index(Var(tmp), 2)), then: [Break], else: [] }
+    if !matches!(
+        &loop_body[hn2_idx + 3],
+        Stmt::If {
+            cond: Expr::Not(inner),
+            then_body,
+            else_body,
+        } if else_body.is_empty()
+            && then_body.len() == 1
+            && matches!(&then_body[0], Stmt::Break)
+            && matches!(
+                inner.as_ref(),
+                Expr::Index { collection, index }
+                    if matches!(collection.as_ref(), Expr::Var(v) if v == tmp_name)
+                    && matches!(index.as_ref(), Expr::Literal(Constant::Int(2)))
+            )
+    ) {
+        return None;
+    }
+
+    // Remaining body after the header (4 stmts starting at hn2_idx).
+    let remaining = &loop_body[hn2_idx + 4..];
+
+    // Find the first nextValue or nextName call in the remaining body.
+    let (next_method, next_stmt_idx) = find_next_call(remaining, &obj_name, &idx_name)?;
+
+    // Determine the iterable wrapper.
+    let wrapper = match next_method {
+        "nextValue" => "Object.values",
+        "nextName" => "Object.keys",
+        _ => return None,
+    };
+
+    let iterable = Expr::Call {
+        func: wrapper.to_string(),
+        args: vec![obj_expr.clone()],
+    };
+
+    // Build the new body by cloning remaining stmts and extracting the binding.
+    let mut new_body: Vec<Stmt> = remaining.to_vec();
+
+    // Extract binding from the statement containing the next call.
+    let (binding, declare) = extract_binding_and_replace(&mut new_body, next_stmt_idx, &obj_name, &idx_name)?;
+
+    Some(Stmt::ForOf {
+        binding,
+        declare,
+        iterable,
+        body: new_body,
+    })
+}
+
+/// Match `target = tmp[index_val]` and return the target variable name.
+fn match_index_assign(stmt: &Stmt, tmp_name: &str, index_val: i64) -> Option<String> {
+    match stmt {
+        Stmt::Assign {
+            target: Expr::Var(name),
+            value: Expr::Index { collection, index },
+        } => {
+            if !matches!(collection.as_ref(), Expr::Var(v) if v == tmp_name) {
+                return None;
+            }
+            if !matches!(index.as_ref(), Expr::Literal(Constant::Int(i)) if *i == index_val) {
+                return None;
+            }
+            Some(name.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Find the first statement in `body` containing a `Flash_Iterator.nextValue` or `nextName`
+/// call with the expected args. Returns the method name and index.
+fn find_next_call<'a>(body: &'a [Stmt], obj_name: &str, idx_name: &str) -> Option<(&'a str, usize)> {
+    for (i, stmt) in body.iter().enumerate() {
+        if let Some(method) = stmt_contains_next_call(stmt, obj_name, idx_name) {
+            return Some((method, i));
+        }
+    }
+    None
+}
+
+/// Check if a statement contains a Flash_Iterator.nextValue/nextName call.
+/// Returns the method name if found.
+fn stmt_contains_next_call<'a>(stmt: &'a Stmt, obj_name: &str, idx_name: &str) -> Option<&'a str> {
+    match stmt {
+        Stmt::VarDecl { init: Some(e), .. } => expr_contains_next_call(e, obj_name, idx_name),
+        Stmt::Assign { value, .. } => expr_contains_next_call(value, obj_name, idx_name),
+        Stmt::Expr(e) => expr_contains_next_call(e, obj_name, idx_name),
+        Stmt::If { cond, .. } => expr_contains_next_call(cond, obj_name, idx_name),
+        _ => None,
+    }
+}
+
+/// Check if an expression IS or CONTAINS a Flash_Iterator.nextValue/nextName call.
+fn expr_contains_next_call<'a>(expr: &'a Expr, obj_name: &str, idx_name: &str) -> Option<&'a str> {
+    match expr {
+        Expr::SystemCall {
+            system,
+            method,
+            args,
+        } if system == "Flash.Iterator"
+            && (method == "nextValue" || method == "nextName")
+            && args.len() == 2
+            && matches!(&args[0], Expr::Var(v) if v == obj_name)
+            && matches!(&args[1], Expr::Var(v) if v == idx_name) =>
+        {
+            Some(method.as_str())
+        }
+        Expr::Cast { expr, .. } => expr_contains_next_call(expr, obj_name, idx_name),
+        Expr::Call { args, .. } | Expr::SystemCall { args, .. } => {
+            args.iter().find_map(|a| expr_contains_next_call(a, obj_name, idx_name))
+        }
+        Expr::CallIndirect { callee, args } => {
+            expr_contains_next_call(callee, obj_name, idx_name)
+                .or_else(|| args.iter().find_map(|a| expr_contains_next_call(a, obj_name, idx_name)))
+        }
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_contains_next_call(lhs, obj_name, idx_name)
+                .or_else(|| expr_contains_next_call(rhs, obj_name, idx_name))
+        }
+        Expr::Unary { expr, .. } | Expr::Not(expr) => {
+            expr_contains_next_call(expr, obj_name, idx_name)
+        }
+        Expr::Index { collection, index } => {
+            expr_contains_next_call(collection, obj_name, idx_name)
+                .or_else(|| expr_contains_next_call(index, obj_name, idx_name))
+        }
+        Expr::Field { object, .. } => expr_contains_next_call(object, obj_name, idx_name),
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            expr_contains_next_call(cond, obj_name, idx_name)
+                .or_else(|| expr_contains_next_call(then_val, obj_name, idx_name))
+                .or_else(|| expr_contains_next_call(else_val, obj_name, idx_name))
+        }
+        Expr::ArrayInit(elems) => {
+            elems.iter().find_map(|e| expr_contains_next_call(e, obj_name, idx_name))
+        }
+        Expr::TypeCheck { expr, .. } => expr_contains_next_call(expr, obj_name, idx_name),
+        _ => None,
+    }
+}
+
+/// Extract the binding from the next-call statement and replace the call with `Var(binding)`.
+///
+/// Returns `(binding_name, declare)` where `declare` is true if the for-of should
+/// declare the variable with `const`.
+fn extract_binding_and_replace(
+    body: &mut Vec<Stmt>,
+    idx: usize,
+    obj_name: &str,
+    idx_name: &str,
+) -> Option<(String, bool)> {
+    // Case 1: VarDecl { name, init: nextCall | Cast(nextCall) }
+    if let Stmt::VarDecl {
+        name,
+        init: Some(init),
+        ..
+    } = &body[idx]
+    {
+        let is_direct = is_next_call(init, obj_name, idx_name);
+        let is_cast_wrapped = matches!(init, Expr::Cast { expr, .. } if is_next_call(expr, obj_name, idx_name));
+        if is_direct || is_cast_wrapped {
+            let binding = name.clone();
+            body.remove(idx);
+            return Some((binding, true));
+        }
+    }
+
+    // Case 2: Assign { target: Var(name), value: nextCall | Cast(nextCall) }
+    if let Stmt::Assign {
+        target: Expr::Var(name),
+        value,
+    } = &body[idx]
+    {
+        let is_direct = is_next_call(value, obj_name, idx_name);
+        let is_cast_wrapped = matches!(value, Expr::Cast { expr, .. } if is_next_call(expr, obj_name, idx_name));
+        if is_direct || is_cast_wrapped {
+            let binding = name.clone();
+            body.remove(idx);
+            return Some((binding, false));
+        }
+    }
+
+    // Case 3: The nextCall is embedded deeper. Replace it in-place with a
+    // synthetic `$item` variable and use that as the for-of binding.
+    let binding = "$item".to_string();
+    let replaced = replace_next_call_in_stmt(&mut body[idx], obj_name, idx_name, &binding);
+    if replaced {
+        Some((binding, true))
+    } else {
+        None
+    }
+}
+
+/// Check if an expression is exactly a Flash_Iterator.nextValue/nextName call.
+fn is_next_call(expr: &Expr, obj_name: &str, idx_name: &str) -> bool {
+    matches!(
+        expr,
+        Expr::SystemCall { system, method, args }
+            if system == "Flash.Iterator"
+            && (method == "nextValue" || method == "nextName")
+            && args.len() == 2
+            && matches!(&args[0], Expr::Var(v) if v == obj_name)
+            && matches!(&args[1], Expr::Var(v) if v == idx_name)
+    )
+}
+
+/// Replace the first occurrence of nextValue/nextName call in a statement
+/// with `Var(binding)`. Returns true if replacement was performed.
+fn replace_next_call_in_stmt(stmt: &mut Stmt, obj_name: &str, idx_name: &str, binding: &str) -> bool {
+    match stmt {
+        Stmt::VarDecl { init: Some(e), .. } => replace_next_call_in_expr(e, obj_name, idx_name, binding),
+        Stmt::Assign { value, .. } => replace_next_call_in_expr(value, obj_name, idx_name, binding),
+        Stmt::Expr(e) => replace_next_call_in_expr(e, obj_name, idx_name, binding),
+        Stmt::CompoundAssign { value, .. } => replace_next_call_in_expr(value, obj_name, idx_name, binding),
+        Stmt::If { cond, .. } => replace_next_call_in_expr(cond, obj_name, idx_name, binding),
+        _ => false,
+    }
+}
+
+/// Replace the first occurrence of a Flash_Iterator next call with `Var(binding)`.
+/// Handles Cast wrappers: `Cast(nextCall)` → `Var(binding)` (strip the cast).
+fn replace_next_call_in_expr(expr: &mut Expr, obj_name: &str, idx_name: &str, binding: &str) -> bool {
+    // Check if this expression is the target (possibly wrapped in Cast).
+    if is_next_call(expr, obj_name, idx_name) {
+        *expr = Expr::Var(binding.to_string());
+        return true;
+    }
+    if let Expr::Cast { expr: inner, .. } = expr {
+        if is_next_call(inner, obj_name, idx_name) {
+            *expr = Expr::Var(binding.to_string());
+            return true;
+        }
+    }
+
+    // Recurse into sub-expressions.
+    match expr {
+        Expr::Cast { expr, .. } => replace_next_call_in_expr(expr, obj_name, idx_name, binding),
+        Expr::Call { args, .. } | Expr::SystemCall { args, .. } => {
+            args.iter_mut().any(|a| replace_next_call_in_expr(a, obj_name, idx_name, binding))
+        }
+        Expr::CallIndirect { callee, args } => {
+            replace_next_call_in_expr(callee, obj_name, idx_name, binding)
+                || args.iter_mut().any(|a| replace_next_call_in_expr(a, obj_name, idx_name, binding))
+        }
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            replace_next_call_in_expr(lhs, obj_name, idx_name, binding)
+                || replace_next_call_in_expr(rhs, obj_name, idx_name, binding)
+        }
+        Expr::Unary { expr, .. } | Expr::Not(expr) => {
+            replace_next_call_in_expr(expr, obj_name, idx_name, binding)
+        }
+        Expr::Index { collection, index } => {
+            replace_next_call_in_expr(collection, obj_name, idx_name, binding)
+                || replace_next_call_in_expr(index, obj_name, idx_name, binding)
+        }
+        Expr::Field { object, .. } => replace_next_call_in_expr(object, obj_name, idx_name, binding),
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            replace_next_call_in_expr(cond, obj_name, idx_name, binding)
+                || replace_next_call_in_expr(then_val, obj_name, idx_name, binding)
+                || replace_next_call_in_expr(else_val, obj_name, idx_name, binding)
+        }
+        Expr::ArrayInit(elems) => {
+            elems.iter_mut().any(|e| replace_next_call_in_expr(e, obj_name, idx_name, binding))
+        }
+        Expr::TypeCheck { expr, .. } => replace_next_call_in_expr(expr, obj_name, idx_name, binding),
+        Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
+            replace_next_call_in_expr(lhs, obj_name, idx_name, binding)
+                || replace_next_call_in_expr(rhs, obj_name, idx_name, binding)
+        }
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -922,7 +1331,7 @@ pub fn merge_decl_init(body: &mut Vec<Stmt>) {
                 merge_decl_init(then_body);
                 merge_decl_init(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 merge_decl_init(body);
             }
             Stmt::For {
@@ -1048,6 +1457,17 @@ fn stmt_references_var(stmt: &Stmt, name: &str) -> bool {
 
         Stmt::Loop { body } => body.iter().any(|s| stmt_references_var(s, name)),
 
+        Stmt::ForOf {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
+            binding == name
+                || expr_references_var(iterable, name)
+                || body.iter().any(|s| stmt_references_var(s, name))
+        }
+
         Stmt::Return(e) => e.as_ref().is_some_and(|e| expr_references_var(e, name)),
 
         Stmt::Dispatch { blocks, .. } => blocks
@@ -1135,7 +1555,7 @@ pub fn narrow_var_scope(body: &mut Vec<Stmt>) {
                 narrow_var_scope(then_body);
                 narrow_var_scope(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 narrow_var_scope(body);
             }
             Stmt::For {
@@ -1242,6 +1662,21 @@ fn find_unique_child_body<'a>(stmt: &'a mut Stmt, name: &str) -> Option<&'a mut 
                 None
             }
         }
+        Stmt::ForOf {
+            binding,
+            iterable,
+            body,
+            ..
+        } => {
+            if binding == name || expr_references_var(iterable, name) {
+                return None;
+            }
+            if body.iter().any(|s| stmt_references_var(s, name)) {
+                Some(body)
+            } else {
+                None
+            }
+        }
         Stmt::For {
             init,
             cond,
@@ -1308,7 +1743,7 @@ pub fn eliminate_forwarding_stubs(body: &mut Vec<Stmt>) {
                 eliminate_forwarding_stubs(then_body);
                 eliminate_forwarding_stubs(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 eliminate_forwarding_stubs(body);
             }
             Stmt::For {
@@ -1390,7 +1825,7 @@ pub fn eliminate_self_assigns(body: &mut Vec<Stmt>) {
                 eliminate_self_assigns(then_body);
                 eliminate_self_assigns(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 eliminate_self_assigns(body);
             }
             Stmt::For {
@@ -1459,7 +1894,7 @@ pub fn eliminate_duplicate_assigns(body: &mut Vec<Stmt>) {
                 eliminate_duplicate_assigns(then_body);
                 eliminate_duplicate_assigns(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 eliminate_duplicate_assigns(body);
             }
             Stmt::For {
@@ -1555,7 +1990,7 @@ pub fn absorb_phi_condition(body: &mut Vec<Stmt>) {
                 absorb_phi_condition(then_body);
                 absorb_phi_condition(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 absorb_phi_condition(body);
             }
             Stmt::For {
@@ -1766,7 +2201,7 @@ pub fn rewrite_post_increment(body: &mut Vec<Stmt>) {
                 rewrite_post_increment(then_body);
                 rewrite_post_increment(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 rewrite_post_increment(body);
             }
             Stmt::For {
@@ -1885,7 +2320,7 @@ pub fn count_stmts(body: &[Stmt]) -> usize {
                 else_body,
                 ..
             } => 1 + count_stmts(then_body) + count_stmts(else_body),
-            Stmt::While { body, .. } | Stmt::Loop { body } => 1 + count_stmts(body),
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => 1 + count_stmts(body),
             Stmt::For {
                 init,
                 update,
@@ -1924,7 +2359,7 @@ fn recurse_into_stmt(stmt: &mut Stmt, pass: fn(&mut [Stmt])) {
             pass(update);
             pass(body);
         }
-        Stmt::Loop { body } => {
+        Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
             pass(body);
         }
         Stmt::Dispatch { blocks, .. } => {
@@ -1956,7 +2391,7 @@ pub fn invert_empty_then(body: &mut [Stmt]) {
                 invert_empty_then(then_body);
                 invert_empty_then(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 invert_empty_then(body);
             }
             Stmt::For {
@@ -2015,7 +2450,7 @@ pub fn eliminate_unreachable_after_exit(body: &mut Vec<Stmt>) {
                 eliminate_unreachable_after_exit(then_body);
                 eliminate_unreachable_after_exit(else_body);
             }
-            Stmt::While { body, .. } | Stmt::Loop { body } => {
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
                 eliminate_unreachable_after_exit(body);
             }
             Stmt::For {
@@ -2117,6 +2552,10 @@ fn simplify_ternary_in_stmt(stmt: &mut Stmt) {
             simplify_ternary_to_logical(body);
         }
         Stmt::Loop { body } => {
+            simplify_ternary_to_logical(body);
+        }
+        Stmt::ForOf { iterable, body, .. } => {
+            simplify_ternary_in_expr(iterable);
             simplify_ternary_to_logical(body);
         }
         Stmt::Return(Some(e)) => {

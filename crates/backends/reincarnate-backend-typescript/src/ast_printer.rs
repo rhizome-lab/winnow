@@ -365,6 +365,24 @@ fn print_stmt(stmt: &Stmt, ctx: &PrintCtx, out: &mut String, indent: &str) {
             let _ = writeln!(out, "{indent}}}");
         }
 
+        Stmt::ForOf {
+            binding,
+            declare,
+            iterable,
+            body,
+        } => {
+            let inner = format!("{indent}  ");
+            let decl = if *declare { "const " } else { "" };
+            let _ = writeln!(
+                out,
+                "{indent}for ({decl}{} of {}) {{",
+                sanitize_ident(binding),
+                print_expr(iterable, ctx),
+            );
+            print_stmts(body, ctx, out, &inner);
+            let _ = writeln!(out, "{indent}}}");
+        }
+
         Stmt::Return(expr) => {
             if let Some(e) = expr {
                 let _ = writeln!(out, "{indent}return {};", print_expr(e, ctx));

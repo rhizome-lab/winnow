@@ -181,6 +181,14 @@ pub enum Stmt {
     Loop {
         body: Vec<Stmt>,
     },
+    /// For-of loop: `for (const/let binding of iterable) { body }`.
+    ForOf {
+        binding: String,
+        /// `true` = `const binding` (new decl), `false` = bare `binding` (existing var).
+        declare: bool,
+        iterable: Expr,
+        body: Vec<Stmt>,
+    },
     /// Return.
     Return(Option<Expr>),
     /// Break.

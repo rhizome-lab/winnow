@@ -1014,6 +1014,13 @@ pub fn lower_function_linear(
         }
     }
 
+    ast_passes::rewrite_foreach_loops(&mut full_body);
+    // Clean up dead variables left by the foreach rewrite
+    // (e.g., the index register decl, single-use collection var).
+    ast_passes::narrow_var_scope(&mut full_body);
+    ast_passes::merge_decl_init(&mut full_body);
+    ast_passes::fold_single_use_consts(&mut full_body);
+
     ast_passes::rewrite_compound_assign(&mut full_body);
     ast_passes::rewrite_post_increment(&mut full_body);
 
