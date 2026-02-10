@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::CoreError;
-use crate::ir::{BlockId, Function, Inst, Module, Op, Type, ValueId};
+use crate::ir::{BlockId, Constant, Function, Inst, Module, Op, Type, ValueId};
 use crate::pipeline::{Transform, TransformResult};
 
 /// Type inference transform — refines `Dynamic` types to concrete types
@@ -254,6 +254,7 @@ fn infer_inst_type(
     func: &Function,
     ctx: &ModuleContext,
     alloc_types: &HashMap<ValueId, Type>,
+    const_strings: &HashMap<ValueId, String>,
 ) -> Option<Type> {
     let result = inst.result?;
     let current = &func.value_types[result];
@@ -371,7 +372,49 @@ fn infer_inst_type(
             [&func.value_types[*on_true], &func.value_types[*on_false]].into_iter(),
         ),
 
-        // SystemCall, CallIndirect, and everything else: keep current type.
+        // SystemCall: infer types for known patterns.
+        Op::SystemCall {
+            system,
+            method,
+            args,
+        } => {
+            match (system.as_str(), method.as_str()) {
+                // findPropStrict with a const string matching a known class → Struct(name).
+                ("Flash.Scope", "findPropStrict") => {
+                    if let Some(first) = args.first() {
+                        if let Some(name) = const_strings.get(first) {
+                            let bare = name.rsplit("::").next().unwrap_or(name);
+                            if ctx.struct_fields.contains_key(bare)
+                                || ctx.class_hierarchy.contains_key(bare)
+                            {
+                                Type::Struct(bare.to_string())
+                            } else {
+                                return None;
+                            }
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                // construct: if the constructor arg is Struct(name), the result is Struct(name).
+                ("Flash.Object", "construct") => {
+                    if let Some(first) = args.first() {
+                        if let Type::Struct(name) = &func.value_types[*first] {
+                            Type::Struct(name.clone())
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+
+        // CallIndirect and everything else: keep current type.
         _ => return None,
     };
 
@@ -401,6 +444,19 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
     let max_iters = func.value_types.len().max(1);
     let mut any_changed = false;
 
+    // Build const_strings once — string constants don't change during inference.
+    let const_strings: HashMap<ValueId, String> = func
+        .insts
+        .values()
+        .filter_map(|inst| {
+            if let Op::Const(Constant::String(s)) = &inst.op {
+                Some((inst.result?, s.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     for _ in 0..max_iters {
         let mut changed = false;
 
@@ -414,7 +470,7 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
             .values()
             .filter_map(|inst| {
                 let result = inst.result?;
-                let new_ty = infer_inst_type(inst, func, ctx, &alloc_types)?;
+                let new_ty = infer_inst_type(inst, func, ctx, &alloc_types, &const_strings)?;
                 Some((result, new_ty))
             })
             .collect();
