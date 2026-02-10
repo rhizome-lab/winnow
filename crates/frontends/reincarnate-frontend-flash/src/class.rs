@@ -53,6 +53,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
     };
 
     let mut functions = Vec::new();
+    let mut inner_functions = Vec::new();
 
     // Constructor: Instance.init_method
     if let Some(mut func) = translate_class_method(
@@ -61,6 +62,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         &format!("{class_short_name}::new"),
         true,
         Some(&class_short_name),
+        &mut inner_functions,
     )? {
         func.namespace = class_ns.clone();
         func.class = Some(class_short_name.clone());
@@ -77,7 +79,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
             let func_name = format!("{class_short_name}::{prefix}{bare_name}");
             let visibility = trait_visibility(pool, trait_);
             if let Some(mut func) =
-                translate_class_method(abc, &method_idx, &func_name, true, Some(&class_short_name))?
+                translate_class_method(abc, &method_idx, &func_name, true, Some(&class_short_name), &mut inner_functions)?
             {
                 func.namespace = class_ns.clone();
                 func.class = Some(class_short_name.clone());
@@ -97,6 +99,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         &format!("{class_short_name}::cinit"),
         true,
         None,
+        &mut inner_functions,
     )? {
         func.namespace = class_ns.clone();
         func.class = Some(class_short_name.clone());
@@ -116,7 +119,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
             let func_name = format!("{class_short_name}::{prefix}{bare_name}");
             let visibility = trait_visibility(pool, trait_);
             if let Some(mut func) =
-                translate_class_method(abc, &method_idx, &func_name, true, None)?
+                translate_class_method(abc, &method_idx, &func_name, true, None, &mut inner_functions)?
             {
                 func.namespace = class_ns.clone();
                 func.class = Some(class_short_name.clone());
@@ -125,6 +128,15 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
                 functions.push(func);
             }
         }
+    }
+
+    // Annotate closure bodies and add them to the class.
+    for mut func in inner_functions {
+        func.namespace = class_ns.clone();
+        func.class = Some(class_short_name.clone());
+        func.method_kind = MethodKind::Instance;
+        func.visibility = Visibility::Private;
+        functions.push(func);
     }
 
     Ok(ClassInfo {
@@ -254,6 +266,7 @@ fn translate_class_method(
     func_name: &str,
     has_self: bool,
     class_name: Option<&str>,
+    inner_functions: &mut Vec<Function>,
 ) -> Result<Option<Function>, String> {
     let idx = method_idx.0 as usize;
     if idx >= abc.methods.len() {
@@ -315,12 +328,12 @@ fn translate_class_method(
         defaults,
     };
 
-    let func = translate_method_body(abc, body, func_name, sig, &param_names, has_self)?;
+    let func = translate_method_body(abc, body, func_name, sig, &param_names, has_self, inner_functions)?;
     Ok(Some(func))
 }
 
 /// Convert an AVM2 `DefaultValue` to an IR `Constant`.
-fn convert_default_value(pool: &ConstantPool, dv: &DefaultValue) -> Option<Constant> {
+pub fn convert_default_value(pool: &ConstantPool, dv: &DefaultValue) -> Option<Constant> {
     match dv {
         DefaultValue::True => Some(Constant::Bool(true)),
         DefaultValue::False => Some(Constant::Bool(false)),

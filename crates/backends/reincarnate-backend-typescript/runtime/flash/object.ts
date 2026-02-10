@@ -32,14 +32,6 @@ export function newObject(...pairs: any[]): Record<string, any> {
   return obj;
 }
 
-export function newFunction(name: string): any {
-  // Stub: in a full AVM2 runtime this would create a closure from a
-  // method reference. For now return a named no-op.
-  const fn_ = function (this: any, ..._args: any[]) {};
-  Object.defineProperty(fn_, "name", { value: name });
-  return fn_;
-}
-
 export function applyType(base: any, ...typeArgs: any[]): any {
   // AVM2 ApplyType creates a parameterized type (e.g., Vector.<int>).
   // In TypeScript land, just return the base — generics are erased.

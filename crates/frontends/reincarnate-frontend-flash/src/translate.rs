@@ -8,13 +8,14 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use reincarnate_core::ir::{
-    BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, Type, ValueId, Visibility,
+    BlockId, CmpKind, Constant, Function, FunctionBuilder, FunctionSig, Type, ValueId, Visibility,
 };
 use swf::avm2::types::{AbcFile, MethodBody, Op};
 
 use crate::abc::{
     offset_to_index_map, parse_bytecode, resolve_branch_target, resolve_switch_target, LocatedOp,
 };
+use crate::class::convert_default_value;
 use crate::multiname::{classify_multiname, pool_string, resolve_multiname_index, resolve_type, MultinameKind};
 use crate::scope::ScopeStack;
 
@@ -26,10 +27,10 @@ pub fn translate_method_body(
     sig: FunctionSig,
     param_names: &[Option<String>],
     has_self: bool,
+    inner_functions: &mut Vec<Function>,
 ) -> Result<Function, String> {
     let ops = parse_bytecode(&body.code)?;
     let offset_map = offset_to_index_map(&ops);
-    let pool = &abc.constant_pool;
 
     // Pass 1: Find block boundaries.
     let mut block_starts = find_block_starts(&ops, &offset_map, body);
@@ -164,7 +165,7 @@ pub fn translate_method_body(
             &mut fb,
             &ops,
             op_idx,
-            pool,
+            abc,
             &offset_map,
             &block_map,
             &mut stack,
@@ -174,6 +175,8 @@ pub fn translate_method_body(
             &mut named_registers,
             debug_reg_offset,
             num_params,
+            func_name,
+            inner_functions,
         );
     }
 
@@ -531,7 +534,7 @@ fn translate_op(
     fb: &mut FunctionBuilder,
     ops: &[LocatedOp],
     op_idx: usize,
-    pool: &swf::avm2::types::ConstantPool,
+    abc: &AbcFile,
     offset_map: &HashMap<usize, usize>,
     block_map: &HashMap<usize, BlockId>,
     stack: &mut Vec<ValueId>,
@@ -541,7 +544,10 @@ fn translate_op(
     named_registers: &mut HashSet<u8>,
     debug_reg_offset: usize,
     num_params: usize,
+    func_name: &str,
+    inner_functions: &mut Vec<Function>,
 ) {
+    let pool = &abc.constant_pool;
     let loc = &ops[op_idx];
     match &loc.op {
         // ====================================================================
@@ -1400,8 +1406,68 @@ fn translate_op(
             stack.push(v);
         }
         Op::NewFunction { index } => {
-            let func_name = format!("anon_func{}", index.0);
-            let name_val = fb.const_string(&func_name);
+            // Extract class prefix from the enclosing func_name (e.g. "CoC" from "CoC::doStuff").
+            let class_prefix = func_name.split("::").next().unwrap_or(func_name);
+            let closure_name = format!("{class_prefix}::$closure{}", index.0);
+
+            // Try to compile the closure body.
+            let method_idx = index.0 as usize;
+            let compiled = if method_idx < abc.methods.len() {
+                let closure_method = &abc.methods[method_idx];
+                let closure_body = abc
+                    .method_bodies
+                    .iter()
+                    .find(|b| b.method.0 == index.0);
+                if let Some(closure_body) = closure_body {
+                    let mut closure_params = vec![Type::Dynamic]; // register 0 = scope
+                    let mut closure_param_names: Vec<Option<String>> = vec![None];
+                    let mut closure_defaults: Vec<Option<Constant>> = vec![None];
+                    for param in &closure_method.params {
+                        closure_params.push(resolve_type(pool, &param.kind));
+                        closure_param_names.push(None);
+                        closure_defaults.push(
+                            param
+                                .default_value
+                                .as_ref()
+                                .and_then(|dv| convert_default_value(pool, dv)),
+                        );
+                    }
+                    while closure_defaults.last() == Some(&None) {
+                        closure_defaults.pop();
+                    }
+                    let closure_return = resolve_type(pool, &closure_method.return_type);
+                    let closure_sig = FunctionSig {
+                        params: closure_params,
+                        return_ty: closure_return,
+                        defaults: closure_defaults,
+                    };
+                    match translate_method_body(
+                        abc,
+                        closure_body,
+                        &closure_name,
+                        closure_sig,
+                        &closure_param_names,
+                        true,
+                        inner_functions,
+                    ) {
+                        Ok(func) => {
+                            inner_functions.push(func);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            let name_val = if compiled {
+                fb.const_string(&closure_name)
+            } else {
+                fb.const_string(format!("anon_func{}", index.0))
+            };
             let v = fb.system_call(
                 "Flash.Object",
                 "newFunction",
@@ -2139,7 +2205,7 @@ mod tests {
             params: vec![],
             return_ty: Type::Void, ..Default::default() };
 
-        let func = translate_method_body(&abc, &body, "test", sig, &[], false).unwrap();
+        let func = translate_method_body(&abc, &body, "test", sig, &[], false, &mut vec![]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("return"), "expected return in:\n{output}");
     }
@@ -2171,7 +2237,7 @@ mod tests {
             params: vec![],
             return_ty: Type::Int(32), ..Default::default() };
 
-        let func = translate_method_body(&abc, &body, "answer", sig, &[], false).unwrap();
+        let func = translate_method_body(&abc, &body, "answer", sig, &[], false, &mut vec![]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("const 42"), "expected const 42 in:\n{output}");
         assert!(output.contains("return"), "expected return in:\n{output}");
@@ -2204,7 +2270,7 @@ mod tests {
             params: vec![],
             return_ty: Type::Dynamic, ..Default::default() };
 
-        let func = translate_method_body(&abc, &body, "add_test", sig, &[], false).unwrap();
+        let func = translate_method_body(&abc, &body, "add_test", sig, &[], false, &mut vec![]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("const 3"), "expected const 3 in:\n{output}");
         assert!(output.contains("const 4"), "expected const 4 in:\n{output}");
@@ -2239,7 +2305,7 @@ mod tests {
             params: vec![],
             return_ty: Type::Dynamic, ..Default::default() };
 
-        let func = translate_method_body(&abc, &body, "local_test", sig, &[], false).unwrap();
+        let func = translate_method_body(&abc, &body, "local_test", sig, &[], false, &mut vec![]).unwrap();
         let output = format!("{func}");
         assert!(output.contains("store"), "expected store in:\n{output}");
         assert!(output.contains("load"), "expected load in:\n{output}");

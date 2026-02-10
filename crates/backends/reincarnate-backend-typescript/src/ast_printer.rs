@@ -813,6 +813,14 @@ fn print_system_call(
         return format!("super({})", rest_args.join(", "));
     }
 
+    // newFunction → this.methodRef
+    if system == "Flash.Object" && method == "newFunction" && args.len() == 1 {
+        if let Expr::Literal(Constant::String(name)) = &args[0] {
+            let short = name.rsplit("::").next().unwrap_or(name);
+            return format!("this.{}", sanitize_ident(short));
+        }
+    }
+
     // construct → new
     if system == "Flash.Object" && method == "construct" {
         if let Some((ctor, rest)) = args.split_first() {
