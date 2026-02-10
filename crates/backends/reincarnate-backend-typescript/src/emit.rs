@@ -3044,4 +3044,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cinit_scope_lookup_emits_this_dot_field() {
+        // In cinit, findPropStrict that doesn't resolve to an ancestor should
+        // still emit `this.field = value` (not bare `field = value`).
+        let mut mb = ModuleBuilder::new("test");
+
+        mb.add_struct(StructDef {
+            name: "Settings".into(),
+            namespace: vec!["classes".into()],
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+
+        // cinit: static initializer that sets a static field via scope lookup
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("Settings::cinit", sig, Visibility::Public);
+        fb.set_class(vec!["classes".into()], "Settings".into(), MethodKind::Static);
+        let _scope_param = fb.param(0);
+        let name = fb.const_string("debugBuild");
+        let scope =
+            fb.system_call("Flash.Scope", "findPropStrict", &[name], Type::Dynamic);
+        let val = fb.const_bool(true);
+        fb.set_field(scope, "debugBuild", val);
+        fb.ret(None);
+        let cinit_id = mb.add_function(fb.build());
+
+        mb.add_class(ClassDef {
+            name: "Settings".into(),
+            namespace: vec!["classes".into()],
+            struct_index: 0,
+            methods: vec![cinit_id],
+            super_class: None,
+            visibility: Visibility::Public,
+            static_fields: vec![("debugBuild".into(), Type::Bool)],
+        });
+
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        assert!(
+            out.contains("this.debugBuild = true"),
+            "cinit should emit this.field, not bare field:\n{out}"
+        );
+        assert!(
+            !out.contains("Flash_Scope.findPropStrict"),
+            "findPropStrict call should be resolved away:\n{out}"
+        );
+    }
+
 }

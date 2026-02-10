@@ -519,7 +519,11 @@ fn print_expr(expr: &Expr, ctx: &PrintCtx) -> String {
                         if let Some(short) = ctx.class_names.get(field) {
                             return short.clone();
                         }
-                        return sanitize_ident(effective);
+                        let safe = sanitize_ident(effective);
+                        if ctx.is_cinit {
+                            return format!("this.{safe}");
+                        }
+                        return safe;
                     }
                 }
             }
