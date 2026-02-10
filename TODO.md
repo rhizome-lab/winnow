@@ -346,6 +346,47 @@ Cross-SWF vN counts: cc-project 0, utg-project 0, tln-project 16,
 nff-project 2, mvol-project 6. The `simplify_ternary_to_logical` pass
 eliminated v78 from tln (was 17 → 16).
 
+### Architecture — Decouple TS Backend from Flash Runtime
+
+The TypeScript backend (`reincarnate-backend-typescript`) has Flash-specific
+knowledge hardcoded throughout:
+
+- `runtime/flash/` — entire Flash display hierarchy, events, etc. baked in
+- `flash_pkg_module()` / `flash_stdlib_module()` — Flash namespace detection
+- `emit_flash_stdlib_imports()` — Flash-specific import routing in codegen
+- `scaffold.rs` — hardcoded `import { stage, flashTick } from "flash/runtime"`
+
+This means adding a Director or VB6 frontend that targets TypeScript would
+require modifying the backend — the opposite of how a compiler pipeline should
+work.
+
+**Target architecture:**
+
+1. **Frontend declares its runtime** — Each frontend ships a runtime package
+   (npm package, directory of `.ts` files, whatever). The frontend's manifest
+   or IR metadata says "I depend on runtime package X."
+
+2. **IR carries import metadata** — Instead of raw strings like
+   `flash.text::TextFormatAlign` that the backend reverse-engineers, the
+   frontend attaches import provenance: `{ short_name: "TextFormatAlign",
+   module: "@reincarnate/flash-runtime/text" }`. The backend emits the import
+   verbatim.
+
+3. **Backend is generic** — The TS backend emits `import` statements from IR
+   metadata, copies/links the declared runtime package into the output, and
+   generates scaffold from frontend-provided config. Zero namespace parsing.
+
+4. **Flash runtime becomes a separate package** — `runtime/flash/` moves out
+   of the backend crate into either `reincarnate-frontend-flash` or a
+   standalone `@reincarnate/flash-runtime` npm package that the Flash frontend
+   declares as its dependency.
+
+**Migration path:** The current `flash_stdlib_module` + namespace detection
+is a temporary bridge. Each increment that adds more Flash knowledge to the
+backend (class stubs, package maps, cross-package overrides) makes the
+eventual decoupling harder. Priority: do this before adding a second frontend
+that targets TypeScript.
+
 ### Architecture — Hybrid Lowering via Structured IR
 
 The current `lower_ast.rs` (~1000 lines) interleaves three concerns: control
