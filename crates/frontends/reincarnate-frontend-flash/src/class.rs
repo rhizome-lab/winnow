@@ -1,8 +1,8 @@
 //! AVM2 class/instance → IR StructDef + method functions.
 
 use reincarnate_core::ir::{
-    ClassDef, Constant, EntryPoint, Function, FunctionSig, MethodKind, Module, ModuleBuilder,
-    StructDef, Type, Visibility,
+    ClassDef, Constant, EntryPoint, ExternalImport, Function, FunctionSig, MethodKind, Module,
+    ModuleBuilder, Op, StructDef, Type, Visibility,
 };
 use swf::avm2::types::{AbcFile, ConstantPool, DefaultValue, Index, Trait, TraitKind};
 
@@ -417,5 +417,177 @@ pub fn translate_abc_to_module(
         mb.set_entry_point(EntryPoint::ConstructClass(name.to_string()));
     }
 
-    Ok(mb.build())
+    let mut module = mb.build();
+    populate_external_imports(&mut module);
+    Ok(module)
+}
+
+// ---------------------------------------------------------------------------
+// External import resolution
+// ---------------------------------------------------------------------------
+
+/// Flash package names that have runtime module implementations.
+const FLASH_PACKAGES: &[&str] = &["display", "events", "geom", "net", "text", "utils"];
+
+/// Resolve a Flash qualified name to an `ExternalImport`, if it maps to a
+/// runtime module we implement.
+///
+/// Accepts fully-qualified names (`"flash.text::TextFormatAlign"`) and special
+/// runtime values (`"stage"`, `"flashTick"`).
+fn resolve_flash_external_import(name: &str) -> Option<ExternalImport> {
+    // Qualified name: "flash.text::TextFormatAlign" → ("TextFormatAlign", "flash/text")
+    if let Some(idx) = name.find("::") {
+        let ns = &name[..idx];
+        let short = &name[idx + 2..];
+        let pkg = ns.strip_prefix("flash.")?;
+        if !FLASH_PACKAGES.contains(&pkg) {
+            return None;
+        }
+        return Some(ExternalImport {
+            short_name: short.to_string(),
+            module_path: format!("flash/{pkg}"),
+        });
+    }
+    // Special runtime values (not namespaced in IR).
+    match name {
+        "stage" | "flashTick" => Some(ExternalImport {
+            short_name: name.to_string(),
+            module_path: "flash/runtime".to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// Register a name as an external import if it resolves to a Flash runtime module.
+fn try_register_external(name: &str, module: &mut Module) {
+    if !module.external_imports.contains_key(name) {
+        if let Some(import) = resolve_flash_external_import(name) {
+            module.external_imports.insert(name.to_string(), import);
+        }
+    }
+}
+
+/// Collect a type's qualified names for external import registration.
+fn collect_type_names(ty: &Type, module: &mut Module) {
+    match ty {
+        Type::Struct(name) | Type::Enum(name) => {
+            try_register_external(name, module);
+        }
+        Type::Array(inner) | Type::Option(inner) => {
+            collect_type_names(inner, module);
+        }
+        Type::Map(k, v) => {
+            collect_type_names(k, module);
+            collect_type_names(v, module);
+        }
+        Type::Tuple(elems) => {
+            for elem in elems {
+                collect_type_names(elem, module);
+            }
+        }
+        Type::Function(sig) => {
+            collect_type_names(&sig.return_ty, module);
+            for p in &sig.params {
+                collect_type_names(p, module);
+            }
+        }
+        Type::Coroutine {
+            yield_ty,
+            return_ty,
+        } => {
+            collect_type_names(yield_ty, module);
+            collect_type_names(return_ty, module);
+        }
+        Type::Union(types) => {
+            for t in types {
+                collect_type_names(t, module);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Scan the entire module for Flash stdlib references and populate
+/// `module.external_imports`.
+fn populate_external_imports(module: &mut Module) {
+    // Super class references.
+    let super_classes: Vec<String> = module
+        .classes
+        .iter()
+        .filter_map(|c| c.super_class.clone())
+        .collect();
+    for sc in &super_classes {
+        try_register_external(sc, module);
+    }
+
+    // Struct fields (class instance fields + standalone structs).
+    let field_types: Vec<Type> = module
+        .structs
+        .iter()
+        .flat_map(|s| s.fields.iter().map(|(_, ty)| ty.clone()))
+        .collect();
+    for ty in &field_types {
+        collect_type_names(ty, module);
+    }
+
+    // Static fields.
+    let static_field_types: Vec<Type> = module
+        .classes
+        .iter()
+        .flat_map(|c| c.static_fields.iter().map(|(_, ty)| ty.clone()))
+        .collect();
+    for ty in &static_field_types {
+        collect_type_names(ty, module);
+    }
+
+    // Function signatures, instructions, and value types.
+    let func_ids: Vec<_> = module.functions.keys().collect();
+    for fid in func_ids {
+        // Signature types.
+        let sig_types: Vec<Type> = {
+            let func = &module.functions[fid];
+            let mut types = vec![func.sig.return_ty.clone()];
+            types.extend(func.sig.params.iter().cloned());
+            types
+        };
+        for ty in &sig_types {
+            collect_type_names(ty, module);
+        }
+
+        // Instructions: TypeCheck, Alloc, Cast types and GetField names.
+        let inst_refs: Vec<Either> = {
+            let func = &module.functions[fid];
+            func.insts
+                .iter()
+                .filter_map(|(_, inst)| match &inst.op {
+                    Op::TypeCheck(_, ty) | Op::Alloc(ty) | Op::Cast(_, ty) => {
+                        Some(Either::Ty(ty.clone()))
+                    }
+                    Op::GetField { field, .. } => Some(Either::Name(field.clone())),
+                    _ => None,
+                })
+                .collect()
+        };
+        for r in &inst_refs {
+            match r {
+                Either::Ty(ty) => collect_type_names(ty, module),
+                Either::Name(name) => try_register_external(name, module),
+            }
+        }
+
+        // Value types.
+        let val_types: Vec<Type> = {
+            let func = &module.functions[fid];
+            func.value_types.iter().map(|(_, ty)| ty.clone()).collect()
+        };
+        for ty in &val_types {
+            collect_type_names(ty, module);
+        }
+    }
+}
+
+/// Helper enum to avoid borrowing `module` while iterating its functions.
+enum Either {
+    Ty(Type),
+    Name(String),
 }
