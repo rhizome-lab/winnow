@@ -72,11 +72,18 @@ const xmlListHandler: ProxyHandler<any[]> = {
     }
     return Reflect.get(target, prop, receiver);
   },
-  // Support Object.keys / Object.values / for-in enumeration
+  // Support Object.keys / Object.values / for-in enumeration.
+  // Must include "length" — it's non-configurable on arrays and the
+  // Proxy invariant requires ownKeys to report all non-configurable keys.
   ownKeys(target) {
-    return target.map((_, i) => String(i));
+    const keys: (string | symbol)[] = target.map((_, i) => String(i));
+    keys.push("length");
+    return keys;
   },
   getOwnPropertyDescriptor(target, prop) {
+    if (prop === "length") {
+      return { value: target.length, writable: true, enumerable: false, configurable: false };
+    }
     if (typeof prop === "string" && /^\d+$/.test(prop)) {
       const idx = Number(prop);
       if (idx < target.length) {
