@@ -89,11 +89,13 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
     }
 
     // Static initializer: Class.init_method
+    // cinit receives the class/scope object as `this` (AVM2 register 0),
+    // so has_self = true to ensure register 0 is initialized from param(0).
     if let Some(mut func) = translate_class_method(
         abc,
         &class.init_method,
         &format!("{class_short_name}::cinit"),
-        false,
+        true,
         None,
     )? {
         func.namespace = class_ns.clone();

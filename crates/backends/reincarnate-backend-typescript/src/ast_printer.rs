@@ -108,7 +108,7 @@ pub fn print_class_method(
             ancestors: ctx.ancestors.clone(),
             method_names: ctx.method_names.clone(),
             has_self: true,
-            self_param_name: None,
+            self_param_name: ast.params.first().map(|(name, _)| name.clone()),
             suppress_super: ctx.suppress_super,
             is_cinit: true,
         };
