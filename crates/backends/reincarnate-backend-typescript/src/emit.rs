@@ -63,8 +63,7 @@ pub fn emit_module(
 pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConfig) -> Result<String, CoreError> {
     let mut out = String::new();
     let class_names = build_class_names(module);
-    let ancestor_sets = build_ancestor_sets(module);
-    let method_name_sets = build_method_name_sets(module);
+    let class_meta = ClassMeta::build(module);
 
     emit_runtime_imports(module, &mut out);
     emit_imports(module, &mut out);
@@ -77,7 +76,7 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     } else {
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, lowering_config, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
         }
         for &fid in &free_funcs {
             emit_function(&mut module.functions[fid], &class_names, lowering_config, &mut out)?;
@@ -147,6 +146,23 @@ fn build_class_names(module: &Module) -> HashMap<String, String> {
         .collect()
 }
 
+/// Pre-computed class hierarchy metadata used during emission.
+struct ClassMeta {
+    ancestor_sets: HashMap<String, HashSet<String>>,
+    method_name_sets: HashMap<String, HashSet<String>>,
+    instance_field_sets: HashMap<String, HashSet<String>>,
+}
+
+impl ClassMeta {
+    fn build(module: &Module) -> Self {
+        Self {
+            ancestor_sets: build_ancestor_sets(module),
+            method_name_sets: build_method_name_sets(module),
+            instance_field_sets: build_instance_field_sets(module),
+        }
+    }
+}
+
 /// Build a map from qualified class name to the set of ancestor short names.
 ///
 /// For each class, the set includes the class's own short name and the short
@@ -207,6 +223,37 @@ fn build_method_name_sets(module: &Module) -> HashMap<String, HashSet<String>> {
     result
 }
 
+/// Build a mapping from qualified class name → set of all instance field short
+/// names visible through the class hierarchy (own fields + all ancestor fields).
+fn build_instance_field_sets(module: &Module) -> HashMap<String, HashSet<String>> {
+    let class_by_short: HashMap<&str, &ClassDef> =
+        module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    let mut result = HashMap::new();
+    for class in &module.classes {
+        let mut fields = HashSet::new();
+        let mut current = class;
+        loop {
+            let struct_def = &module.structs[current.struct_index];
+            for (name, _ty) in &struct_def.fields {
+                fields.insert(name.clone());
+            }
+            match current.super_class {
+                Some(ref sc) => {
+                    let short = sc.rsplit("::").next().unwrap_or(sc);
+                    match class_by_short.get(short) {
+                        Some(parent) => current = parent,
+                        None => break,
+                    }
+                }
+                None => break,
+            }
+        }
+        result.insert(qualified_class_name(class), fields);
+    }
+    result
+}
+
 /// Build a qualified name from a ClassDef's namespace + name.
 fn qualified_class_name(class: &ClassDef) -> String {
     if class.namespace.is_empty() {
@@ -255,8 +302,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     let (class_groups, free_funcs) = group_by_class(module);
     let registry = ClassRegistry::from_module(module);
     let class_names = build_class_names(module);
-    let ancestor_sets = build_ancestor_sets(module);
-    let method_name_sets = build_method_name_sets(module);
+    let class_meta = ClassMeta::build(module);
     let mut barrel_exports: Vec<String> = Vec::new();
 
     for group in &class_groups {
@@ -287,7 +333,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let prefix = prefix.trim_end_matches('/');
         let _ = writeln!(out, "import {{ QN_KEY }} from \"{prefix}/runtime/flash/utils\";\n");
         emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
-        emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, lowering_config, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -943,8 +989,7 @@ fn emit_class(
     group: &ClassGroup,
     module: &mut Module,
     class_names: &HashMap<String, String>,
-    ancestor_sets: &HashMap<String, HashSet<String>>,
-    method_name_sets: &HashMap<String, HashSet<String>>,
+    class_meta: &ClassMeta,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -987,17 +1032,17 @@ fn emit_class(
         MethodKind::Free => 5,
     });
 
-    let empty_ancestors = HashSet::new();
-    let ancestors = ancestor_sets.get(&qualified).unwrap_or(&empty_ancestors);
-    let empty_methods = HashSet::new();
-    let method_names = method_name_sets.get(&qualified).unwrap_or(&empty_methods);
+    let empty = HashSet::new();
+    let ancestors = class_meta.ancestor_sets.get(&qualified).unwrap_or(&empty);
+    let method_names = class_meta.method_name_sets.get(&qualified).unwrap_or(&empty);
+    let instance_fields = class_meta.instance_field_sets.get(&qualified).unwrap_or(&empty);
 
     let suppress_super = extends.is_empty();
     for (i, &fid) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, suppress_super, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, suppress_super, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -1028,10 +1073,12 @@ fn emit_class_method(
     class_names: &HashMap<String, String>,
     ancestors: &HashSet<String>,
     method_names: &HashSet<String>,
+    instance_fields: &HashSet<String>,
     suppress_super: bool,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
+    #![allow(clippy::too_many_arguments)]
     use crate::ast_printer::{self, PrintCtx};
     use reincarnate_core::ir::linear;
 
@@ -1054,7 +1101,7 @@ fn emit_class_method(
     }
     let is_cinit = raw_name == "cinit" && func.method_kind == MethodKind::Static;
     let mut pctx = if skip_self || is_cinit {
-        PrintCtx::for_method(class_names, ancestors, method_names)
+        PrintCtx::for_method(class_names, ancestors, method_names, instance_fields)
     } else {
         PrintCtx::for_function(class_names)
     };

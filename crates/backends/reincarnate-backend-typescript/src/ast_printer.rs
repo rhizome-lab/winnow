@@ -21,6 +21,8 @@ pub struct PrintCtx {
     pub ancestors: HashSet<String>,
     /// Method short names visible in the class hierarchy.
     pub method_names: HashSet<String>,
+    /// Instance field short names visible in the class hierarchy (from StructDef).
+    pub instance_fields: HashSet<String>,
     /// Whether we are inside a method (have a `this`).
     pub has_self: bool,
     /// Name of the `self` parameter (e.g. "v0") — mapped to `this` during printing.
@@ -37,6 +39,7 @@ impl PrintCtx {
             class_names: class_names.clone(),
             ancestors: HashSet::new(),
             method_names: HashSet::new(),
+            instance_fields: HashSet::new(),
             has_self: false,
             self_param_name: None,
             suppress_super: false,
@@ -48,11 +51,13 @@ impl PrintCtx {
         class_names: &HashMap<String, String>,
         ancestors: &HashSet<String>,
         method_names: &HashSet<String>,
+        instance_fields: &HashSet<String>,
     ) -> Self {
         Self {
             class_names: class_names.clone(),
             ancestors: ancestors.clone(),
             method_names: method_names.clone(),
+            instance_fields: instance_fields.clone(),
             has_self: true,
             self_param_name: None,
             suppress_super: false,
@@ -107,6 +112,7 @@ pub fn print_class_method(
             class_names: ctx.class_names.clone(),
             ancestors: ctx.ancestors.clone(),
             method_names: ctx.method_names.clone(),
+            instance_fields: ctx.instance_fields.clone(),
             has_self: true,
             self_param_name: ast.params.first().map(|(name, _)| name.clone()),
             suppress_super: ctx.suppress_super,
@@ -151,6 +157,7 @@ pub fn print_class_method(
             class_names: ctx.class_names.clone(),
             ancestors: ctx.ancestors.clone(),
             method_names: ctx.method_names.clone(),
+            instance_fields: ctx.instance_fields.clone(),
             has_self: ctx.has_self,
             self_param_name: Some(ast.params[0].0.clone()),
             suppress_super: ctx.suppress_super,
@@ -164,6 +171,7 @@ pub fn print_class_method(
             class_names: ctx.class_names.clone(),
             ancestors: ctx.ancestors.clone(),
             method_names: ctx.method_names.clone(),
+            instance_fields: ctx.instance_fields.clone(),
             has_self: ctx.has_self,
             self_param_name: ctx.self_param_name.clone(),
             suppress_super: ctx.suppress_super,
@@ -457,9 +465,16 @@ fn print_expr(expr: &Expr, ctx: &PrintCtx) -> String {
             if let Some(args) = scope_lookup_args(object) {
                 let effective = field.rsplit("::").next().unwrap_or(field);
                 match resolve_scope_lookup(args, ctx) {
-                    ScopeResolution::This => {
+                    ScopeResolution::Ancestor(ref class_name) => {
                         let safe = sanitize_ident(effective);
-                        return format!("this.{safe}");
+                        if ctx.is_cinit || ctx.instance_fields.contains(effective) {
+                            // In cinit `this` is the class; for instance fields
+                            // `this.field` is correct on the instance.
+                            return format!("this.{safe}");
+                        }
+                        // Static members live on the class constructor, not instances.
+                        let cls = sanitize_ident(class_name);
+                        return format!("{cls}.{safe}");
                     }
                     ScopeResolution::ScopeLookup => {
                         // Check if the field is a known class name.
@@ -675,7 +690,7 @@ fn resolve_scope_lookup(args: &[Expr], ctx: &PrintCtx) -> ScopeResolution {
     if ctx.has_self {
         if let Some(class_name) = class_from_scope_arg(args) {
             if ctx.ancestors.contains(&class_name) {
-                return ScopeResolution::This;
+                return ScopeResolution::Ancestor(class_name);
             }
         }
     }
@@ -683,7 +698,8 @@ fn resolve_scope_lookup(args: &[Expr], ctx: &PrintCtx) -> ScopeResolution {
 }
 
 enum ScopeResolution {
-    This,
+    /// The lookup matched an ancestor class — carry the short class name.
+    Ancestor(String),
     ScopeLookup,
 }
 
@@ -772,7 +788,12 @@ fn print_system_call(
     // findPropStrict/findProperty → resolve scope or emit `this`
     if system == "Flash.Scope" && (method == "findPropStrict" || method == "findProperty") {
         match resolve_scope_lookup(args, ctx) {
-            ScopeResolution::This => return "this".into(),
+            ScopeResolution::Ancestor(ref class_name) => {
+                if ctx.is_cinit {
+                    return "this".into();
+                }
+                return sanitize_ident(class_name);
+            }
             ScopeResolution::ScopeLookup => {
                 // The scope lookup will be consumed by Field/Call site.
                 // If it reaches here as a standalone expression, skip it.
