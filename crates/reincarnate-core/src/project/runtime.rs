@@ -25,9 +25,6 @@ pub struct RuntimeConfig {
 pub struct SystemModule {
     /// Submodule path relative to runtime root (e.g. `"flash/object"`).
     pub path: String,
-    /// Use named import (`import { X }`) instead of namespace (`import * as X`).
-    #[serde(default)]
-    pub named_import: bool,
 }
 
 /// Configuration for the generated entry point (`main.ts`).

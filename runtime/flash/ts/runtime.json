@@ -3,7 +3,7 @@
     "Flash.Object": { "path": "flash/object" },
     "Flash.Class": { "path": "flash/class" },
     "Flash.Scope": { "path": "flash/scope" },
-    "Flash.Exception": { "path": "flash/exception", "named_import": true },
+    "Flash.Exception": { "path": "flash/exception" },
     "Flash.Iterator": { "path": "flash/iterator" },
     "Flash.Memory": { "path": "flash/memory" },
     "Flash.XML": { "path": "flash/xml" },

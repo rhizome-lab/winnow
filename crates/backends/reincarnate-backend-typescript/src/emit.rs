@@ -498,15 +498,15 @@ fn emit_runtime_imports_with_prefix(
     let known: BTreeSet<&str> = SYSTEM_NAMES.iter().copied().collect();
     let mut generic: Vec<&str> = Vec::new();
     // Group engine-specific systems by their runtime sub-module path.
-    let mut by_mod: BTreeMap<String, (bool, Vec<String>)> = BTreeMap::new();
+    let mut by_mod: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for sys in &systems {
         if known.contains(sys.as_str()) {
             generic.push(sys.as_str());
         } else if let Some(sm) = runtime_config.and_then(|c| c.system_modules.get(sys.as_str())) {
-            let entry = by_mod
+            by_mod
                 .entry(sm.path.clone())
-                .or_insert_with(|| (sm.named_import, Vec::new()));
-            entry.1.push(sanitize_ident(sys));
+                .or_default()
+                .push(sanitize_ident(sys));
         } else {
             // Fallback: derive module path from system name.
             let module = sys
@@ -516,8 +516,7 @@ fn emit_runtime_imports_with_prefix(
                 .to_ascii_lowercase();
             by_mod
                 .entry(module)
-                .or_insert_with(|| (false, Vec::new()))
-                .1
+                .or_default()
                 .push(sanitize_ident(sys));
         }
     }
@@ -528,21 +527,13 @@ fn emit_runtime_imports_with_prefix(
             generic.join(", ")
         );
     }
-    for (module, (named_import, names)) in &by_mod {
-        if *named_import {
+    for (module, names) in &by_mod {
+        // Namespace imports enable tree-shaking of individual methods.
+        for name in names {
             let _ = writeln!(
                 out,
-                "import {{ {} }} from \"{prefix}/runtime/{module}\";",
-                names.join(", ")
+                "import * as {name} from \"{prefix}/runtime/{module}\";",
             );
-        } else {
-            // Namespace imports enable tree-shaking of individual methods.
-            for name in names {
-                let _ = writeln!(
-                    out,
-                    "import * as {name} from \"{prefix}/runtime/{module}\";",
-                );
-            }
         }
     }
     if !generic.is_empty() || !by_mod.is_empty() {
