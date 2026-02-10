@@ -204,22 +204,13 @@ fn emit_module_imports(module: &Module, out: &mut String, heuristic_entry: &mut 
     }
 }
 
-/// Build entry-point code from module metadata (entry_point + init_order).
+/// Build entry-point code from module metadata (entry_point).
 /// Returns `None` if no module has metadata, falling back to heuristic.
 fn metadata_entry_code(modules: &[Module]) -> Option<String> {
     // Find the first module with entry point metadata.
     let module = modules.iter().find(|m| m.entry_point.is_some())?;
 
     let mut code = String::new();
-
-    // Emit init_order calls (from any module that has them).
-    for m in modules {
-        for &fid in &m.init_order {
-            if let Some(name) = func_call_name(m, fid) {
-                let _ = writeln!(code, "{name}();");
-            }
-        }
-    }
 
     // Emit entry point.
     match module.entry_point.as_ref()? {
@@ -476,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn main_with_init_order() {
+    fn main_with_construct_class_no_init_order() {
         use reincarnate_core::ir::{ClassDef, EntryPoint, StructDef};
 
         let mut mb = ModuleBuilder::new("game");
@@ -490,14 +481,6 @@ mod tests {
         let sig = FunctionSig {
             params: vec![],
             return_ty: Type::Void, ..Default::default() };
-
-        let mut fb0 = FunctionBuilder::new("script0__init", sig.clone(), Visibility::Public);
-        fb0.ret(None);
-        let s0 = mb.add_function(fb0.build());
-
-        let mut fb1 = FunctionBuilder::new("script1__init", sig.clone(), Visibility::Public);
-        fb1.ret(None);
-        let s1 = mb.add_function(fb1.build());
 
         let mut fb_ctor = FunctionBuilder::new("App::new", sig, Visibility::Public);
         fb_ctor.set_class(Vec::new(), "App".into(), MethodKind::Constructor);
@@ -513,22 +496,21 @@ mod tests {
             visibility: Visibility::Public,
         });
 
-        mb.set_init_order(vec![s0, s1]);
         mb.set_entry_point(EntryPoint::ConstructClass("App".into()));
         let module = mb.build();
 
         let main = generate_main(&[module]);
-        // Init calls should appear before the constructor.
-        let init0_pos = main.find("script0__init();").expect("should have script0__init");
-        let init1_pos = main.find("script1__init();").expect("should have script1__init");
-        let ctor_pos = main.find("const app = new App();").expect("should construct App");
         assert!(
-            init0_pos < init1_pos,
-            "script0 before script1:\n{main}"
+            main.contains("const app = new App();"),
+            "Should construct App:\n{main}"
         );
         assert!(
-            init1_pos < ctor_pos,
-            "inits before constructor:\n{main}"
+            !main.contains("script"),
+            "Should have no script init calls:\n{main}"
+        );
+        assert!(
+            main.contains("requestAnimationFrame(loop);"),
+            "Should have frame loop:\n{main}"
         );
     }
 

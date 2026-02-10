@@ -91,9 +91,6 @@ pub struct Module {
     /// How to start the application (set by frontends that know the answer).
     #[serde(default)]
     pub entry_point: Option<EntryPoint>,
-    /// Functions to call before the entry point (e.g. script initializers).
-    #[serde(default)]
-    pub init_order: Vec<FuncId>,
 }
 
 impl Module {
@@ -107,7 +104,6 @@ impl Module {
             imports: Vec::new(),
             classes: Vec::new(),
             entry_point: None,
-            init_order: Vec::new(),
         }
     }
 }

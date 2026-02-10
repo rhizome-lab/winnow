@@ -559,10 +559,6 @@ impl ModuleBuilder {
         self.module.entry_point = Some(entry);
     }
 
-    pub fn set_init_order(&mut self, order: Vec<FuncId>) {
-        self.module.init_order = order;
-    }
-
     pub fn build(self) -> Module {
         self.module
     }

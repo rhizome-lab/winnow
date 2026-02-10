@@ -390,31 +390,6 @@ pub fn translate_abc_to_module(
         });
     }
 
-    // Translate script initializers
-    let mut script_inits = Vec::new();
-    for (i, script) in abc.scripts.iter().enumerate() {
-        let func_name = format!("script{i}::init");
-        let method_idx = &script.init_method;
-        let idx = method_idx.0 as usize;
-        if idx < abc.methods.len() {
-            let method = &abc.methods[idx];
-            let body = abc
-                .method_bodies
-                .iter()
-                .find(|b| b.method.0 == method_idx.0);
-            if let Some(body) = body {
-                let return_type = resolve_type(&abc.constant_pool, &method.return_type);
-                let sig = FunctionSig {
-                    params: vec![],
-                    return_ty: return_type, ..Default::default() };
-                let func = translate_method_body(abc, body, &func_name, sig, &[], false)?;
-                let fid = mb.add_function(func);
-                script_inits.push(fid);
-            }
-        }
-    }
-
-    mb.set_init_order(script_inits);
     if let Some(name) = document_class {
         mb.set_entry_point(EntryPoint::ConstructClass(name.to_string()));
     }
