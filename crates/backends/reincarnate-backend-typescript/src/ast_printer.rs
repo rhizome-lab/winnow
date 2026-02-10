@@ -292,13 +292,13 @@ fn print_stmt(stmt: &Stmt, ctx: &PrintCtx, out: &mut String, indent: &str) {
         }
 
         Stmt::Expr(expr) => {
-            // Handle constructSuper pattern.
             if let Expr::SystemCall {
                 system,
                 method,
                 args,
             } = expr
             {
+                // constructSuper → super()
                 if system == "Flash.Class" && method == "constructSuper" {
                     if ctx.suppress_super {
                         return;
@@ -309,6 +309,26 @@ fn print_stmt(stmt: &Stmt, ctx: &PrintCtx, out: &mut String, indent: &str) {
                         .collect();
                     let _ = writeln!(out, "{indent}super({});", rest_args.join(", "));
                     return;
+                }
+                // Flash_Exception.throw(x) → throw x;
+                if system == "Flash.Exception" && method == "throw" && args.len() == 1 {
+                    let _ = writeln!(out, "{indent}throw {};", print_expr(&args[0], ctx));
+                    return;
+                }
+                // Flash_Class.setSuper(this, "prop", value) → super.prop = value;
+                if system == "Flash.Class"
+                    && method == "setSuper"
+                    && args.len() == 3
+                {
+                    if let Expr::Literal(Constant::String(name)) = &args[1] {
+                        let _ = writeln!(
+                            out,
+                            "{indent}super.{} = {};",
+                            sanitize_ident(name),
+                            print_expr(&args[2], ctx),
+                        );
+                        return;
+                    }
                 }
             }
             let _ = writeln!(out, "{indent}{};", print_expr(expr, ctx));
@@ -815,6 +835,78 @@ fn print_system_call(
                 // If it reaches here as a standalone expression, skip it.
                 return String::new();
             }
+        }
+    }
+
+    // Flash_Scope.newActivation() → ({})
+    if system == "Flash.Scope" && method == "newActivation" && args.is_empty() {
+        return "({})".to_string();
+    }
+
+    // Flash_Object.typeOf(x) → typeof x
+    if system == "Flash.Object" && method == "typeOf" && args.len() == 1 {
+        return format!("typeof {}", print_expr_operand(&args[0], ctx));
+    }
+
+    // Flash_Object.hasProperty(obj, k) → k in obj
+    if system == "Flash.Object" && method == "hasProperty" && args.len() == 2 {
+        return format!(
+            "{} in {}",
+            print_expr_operand(&args[1], ctx),
+            print_expr_operand(&args[0], ctx),
+        );
+    }
+
+    // Flash_Object.deleteProperty(obj, k) → delete obj[k]
+    if system == "Flash.Object" && method == "deleteProperty" && args.len() == 2 {
+        return format!(
+            "delete {}[{}]",
+            print_expr_operand(&args[0], ctx),
+            print_expr(&args[1], ctx),
+        );
+    }
+
+    // Flash_Object.newObject(k1, v1, k2, v2, ...) → { k1: v1, k2: v2 }
+    if system == "Flash.Object" && method == "newObject" {
+        if args.is_empty() {
+            return "{}".to_string();
+        }
+        if args.len().is_multiple_of(2) {
+            let pairs: Vec<_> = args
+                .chunks_exact(2)
+                .map(|pair| {
+                    let key = print_expr(&pair[0], ctx);
+                    let val = print_expr(&pair[1], ctx);
+                    format!("{key}: {val}")
+                })
+                .collect();
+            return format!("{{ {} }}", pairs.join(", "));
+        }
+    }
+
+    // Flash_Class.callSuper(this, "method", ...args) → super.method(...args)
+    if system == "Flash.Class" && method == "callSuper" && args.len() >= 2 {
+        if let Expr::Literal(Constant::String(name)) = &args[1] {
+            let rest: Vec<_> = args[2..].iter().map(|a| print_expr(a, ctx)).collect();
+            return format!("super.{}({})", sanitize_ident(name), rest.join(", "));
+        }
+    }
+
+    // Flash_Class.getSuper(this, "prop") → super.prop
+    if system == "Flash.Class" && method == "getSuper" && args.len() == 2 {
+        if let Expr::Literal(Constant::String(name)) = &args[1] {
+            return format!("super.{}", sanitize_ident(name));
+        }
+    }
+
+    // Flash_Class.setSuper(this, "prop", value) → (super.prop = value)
+    if system == "Flash.Class" && method == "setSuper" && args.len() == 3 {
+        if let Expr::Literal(Constant::String(name)) = &args[1] {
+            return format!(
+                "(super.{} = {})",
+                sanitize_ident(name),
+                print_expr(&args[2], ctx),
+            );
         }
     }
 

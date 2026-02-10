@@ -386,6 +386,76 @@ flush mechanisms. Pure inlining is provably correct (no ordering concerns).
 Side-effect handling is isolated. `LinearStmt` is thinner than the AST
 (ValueId refs vs String names) — net memory reduction vs current `LowerCtx`.
 
+### Flash Runtime Elimination
+
+Replace `Flash_*` helper calls with native JS equivalents. Each of these is
+a `SystemCall` in the IR that the TypeScript backend resolves to a runtime
+module call. Most can be inlined as native syntax or simple expressions,
+eliminating the runtime module entirely.
+
+Measured on cc-project output. Count = call sites across all emitted `.ts`.
+
+#### Tier 1 — Trivial inlines (AST rewrite or backend print)
+
+These are 1:1 syntax replacements. No new AST nodes needed for most; some
+need a `Stmt::Throw` or `Expr::Delete`/`Expr::TypeOf`/`Expr::In`.
+
+- [x] **`Flash_Iterator.hasNext2` / `nextValue` / `nextName`** (was ~56 loops) →
+  `for (const x of Object.values/keys(...))`. Done via `rewrite_foreach_loops`
+  AST pass. Two non-loop one-shot checks remain (correct).
+- [ ] **`Flash_Exception.throw(x)`** (21) → `throw x;`. The runtime is literally
+  `throw value`. Needs `Stmt::Throw(Expr)` or inline in backend printer.
+- [ ] **`Flash_Scope.newActivation()`** (52) → `{}`. The runtime returns a plain
+  empty object. Replace with `Expr::StructInit { name: "", fields: [] }` or
+  an object literal `{}` in the backend.
+- [ ] **`Flash_Object.typeOf(x)`** (4) → `typeof x`. AVM2 typeOf matches JS
+  typeof for `"function"`, `"number"`, `"boolean"`, `"string"` — all cases
+  used here. Add `Expr::TypeOf(Box<Expr>)` or lower to `Expr::Unary`.
+- [ ] **`Flash_Object.hasProperty(obj, k)`** (14) → `k in obj`. The runtime is
+  `name in Object(obj)` with null guard, but callers already null-guard.
+  Could use `Expr::Binary { op: BinOp::In, ... }` or a new `Expr::In`.
+- [ ] **`Flash_Object.deleteProperty(obj, k)`** (14) → `delete obj[k]`. The
+  runtime wraps `delete` in try/catch. Add `Expr::Delete(Box<Expr>)` or
+  `Stmt::Expr(Expr::Unary { op: UnaryOp::Delete, ... })`.
+
+#### Tier 2 — Simple expression rewrites
+
+- [ ] **`Flash_Object.newObject(k1, v1, k2, v2, ...)`** (58) → `{ k1: v1, k2: v2 }`.
+  Pairs of string-key + value arguments. Emit as `Expr::StructInit`. Needs
+  IR-level or AST-level transform to parse the flat arg list into pairs.
+- [ ] **`Flash_Object.newFunction("name")`** (318) → closure reference. These
+  are AVM2 `NewFunction` ops creating closures from method bodies. The
+  runtime stub is a no-op function — the real fix is resolving these to
+  actual method references (`this.methodName` or a local function). Requires
+  knowing which method `"anon_func789"` refers to. **Blocked on closure
+  support.**
+
+#### Tier 3 — Structural (super calls)
+
+These need the backend to emit `super.x` syntax instead of function calls.
+
+- [ ] **`Flash_Class.callSuper(this, "method", ...args)`** (94) →
+  `super.method(...args)`. Needs the backend printer to detect this
+  SystemCall pattern and emit `super.method()` syntax directly, similar to
+  how `constructSuper` → `super()` is already handled.
+- [ ] **`Flash_Class.getSuper(this, "prop")`** (30) → `super.prop`. Super
+  property read. Same backend pattern.
+- [ ] **`Flash_Class.setSuper(this, "prop", value)`** (21) → `super.prop = value`.
+  Super property write.
+
+#### Tier 4 — Keep as runtime
+
+These legitimately need runtime support and shouldn't be inlined.
+
+- **`Flash_Object.applyType(base, ...typeArgs)`** (8) — Generic type
+  application (`Vector.<int>`). Runtime already returns `base` (no-op).
+  Low priority; could emit bare `base` but the callsites are complex.
+- **`Flash_Utils.describeType(x)`** (3) — Reflection. Needs runtime.
+- **`Flash_Utils.getDefinitionByName(name)`** (3) — Class registry lookup.
+- **`Flash_Utils.getQualifiedClassName(x)`** (10) — Reflection.
+- **`Flash_Utils.getQualifiedSuperclassName(x)`** (1) — Reflection.
+- **`Flash_XML.getDescendants(xml, name)`** (3) — E4X XML operations.
+
 ### Optimizations — Future Directions
 
 The current pipeline focuses on faithful decompilation: reproduce what the
