@@ -7,6 +7,28 @@ import { Rectangle } from "./geom";
 import { InteractiveObject } from "./display";
 
 // ---------------------------------------------------------------------------
+// Shared off-screen canvas for text measurement
+// ---------------------------------------------------------------------------
+
+let _measureCtx: CanvasRenderingContext2D | null = null;
+
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!_measureCtx) {
+    const c = document.createElement("canvas");
+    _measureCtx = c.getContext("2d")!;
+  }
+  return _measureCtx;
+}
+
+function _fontString(fmt: TextFormat, defaultFmt: TextFormat): string {
+  const italic = (fmt.italic ?? defaultFmt.italic) ? "italic " : "";
+  const bold = (fmt.bold ?? defaultFmt.bold) ? "bold " : "";
+  const size = fmt.size ?? defaultFmt.size ?? 12;
+  const font = fmt.font ?? defaultFmt.font ?? "Times New Roman";
+  return `${italic}${bold}${size}px "${font}"`;
+}
+
+// ---------------------------------------------------------------------------
 // TextFieldType
 // ---------------------------------------------------------------------------
 
@@ -161,10 +183,40 @@ export class TextField extends InteractiveObject {
   }
 
   getTextFormat(beginIndex = -1, endIndex = -1): TextFormat {
-    void beginIndex;
-    void endIndex;
-    if (this._formats.length > 0) return this._formats[0].format;
-    return this.defaultTextFormat;
+    if (beginIndex < 0 && endIndex < 0) {
+      if (this._formats.length > 0) return this._formats[0].format;
+      return this.defaultTextFormat;
+    }
+    const begin = beginIndex < 0 ? 0 : beginIndex;
+    const end = endIndex < 0 ? this._text.length : endIndex;
+    // Find overlapping format entries and merge attributes.
+    const result = new TextFormat();
+    // Start with defaults.
+    const def = this.defaultTextFormat;
+    Object.assign(result, {
+      font: def.font, size: def.size, color: def.color, bold: def.bold,
+      italic: def.italic, underline: def.underline, align: def.align,
+      leftMargin: def.leftMargin, rightMargin: def.rightMargin,
+      indent: def.indent, leading: def.leading,
+    });
+    for (const entry of this._formats) {
+      if (entry.end <= begin || entry.begin >= end) continue;
+      const f = entry.format;
+      if (f.font != null) result.font = f.font;
+      if (f.size != null) result.size = f.size;
+      if (f.color != null) result.color = f.color;
+      if (f.bold != null) result.bold = f.bold;
+      if (f.italic != null) result.italic = f.italic;
+      if (f.underline != null) result.underline = f.underline;
+      if (f.align != null) result.align = f.align;
+      if (f.leftMargin != null) result.leftMargin = f.leftMargin;
+      if (f.rightMargin != null) result.rightMargin = f.rightMargin;
+      if (f.indent != null) result.indent = f.indent;
+      if (f.leading != null) result.leading = f.leading;
+      if (f.letterSpacing != null) result.letterSpacing = f.letterSpacing;
+      if (f.kerning != null) result.kerning = f.kerning;
+    }
+    return result;
   }
 
   setTextFormat(format: TextFormat, beginIndex = -1, endIndex = -1): void {
@@ -190,25 +242,56 @@ export class TextField extends InteractiveObject {
   }
 
   getCharBoundaries(charIndex: number): Rectangle | null {
-    void charIndex;
-    return new Rectangle(0, 0, 8, 16);
+    if (charIndex < 0 || charIndex >= this._text.length) return null;
+    const lineIdx = this.getLineIndexOfChar(charIndex);
+    const lineOffset = this.getLineOffset(lineIdx);
+    const lineText = this.getLineText(lineIdx);
+    const fmt = this.getTextFormat(charIndex, charIndex + 1);
+    const ctx = getMeasureCtx();
+    ctx.font = _fontString(fmt, this.defaultTextFormat);
+    // Measure text before this char for x position.
+    const beforeText = lineText.substring(0, charIndex - lineOffset);
+    const xPos = ctx.measureText(beforeText).width;
+    const charWidth = ctx.measureText(this._text[charIndex]).width;
+    const metrics = this.getLineMetrics(lineIdx);
+    // y = line index * line height
+    const yPos = lineIdx * metrics.height;
+    return new Rectangle(xPos, yPos, charWidth, metrics.height);
   }
 
   getCharIndexAtPoint(x: number, y: number): number {
-    void x;
-    void y;
-    return 0;
+    const lineIdx = this.getLineIndexAtPoint(x, y);
+    const lineText = this.getLineText(lineIdx);
+    const lineOffset = this.getLineOffset(lineIdx);
+    const fmt = this.getTextFormat(lineOffset, lineOffset + lineText.length);
+    const ctx = getMeasureCtx();
+    ctx.font = _fontString(fmt, this.defaultTextFormat);
+    // Linear scan to find the char under x.
+    let accWidth = 0;
+    for (let i = 0; i < lineText.length; i++) {
+      const charWidth = ctx.measureText(lineText[i]).width;
+      if (accWidth + charWidth > x) return lineOffset + i;
+      accWidth += charWidth;
+    }
+    return lineOffset + lineText.length - 1;
   }
 
-  getLineIndexAtPoint(x: number, y: number): number {
-    void x;
-    void y;
-    return 0;
+  getLineIndexAtPoint(_x: number, y: number): number {
+    const lines = this._text.split("\n");
+    const metrics = this.getLineMetrics(0);
+    const lineHeight = metrics.height;
+    const idx = Math.floor(y / lineHeight);
+    return Math.max(0, Math.min(idx, lines.length - 1));
   }
 
   getLineIndexOfChar(charIndex: number): number {
-    void charIndex;
-    return 0;
+    const lines = this._text.split("\n");
+    let offset = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (charIndex < offset + lines[i].length + 1) return i;
+      offset += lines[i].length + 1;
+    }
+    return lines.length - 1;
   }
 
   getLineLength(lineIndex: number): number {
@@ -217,8 +300,17 @@ export class TextField extends InteractiveObject {
   }
 
   getLineMetrics(lineIndex: number): any {
-    void lineIndex;
-    return { ascent: 12, descent: 4, height: 16, leading: 0, width: 0, x: 0 };
+    const lineText = this.getLineText(lineIndex);
+    const lineOffset = this.getLineOffset(lineIndex);
+    const fmt = this.getTextFormat(lineOffset, lineOffset + Math.max(lineText.length, 1));
+    const ctx = getMeasureCtx();
+    ctx.font = _fontString(fmt, this.defaultTextFormat);
+    const tm = ctx.measureText(lineText || "M");
+    const ascent = tm.actualBoundingBoxAscent ?? (fmt.size ?? this.defaultTextFormat.size ?? 12) * 0.8;
+    const descent = tm.actualBoundingBoxDescent ?? (fmt.size ?? this.defaultTextFormat.size ?? 12) * 0.2;
+    const leading = fmt.leading ?? this.defaultTextFormat.leading ?? 0;
+    const height = ascent + descent + leading;
+    return { ascent, descent, height, leading, width: tm.width, x: 0 };
   }
 
   getLineOffset(lineIndex: number): number {
@@ -250,8 +342,10 @@ export class TextField extends InteractiveObject {
     return null;
   }
 
-  static isFontCompatible(_fontName: string, _fontStyle: string): boolean {
-    return true;
+  static isFontCompatible(fontName: string, fontStyle: string): boolean {
+    return Font.enumerateFonts().some(
+      (f) => f.fontName === fontName && f.fontStyle === fontStyle,
+    );
   }
 }
 
@@ -264,14 +358,20 @@ export class Font {
   fontStyle = "regular";
   fontType = "embedded";
 
-  hasGlyphs(str: string): boolean {
-    void str;
+  /** @internal */
+  static _registry: Font[] = [];
+
+  hasGlyphs(_str: string): boolean {
+    // Cannot reliably check without actual font tables; assume true.
     return true;
   }
 
   static enumerateFonts(_enumerateDeviceFonts = false): Font[] {
-    return [];
+    return [...Font._registry];
   }
 
-  static registerFont(_fontClass: any): void {}
+  static registerFont(fontClass: any): void {
+    const instance = new fontClass();
+    Font._registry.push(instance);
+  }
 }
