@@ -4,6 +4,7 @@
 
 import { EventDispatcher } from "./display";
 import { TimerEvent } from "./events";
+import { readAMF3, writeAMF3 } from "./amf";
 
 // ---------------------------------------------------------------------------
 // Qualified-name symbol + utility functions
@@ -159,8 +160,7 @@ export class ByteArray {
   }
 
   readObject(): any {
-    // AMF decoding is not implemented; return null.
-    return null;
+    return readAMF3(this);
   }
 
   readBytes(bytes: ByteArray, offset = 0, length = 0): void {
@@ -240,8 +240,8 @@ export class ByteArray {
     this.writeUTFBytes(value);
   }
 
-  writeObject(_object: any): void {
-    // AMF encoding is not implemented.
+  writeObject(object: any): void {
+    writeAMF3(this, object);
   }
 
   writeBytes(bytes: ByteArray, offset = 0, length = 0): void {
