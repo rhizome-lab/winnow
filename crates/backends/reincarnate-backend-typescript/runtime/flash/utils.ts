@@ -578,7 +578,7 @@ export class Timer extends EventDispatcher {
  * `delete dict[key]`.  The emitter prefers Map methods when the type is known
  * to be Dictionary; the Proxy covers dynamic/untyped fallback cases.
  */
-export class Dictionary extends Map<any, any> {
+export class Dictionary extends Map<unknown, any> {
   constructor(_weakKeys?: boolean) {
     super();
     return new globalThis.Proxy(this, {

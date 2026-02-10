@@ -10,7 +10,16 @@ pub fn ts_type(ty: &Type) -> String {
         Type::Int(_) | Type::UInt(_) | Type::Float(_) => "number".into(),
         Type::String => "string".into(),
         Type::Array(elem) => format!("{}[]", ts_type_paren(elem)),
-        Type::Map(k, v) => format!("Map<{}, {}>", ts_type(k), ts_type(v)),
+        Type::Map(k, v) => {
+            // Map keys should be `unknown` rather than `any` — `any` disables
+            // type checking on lookups while `unknown` forces explicit narrowing.
+            let key = if matches!(k.as_ref(), Type::Dynamic) {
+                "unknown".to_string()
+            } else {
+                ts_type(k)
+            };
+            format!("Map<{}, {}>", key, ts_type(v))
+        }
         Type::Option(inner) => format!("{} | null", ts_type_paren(inner)),
         Type::Tuple(elems) => {
             let parts: Vec<_> = elems.iter().map(ts_type).collect();
