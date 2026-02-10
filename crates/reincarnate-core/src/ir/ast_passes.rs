@@ -794,6 +794,15 @@ fn try_forward_substitute_one(body: &mut Vec<Stmt>) -> bool {
             _ => continue,
         };
 
+        // Don't substitute assignments to outer-scope variables — removing
+        // the assignment would lose the update visible to outer scopes.
+        let is_local = body
+            .iter()
+            .any(|s| matches!(s, Stmt::VarDecl { name: n, .. } if n == &name));
+        if !is_local {
+            continue;
+        }
+
         // Count ALL references in the remaining body at this scope level.
         let total_refs: usize = body[i + 1..]
             .iter()
