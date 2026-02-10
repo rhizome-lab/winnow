@@ -302,14 +302,12 @@ fn infer_inst_type(
             }
         }
 
-        // GetIndex: extract element type from Array.
-        Op::GetIndex { collection, .. } => {
-            if let Type::Array(elem_ty) = &func.value_types[*collection] {
-                *elem_ty.clone()
-            } else {
-                return None;
-            }
-        }
+        // GetIndex: extract element type from Array or value type from Map.
+        Op::GetIndex { collection, .. } => match &func.value_types[*collection] {
+            Type::Array(elem_ty) => *elem_ty.clone(),
+            Type::Map(_, val_ty) => *val_ty.clone(),
+            _ => return None,
+        },
 
         // Direct call: look up return type via 3-strategy chain.
         Op::Call { func: name, args } => {
