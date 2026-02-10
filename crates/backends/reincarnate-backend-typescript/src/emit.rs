@@ -283,6 +283,9 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             group.methods.iter().map(|&fid| &module.functions[fid]),
         );
         emit_runtime_imports_for(systems, &mut out, depth);
+        let prefix = "../".repeat(depth + 1);
+        let prefix = prefix.trim_end_matches('/');
+        let _ = writeln!(out, "import {{ QN_KEY }} from \"{prefix}/runtime/flash/utils\";\n");
         emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
         emit_class(group, module, &class_names, &ancestor_sets, &method_name_sets, lowering_config, &mut out)?;
 
@@ -469,6 +472,7 @@ fn flash_system_module(system: &str) -> Option<&'static str> {
         "Flash.Iterator" => "iterator",
         "Flash.Memory" => "memory",
         "Flash.XML" => "xml",
+        "Flash.Utils" => "utils",
         _ => return None,
     })
 }
@@ -961,6 +965,8 @@ fn emit_class(
     };
 
     let _ = writeln!(out, "{vis}class {class_name}{extends} {{");
+    let qualified = qualified_class_name(&group.class_def);
+    let _ = writeln!(out, "  static [QN_KEY] = \"{qualified}\";");
 
     // Fields from struct def.
     for (name, ty) in &group.struct_def.fields {
@@ -981,7 +987,6 @@ fn emit_class(
         MethodKind::Free => 5,
     });
 
-    let qualified = qualified_class_name(&group.class_def);
     let empty_ancestors = HashSet::new();
     let ancestors = ancestor_sets.get(&qualified).unwrap_or(&empty_ancestors);
     let empty_methods = HashSet::new();
