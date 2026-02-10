@@ -9,6 +9,7 @@ use reincarnate_core::ir::{
     StructDef, Type, Visibility,
 };
 use reincarnate_core::pipeline::LoweringConfig;
+use reincarnate_core::project::RuntimeConfig;
 
 use crate::runtime::SYSTEM_NAMES;
 use crate::types::ts_type;
@@ -21,24 +22,25 @@ pub fn emit_module(
     module: &mut Module,
     output_dir: &Path,
     lowering_config: &LoweringConfig,
+    runtime_config: Option<&RuntimeConfig>,
 ) -> Result<(), CoreError> {
     if module.classes.is_empty() {
-        let out = emit_module_to_string(module, lowering_config)?;
+        let out = emit_module_to_string(module, lowering_config, runtime_config)?;
         let path = output_dir.join(format!("{}.ts", module.name));
         fs::write(&path, &out).map_err(CoreError::Io)?;
     } else {
-        emit_module_to_dir(module, output_dir, lowering_config)?;
+        emit_module_to_dir(module, output_dir, lowering_config, runtime_config)?;
     }
     Ok(())
 }
 
 /// Emit a module to a string (flat output — for testing or class-free modules).
-pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConfig) -> Result<String, CoreError> {
+pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>) -> Result<String, CoreError> {
     let mut out = String::new();
     let class_names = build_class_names(module);
     let class_meta = ClassMeta::build(module);
 
-    emit_runtime_imports(module, &mut out);
+    emit_runtime_imports(module, &mut out, runtime_config);
     emit_imports(module, &mut out);
     emit_structs(module, &mut out);
     emit_enums(module, &mut out);
@@ -268,7 +270,7 @@ fn relative_import_path(from: &[String], to: &[String]) -> String {
 }
 
 /// Emit a module as a directory with one `.ts` file per class in nested dirs.
-pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_config: &LoweringConfig) -> Result<(), CoreError> {
+pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>) -> Result<(), CoreError> {
     let module_dir = output_dir.join(&module.name);
     fs::create_dir_all(&module_dir).map_err(CoreError::Io)?;
 
@@ -301,10 +303,18 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let systems = collect_system_names_from_funcs(
             group.methods.iter().map(|&fid| &module.functions[fid]),
         );
-        emit_runtime_imports_for(systems, &mut out, depth);
-        let prefix = "../".repeat(depth + 1);
-        let prefix = prefix.trim_end_matches('/');
-        let _ = writeln!(out, "import {{ QN_KEY, registerClass, registerClassTraits }} from \"{prefix}/runtime/flash/utils\";\n");
+        emit_runtime_imports_for(systems, &mut out, depth, runtime_config);
+        if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
+            let prefix = "../".repeat(depth + 1);
+            let prefix = prefix.trim_end_matches('/');
+            let _ = writeln!(
+                out,
+                "import {{ {} }} from \"{prefix}/runtime/{}\";",
+                preamble.names.join(", "),
+                preamble.path,
+            );
+            out.push('\n');
+        }
         emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
         emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
@@ -322,7 +332,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let systems = collect_system_names_from_funcs(
             free_funcs.iter().map(|&fid| &module.functions[fid]),
         );
-        emit_runtime_imports_for(systems, &mut out, 0);
+        emit_runtime_imports_for(systems, &mut out, 0, runtime_config);
 
         // Scan free functions for external class references.
         let mut refs = RefSets::default();
@@ -459,10 +469,10 @@ fn collect_system_names_from_funcs<'a>(
 }
 
 /// Emit runtime imports for flat modules (files directly in `output_dir`).
-fn emit_runtime_imports(module: &Module, out: &mut String) {
+fn emit_runtime_imports(module: &Module, out: &mut String, runtime_config: Option<&RuntimeConfig>) {
     let systems =
         collect_system_names_from_funcs(module.functions.iter().map(|(_id, f)| f));
-    emit_runtime_imports_with_prefix(systems, out, ".");
+    emit_runtime_imports_with_prefix(systems, out, ".", runtime_config);
 }
 
 /// Emit runtime imports for files inside a module directory.
@@ -470,53 +480,44 @@ fn emit_runtime_imports(module: &Module, out: &mut String) {
 /// `depth` is the number of namespace directories below the module dir. The
 /// module dir itself is one level inside `output_dir`, so the prefix traverses
 /// `depth + 1` parent directories.
-fn emit_runtime_imports_for(systems: BTreeSet<String>, out: &mut String, depth: usize) {
+fn emit_runtime_imports_for(systems: BTreeSet<String>, out: &mut String, depth: usize, runtime_config: Option<&RuntimeConfig>) {
     let prefix = "../".repeat(depth + 1);
     let prefix = prefix.trim_end_matches('/');
-    emit_runtime_imports_with_prefix(systems, out, prefix);
-}
-
-/// Map a Flash system name (e.g. `"Flash.Object"`) to its sub-module path
-/// under `runtime/flash/`. Returns `None` for non-Flash systems.
-fn flash_system_module(system: &str) -> Option<&'static str> {
-    Some(match system {
-        "Flash.Object" => "object",
-        "Flash.Class" => "class",
-        "Flash.Scope" => "scope",
-        "Flash.Exception" => "exception",
-        "Flash.Iterator" => "iterator",
-        "Flash.Memory" => "memory",
-        "Flash.XML" => "xml",
-        "Flash.Utils" => "utils",
-        _ => return None,
-    })
+    emit_runtime_imports_with_prefix(systems, out, prefix, runtime_config);
 }
 
 fn emit_runtime_imports_with_prefix(
     systems: BTreeSet<String>,
     out: &mut String,
     prefix: &str,
+    runtime_config: Option<&RuntimeConfig>,
 ) {
     if systems.is_empty() {
         return;
     }
     let known: BTreeSet<&str> = SYSTEM_NAMES.iter().copied().collect();
     let mut generic: Vec<&str> = Vec::new();
-    let mut flash_by_mod: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Group engine-specific systems by their runtime sub-module path.
+    let mut by_mod: BTreeMap<String, (bool, Vec<String>)> = BTreeMap::new();
     for sys in &systems {
         if known.contains(sys.as_str()) {
             generic.push(sys.as_str());
+        } else if let Some(sm) = runtime_config.and_then(|c| c.system_modules.get(sys.as_str())) {
+            let entry = by_mod
+                .entry(sm.path.clone())
+                .or_insert_with(|| (sm.named_import, Vec::new()));
+            entry.1.push(sanitize_ident(sys));
         } else {
-            let module = flash_system_module(sys)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    sys.strip_prefix("Flash.")
-                        .unwrap_or(sys)
-                        .to_ascii_lowercase()
-                });
-            flash_by_mod
+            // Fallback: derive module path from system name.
+            let module = sys
+                .split('.')
+                .next_back()
+                .unwrap_or(sys)
+                .to_ascii_lowercase();
+            by_mod
                 .entry(module)
-                .or_default()
+                .or_insert_with(|| (false, Vec::new()))
+                .1
                 .push(sanitize_ident(sys));
         }
     }
@@ -527,13 +528,11 @@ fn emit_runtime_imports_with_prefix(
             generic.join(", ")
         );
     }
-    for (module, names) in &flash_by_mod {
-        if module == "exception" {
-            // exception.ts still uses a const object export because `throw`
-            // is a reserved keyword that can't be a top-level function name.
+    for (module, (named_import, names)) in &by_mod {
+        if *named_import {
             let _ = writeln!(
                 out,
-                "import {{ {} }} from \"{prefix}/runtime/flash/{module}\";",
+                "import {{ {} }} from \"{prefix}/runtime/{module}\";",
                 names.join(", ")
             );
         } else {
@@ -541,12 +540,12 @@ fn emit_runtime_imports_with_prefix(
             for name in names {
                 let _ = writeln!(
                     out,
-                    "import * as {name} from \"{prefix}/runtime/flash/{module}\";",
+                    "import * as {name} from \"{prefix}/runtime/{module}\";",
                 );
             }
         }
     }
-    if !generic.is_empty() || !flash_by_mod.is_empty() {
+    if !generic.is_empty() || !by_mod.is_empty() {
         out.push('\n');
     }
 }
@@ -1249,7 +1248,7 @@ mod tests {
     fn build_and_emit(build: impl FnOnce(&mut ModuleBuilder)) -> String {
         let mut mb = ModuleBuilder::new("test");
         build(&mut mb);
-        emit_module_to_string(&mut mb.build(), &LoweringConfig::default()).unwrap()
+        emit_module_to_string(&mut mb.build(), &LoweringConfig::default(), None).unwrap()
     }
 
     #[test]
@@ -1529,7 +1528,7 @@ mod tests {
 
         // Run mem2reg IR pass, then emit.
         let mut result = Mem2Reg.apply(module).unwrap();
-        let out = emit_module_to_string(&mut result.module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut result.module, &LoweringConfig::default(), None).unwrap();
 
         // The alloc/store/load should be eliminated; return refers to the
         // original parameter directly.
@@ -1774,7 +1773,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         // Class declaration — `extends Object` is suppressed (redundant in JS).
         assert!(
@@ -1847,7 +1846,7 @@ mod tests {
         mb.add_function(fb.build());
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(out.contains("export class Foo {"), "Should have class:\n{out}");
         assert!(
@@ -1919,7 +1918,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default()).unwrap();
+        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None).unwrap();
 
         // Check nested file exists.
         let class_file = dir
@@ -1999,7 +1998,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default()).unwrap();
+        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None).unwrap();
 
         let swamp_file = dir.path().join("frame1/classes/Scenes/Swamp.ts");
         let content = fs::read_to_string(&swamp_file).unwrap();
@@ -2046,7 +2045,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("super();"),
@@ -2132,7 +2131,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("new Widget()"),
@@ -2257,7 +2256,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("this.hp"),
@@ -2319,7 +2318,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("this.player"),
@@ -2410,7 +2409,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             !out.contains("this.power"),
@@ -2518,7 +2517,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("this.temp = "),
@@ -2756,7 +2755,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
 
         assert!(
             out.contains("this.isNaga()"),
@@ -3097,7 +3096,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default()).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
         assert!(
             out.contains("this.debugBuild = true"),
             "cinit should emit this.field, not bare field:\n{out}"

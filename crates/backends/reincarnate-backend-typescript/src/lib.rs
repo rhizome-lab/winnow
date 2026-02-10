@@ -24,8 +24,9 @@ impl Backend for TypeScriptBackend {
             runtime::emit_runtime(&input.output_dir, &runtime_pkg.source_dir)?;
         }
 
+        let runtime_config = input.runtime.as_ref().map(|p| &p.config);
         for module in &mut input.modules {
-            emit::emit_module(module, &input.output_dir, &input.lowering_config)?;
+            emit::emit_module(module, &input.output_dir, &input.lowering_config, runtime_config)?;
         }
 
         scaffold::emit_scaffold(&input.modules, &input.output_dir)?;
