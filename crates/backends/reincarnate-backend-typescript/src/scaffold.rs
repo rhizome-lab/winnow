@@ -77,7 +77,7 @@ const PACKAGE_JSON: &str = r#"{
   "type": "module",
   "scripts": {
     "build": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm",
-    "serve": "esbuild main.ts --bundle --outdir=dist --format=esm --serve --servedir=."
+    "serve": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm --serve --servedir=."
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
