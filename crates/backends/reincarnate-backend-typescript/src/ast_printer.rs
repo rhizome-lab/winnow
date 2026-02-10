@@ -872,13 +872,20 @@ fn print_system_call(
             return "{}".to_string();
         }
         if args.len().is_multiple_of(2) {
-            let pairs: Vec<_> = args
-                .chunks_exact(2)
-                .map(|pair| {
-                    let key = print_expr(&pair[0], ctx);
-                    let val = print_expr(&pair[1], ctx);
-                    format!("{key}: {val}")
-                })
+            // Deduplicate keys (last value wins, matching JS/Flash runtime semantics).
+            let mut keys: Vec<String> = Vec::new();
+            let mut values: HashMap<String, String> = HashMap::new();
+            for pair in args.chunks_exact(2) {
+                let key = print_expr(&pair[0], ctx);
+                let val = print_expr(&pair[1], ctx);
+                if !values.contains_key(&key) {
+                    keys.push(key.clone());
+                }
+                values.insert(key, val);
+            }
+            let pairs: Vec<_> = keys
+                .iter()
+                .map(|k| format!("{k}: {}", values[k]))
                 .collect();
             return format!("{{ {} }}", pairs.join(", "));
         }
