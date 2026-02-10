@@ -6,6 +6,7 @@ import { EventDispatcher } from "./display";
 import { TimerEvent } from "./events";
 import { readAMF3, writeAMF3 } from "./amf";
 import { inflateRaw, deflateRaw, zlibCompress, zlibDecompress } from "./deflate";
+import { xmlList } from "./xml";
 
 // ---------------------------------------------------------------------------
 // Qualified-name symbol + utility functions
@@ -47,20 +48,133 @@ export function getDefinitionByName(name: string): any {
   throw new ReferenceError(`getDefinitionByName: '${name}' is not defined`);
 }
 
+// ---------------------------------------------------------------------------
+// Trait registry — populated by registerClassTraits() calls from emitted code
+// ---------------------------------------------------------------------------
+
+interface TraitInfo {
+  name: string;
+  kind: "constant" | "variable" | "method" | "accessor";
+  type?: string;
+  access?: "readonly" | "writeonly" | "readwrite";
+  declaredBy?: string;
+  isStatic?: boolean;
+}
+
+interface ClassTraits {
+  instanceTraits: TraitInfo[];
+  staticTraits: TraitInfo[];
+}
+
+const _traitRegistry = new Map<Function, ClassTraits>();
+
+export function registerClassTraits(ctor: Function, instance: TraitInfo[], staticT: TraitInfo[]): void {
+  _traitRegistry.set(ctor, { instanceTraits: instance, staticTraits: staticT });
+}
+
+/** Wraps a type name string with .toString() and .indexOf() like AS3 XML text nodes. */
+class TraitTypeName {
+  private _value: string;
+  constructor(value: string) { this._value = value; }
+  toString(): string { return this._value; }
+  indexOf(s: string): number { return this._value.indexOf(s); }
+  valueOf(): string { return this._value; }
+}
+
+function traitNode(name: string, type?: string, meta?: any): any {
+  const node: any = { name };
+  if (type !== undefined) node.type = new TraitTypeName(type);
+  node.metadata = meta ?? xmlList([]);
+  return node;
+}
+
 export function describeType(value: any): any {
-  // Enumerates own static properties as "constant" traits, matching
-  // AS3's describeType XML output for class constructors.
-  if (value == null) return { constant: [] };
+  if (value == null) return { constant: xmlList([]) };
+
   if (typeof value === "function") {
+    // Class constructor — top-level = static traits, factory = instance traits
+    const registered = _traitRegistry.get(value);
     const constants: any[] = [];
+    const variables: any[] = [];
+    const methods: any[] = [];
+    const accessors: any[] = [];
+
+    // Static traits from registry
+    if (registered) {
+      for (const t of registered.staticTraits) {
+        const node = traitNode(t.name, t.type);
+        if (t.kind === "constant") constants.push(node);
+        else if (t.kind === "variable") variables.push(node);
+        else if (t.kind === "method") methods.push(node);
+        else if (t.kind === "accessor") { node.access = t.access; accessors.push(node); }
+      }
+    }
+
+    // Supplement with runtime introspection for constants not in registry
+    const registeredNames = new Set(registered?.staticTraits.map((t) => t.name) ?? []);
     for (const name of Object.getOwnPropertyNames(value)) {
       if (name === "prototype" || name === "length" || name === "name"
-          || name === "arguments" || name === "caller") continue;
-      constants.push({ name });
+          || name === "arguments" || name === "caller" || name === QN_KEY.toString()) continue;
+      if (typeof name === "symbol") continue;
+      if (registeredNames.has(name)) continue;
+      if (typeof value[name] === "function") {
+        methods.push(traitNode(name));
+      } else {
+        constants.push(traitNode(name));
+      }
     }
-    return { constant: constants };
+
+    // Instance traits from registry (exposed via factory)
+    const iConstants: any[] = [];
+    const iVariables: any[] = [];
+    const iMethods: any[] = [];
+    const iAccessors: any[] = [];
+    if (registered) {
+      for (const t of registered.instanceTraits) {
+        const node = traitNode(t.name, t.type);
+        if (t.kind === "constant") iConstants.push(node);
+        else if (t.kind === "variable") iVariables.push(node);
+        else if (t.kind === "method") iMethods.push(node);
+        else if (t.kind === "accessor") { node.access = t.access; iAccessors.push(node); }
+      }
+    }
+
+    return {
+      constant: xmlList(constants),
+      variable: xmlList(variables),
+      method: xmlList(methods),
+      accessor: xmlList(accessors),
+      factory: {
+        constant: xmlList(iConstants),
+        variable: xmlList(iVariables),
+        method: xmlList(iMethods),
+        accessor: xmlList(iAccessors),
+      },
+    };
   }
-  return { constant: [] };
+
+  // Instance — describe its class's instance traits directly
+  const ctor = value.constructor;
+  const registered = ctor ? _traitRegistry.get(ctor) : undefined;
+  const constants: any[] = [];
+  const variables: any[] = [];
+  const methods: any[] = [];
+  const accessors: any[] = [];
+  if (registered) {
+    for (const t of registered.instanceTraits) {
+      const node = traitNode(t.name, t.type);
+      if (t.kind === "constant") constants.push(node);
+      else if (t.kind === "variable") variables.push(node);
+      else if (t.kind === "method") methods.push(node);
+      else if (t.kind === "accessor") { node.access = t.access; accessors.push(node); }
+    }
+  }
+  return {
+    constant: xmlList(constants),
+    variable: xmlList(variables),
+    method: xmlList(methods),
+    accessor: xmlList(accessors),
+  };
 }
 
 // ---------------------------------------------------------------------------

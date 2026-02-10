@@ -25,11 +25,82 @@ export function checkFilter(value: any): any {
   return value;
 }
 
+// ---------------------------------------------------------------------------
+// XMLList proxy — emulates E4X XMLList behavior for describeType results
+// ---------------------------------------------------------------------------
+
+const XML_LIST_TAG = Symbol("xmlList");
+
+/** Create a Proxy-backed array that behaves like an AS3 XMLList. */
+export function xmlList(items: any[]): any {
+  const arr = [...items];
+  (arr as any)[XML_LIST_TAG] = true;
+  return new Proxy(arr, xmlListHandler);
+}
+
+function isXmlList(v: any): boolean {
+  return Array.isArray(v) && v[XML_LIST_TAG] === true;
+}
+
+const xmlListHandler: ProxyHandler<any[]> = {
+  get(target, prop, receiver) {
+    // Numeric index access
+    if (typeof prop === "string" && /^\d+$/.test(prop)) {
+      return target[Number(prop)];
+    }
+    // length() as a method call (AS3 XMLList.length() is a method)
+    if (prop === "length") {
+      return () => target.length;
+    }
+    // contains(value) — checks if any item matches
+    if (prop === "contains") {
+      return (value: any) => target.some((item) => item === value || String(item) === String(value));
+    }
+    // toString() — join item string representations
+    if (prop === "toString") {
+      return () => target.map(String).join("");
+    }
+    // Symbol.iterator for for-of and spread
+    if (prop === Symbol.iterator) {
+      return target[Symbol.iterator].bind(target);
+    }
+    // Property projection: .name on an XMLList returns a new XMLList
+    // of each item's .name property.
+    if (typeof prop === "string") {
+      const projected = target.map((item) => item?.[prop]);
+      return xmlList(projected);
+    }
+    return Reflect.get(target, prop, receiver);
+  },
+  // Support Object.keys / Object.values / for-in enumeration
+  ownKeys(target) {
+    return target.map((_, i) => String(i));
+  },
+  getOwnPropertyDescriptor(target, prop) {
+    if (typeof prop === "string" && /^\d+$/.test(prop)) {
+      const idx = Number(prop);
+      if (idx < target.length) {
+        return { value: target[idx], writable: true, enumerable: true, configurable: true };
+      }
+    }
+    return undefined;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Descendant access
+// ---------------------------------------------------------------------------
+
 export function getDescendants(obj: any, name: string): any {
-  // E4X descendant access (obj..name). Without a real XML type,
-  // fall back to property access.
-  if (obj === null || obj === undefined) return undefined;
-  return obj[name];
+  if (obj === null || obj === undefined) return xmlList([]);
+  // Strip namespace prefix: "ns::localname" → "localname"
+  const local = name.includes("::") ? name.split("::").pop()! : name;
+  // If the object has the property (e.g. describeType result), return it
+  const val = obj[local];
+  if (val !== undefined) {
+    return isXmlList(val) ? val : xmlList(Array.isArray(val) ? val : [val]);
+  }
+  return xmlList([]);
 }
 
 export function setDefaultNamespace(ns: any): void {

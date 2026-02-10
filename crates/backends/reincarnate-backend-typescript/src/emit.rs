@@ -331,7 +331,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         emit_runtime_imports_for(systems, &mut out, depth);
         let prefix = "../".repeat(depth + 1);
         let prefix = prefix.trim_end_matches('/');
-        let _ = writeln!(out, "import {{ QN_KEY, registerClass }} from \"{prefix}/runtime/flash/utils\";\n");
+        let _ = writeln!(out, "import {{ QN_KEY, registerClass, registerClassTraits }} from \"{prefix}/runtime/flash/utils\";\n");
         emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
         emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
@@ -996,6 +996,99 @@ fn group_by_class(module: &Module) -> (Vec<ClassGroup>, Vec<FuncId>) {
     (groups, free)
 }
 
+/// Map an IR `Type` to the AS3-style type name used in describeType output.
+fn as3_type_name(ty: &Type) -> &'static str {
+    match ty {
+        Type::Void => "void",
+        Type::Bool => "Boolean",
+        Type::Int(32) => "int",
+        Type::Int(_) => "int",
+        Type::UInt(32) => "uint",
+        Type::UInt(_) => "uint",
+        Type::Float(64) => "Number",
+        Type::Float(_) => "Number",
+        Type::String => "String",
+        Type::Array(_) => "Array",
+        Type::Map(_, _) => "Object",
+        Type::Option(_) => "*",
+        Type::Dynamic => "*",
+        Type::Struct(_) | Type::Enum(_) => "*",
+        _ => "*",
+    }
+}
+
+/// Emit a `registerClassTraits(ClassName, [...instance], [...static])` call.
+fn emit_register_class_traits(
+    group: &ClassGroup,
+    module: &Module,
+    out: &mut String,
+) {
+    let class_name = sanitize_ident(&group.class_def.name);
+
+    // Collect instance traits: fields from struct_def + instance methods/getters/setters
+    let mut instance_traits = Vec::new();
+    for (name, ty) in &group.struct_def.fields {
+        let type_name = as3_type_name(ty);
+        instance_traits.push(format!(
+            "{{ name: \"{name}\", kind: \"variable\", type: \"{type_name}\" }}"
+        ));
+    }
+
+    // Collect static traits and more instance traits from methods
+    let mut static_traits = Vec::new();
+    // Track getter/setter pairs to coalesce into accessors
+    let mut instance_accessors: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+    for &fid in &group.methods {
+        let func = &module.functions[fid];
+        let fname = &func.name;
+        match func.method_kind {
+            MethodKind::Constructor | MethodKind::Free => {}
+            MethodKind::Instance => {
+                instance_traits.push(format!(
+                    "{{ name: \"{fname}\", kind: \"method\" }}"
+                ));
+            }
+            MethodKind::Static => {
+                // Skip class initializer
+                if fname == "cinit" || fname == "$cinit" {
+                    continue;
+                }
+                static_traits.push(format!(
+                    "{{ name: \"{fname}\", kind: \"method\" }}"
+                ));
+            }
+            MethodKind::Getter => {
+                let entry = instance_accessors.entry(fname.clone()).or_insert((false, false));
+                entry.0 = true;
+            }
+            MethodKind::Setter => {
+                let entry = instance_accessors.entry(fname.clone()).or_insert((false, false));
+                entry.1 = true;
+            }
+        }
+    }
+
+    // Emit coalesced accessors
+    for (name, (has_get, has_set)) in &instance_accessors {
+        let access = match (has_get, has_set) {
+            (true, true) => "readwrite",
+            (true, false) => "readonly",
+            (false, true) => "writeonly",
+            _ => "readwrite",
+        };
+        instance_traits.push(format!(
+            "{{ name: \"{name}\", kind: \"accessor\", access: \"{access}\" }}"
+        ));
+    }
+
+    let instance_arr = instance_traits.join(", ");
+    let static_arr = static_traits.join(", ");
+    let _ = writeln!(
+        out,
+        "registerClassTraits({class_name}, [{instance_arr}], [{static_arr}]);\n"
+    );
+}
+
 /// Emit a TypeScript class from a `ClassGroup`.
 fn emit_class(
     group: &ClassGroup,
@@ -1059,6 +1152,7 @@ fn emit_class(
 
     let _ = writeln!(out, "}}\n");
     let _ = writeln!(out, "registerClass({class_name});\n");
+    emit_register_class_traits(group, module, out);
     Ok(())
 }
 
