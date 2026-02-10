@@ -17,9 +17,20 @@ export const Flash_Utils = {
     const ctor = typeof value === "function" ? value : value.constructor;
     return ctor?.[QN_KEY] ?? ctor?.name ?? typeof value;
   },
-  describeType(_value: any): any {
-    // TODO: XML type metadata
-    return null;
+  describeType(value: any): any {
+    // Minimal describeType: enumerates own static properties as "constant"
+    // traits.  The enum pattern iterates `.constant` to assign names.
+    if (value == null) return { constant: [] };
+    if (typeof value === "function") {
+      const constants: any[] = [];
+      for (const name of Object.getOwnPropertyNames(value)) {
+        if (name === "prototype" || name === "length" || name === "name"
+            || name === "arguments" || name === "caller") continue;
+        constants.push({ name });
+      }
+      return { constant: constants };
+    }
+    return { constant: [] };
   },
 };
 
