@@ -120,6 +120,11 @@ examples in the test project (`~/cc-project/comparison-notes.md`).
   evaluation order.
 - [ ] **Negative constant resolution** — At least one `Math.max` clamp emits
   a wrong positive constant instead of the correct negative value.
+- [ ] **Non-deterministic output** — Output varies between runs for some
+  methods (e.g. Inventory::placeIn: 3 vs 8 statements). Root cause: HashMap
+  iteration in structurize.rs (cfg.succs, loops map) and cfg_simplify.rs
+  (forwards map) produces different loop detection and block forwarding
+  order. Fix: sort by BlockId before iterating, or use BTreeMap.
 
 ### Medium Priority (output quality)
 
@@ -381,11 +386,21 @@ structural problems:
   namespace strings. Eliminates `flash_pkg_module`, `flash_stdlib_module`,
   `emit_flash_stdlib_imports` from the backend.
 
-- [ ] **Runtime package config** — Frontend declares its runtime package
-  location and entry scaffold in the project manifest. Backend copies the
-  package and wires up imports without engine-specific knowledge.
+- [x] **Runtime package config** — Runtime declares its import paths, scaffold
+  config, and class preamble in `runtime.json`. CLI loads the manifest and
+  passes `RuntimePackage` to the backend. Backend reads config instead of
+  hardcoding Flash paths. `named_import` flag removed — all system modules
+  use uniform namespace imports.
 
-Priority: before adding a second frontend that targets TypeScript.
+- [x] **Backend-local JS AST + scoped rewrites** — Done. `JsStmt`/`JsExpr`
+  types in `js_ast.rs` with JS-specific variants (Throw, New, TypeOf, In,
+  Delete, SuperCall, SuperMethodCall, SuperGet, SuperSet, Activation, This).
+  Lowering pass in `lower.rs` converts core `Vec<Stmt>` → `Vec<JsStmt>`,
+  applying Flash rewrites during the walk. Flash-specific rewrites in
+  `rewrites/flash.rs` (FlashLowerCtx, scope resolution, SystemCall → JS
+  construct mapping). Printer in `ast_printer.rs` handles `JsStmt`/`JsExpr`
+  faithfully with zero engine knowledge. Object literal keys now unquoted
+  for valid JS identifiers; `in` expressions correctly parenthesized.
 
 ### Architecture — Hybrid Lowering via Structured IR
 
