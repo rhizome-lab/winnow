@@ -1,13 +1,11 @@
 //! Backend-local JavaScript/TypeScript AST types.
 //!
 //! These types sit between the engine-agnostic core AST (`Stmt`/`Expr`) and
-//! TypeScript source output. The core AST represents SystemCalls generically;
-//! this AST has concrete JS constructs (`new`, `typeof`, `throw`, `super`,
-//! etc.) that were resolved from SystemCalls during lowering.
-//!
-//! Engine-specific rewrite modules (e.g. `rewrites::flash`) convert SystemCalls
-//! into these JS-native nodes during the `lower` pass. The printer then handles
-//! `JsStmt`/`JsExpr` faithfully with zero engine knowledge.
+//! TypeScript source output. The mechanical `lower` pass produces a 1:1
+//! `JsStmt`/`JsExpr` tree with `SystemCall` nodes preserved as-is. A separate
+//! engine-specific rewrite pass (e.g. `rewrites::flash`) then resolves those
+//! `SystemCall` nodes into concrete JS constructs (`new`, `typeof`, `throw`,
+//! `super`, etc.). The printer handles the final tree with zero engine knowledge.
 
 use reincarnate_core::ir::ast::BinOp;
 use reincarnate_core::ir::{CmpKind, Constant, MethodKind, Type, UnaryOp, Visibility};

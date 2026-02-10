@@ -1,23 +1,22 @@
-//! Flash/AVM2-specific rewrites for SystemCall → JS construct lowering.
+//! Flash/AVM2-specific JsExpr → JsExpr rewrite pass.
 //!
-//! This module converts AVM2 runtime calls (scope lookups, super dispatch,
-//! object construction, etc.) into native JavaScript constructs during the
-//! `lower` pass. All Flash-specific knowledge is confined here.
+//! Runs AFTER mechanical `Expr → JsExpr` lowering. Resolves Flash SystemCall
+//! nodes (scope lookups, super dispatch, object construction, etc.) into
+//! native JavaScript constructs. All Flash-specific knowledge is confined here;
+//! `lower.rs` is purely engine-agnostic.
 
 use std::collections::{HashMap, HashSet};
 
-use reincarnate_core::ir::ast::Expr;
 use reincarnate_core::ir::Constant;
 
-use crate::js_ast::{JsExpr, JsStmt};
-use crate::lower::{lower_expr, lower_exprs, LowerCtx};
+use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
 // ---------------------------------------------------------------------------
-// Flash-specific lowering context
+// Flash-specific rewrite context
 // ---------------------------------------------------------------------------
 
 /// Context needed for Flash/AVM2 scope resolution and rewrite decisions.
-pub struct FlashLowerCtx {
+pub struct FlashRewriteCtx {
     /// Qualified class name → sanitized short name.
     pub class_names: HashMap<String, String>,
     /// Short names of the current class and all its ancestors.
@@ -40,16 +39,22 @@ pub struct FlashLowerCtx {
 // Scope-lookup detection and resolution
 // ---------------------------------------------------------------------------
 
-/// Check whether an expression is a Flash scope-lookup SystemCall
-/// (findPropStrict or findProperty).
-pub fn is_scope_lookup(expr: &Expr) -> bool {
+enum ScopeResolution {
+    /// The lookup matched an ancestor class.
+    Ancestor(String),
+    /// Generic scope lookup (class ref, global, etc.).
+    ScopeLookup,
+}
+
+/// Check whether a JsExpr is a Flash scope-lookup SystemCall.
+fn is_scope_lookup(expr: &JsExpr) -> bool {
     scope_lookup_args(expr).is_some()
 }
 
 /// Extract the args from a scope-lookup SystemCall, or None.
-fn scope_lookup_args(expr: &Expr) -> Option<&[Expr]> {
+fn scope_lookup_args(expr: &JsExpr) -> Option<&[JsExpr]> {
     match expr {
-        Expr::SystemCall {
+        JsExpr::SystemCall {
             system,
             method,
             args,
@@ -65,375 +70,7 @@ fn scope_lookup_args(expr: &Expr) -> Option<&[Expr]> {
 /// Extract the class name from a scope-lookup arg string constant.
 ///
 /// For arg like `"classes:SomeClass::someField"`, returns `"SomeClass"`.
-fn class_from_scope_arg(args: &[Expr]) -> Option<String> {
-    let arg = args.first()?;
-    if let Expr::Literal(Constant::String(s)) = arg {
-        let prefix = s.rsplit_once("::")?.0;
-        let class_name = prefix.rsplit_once(':')?.1;
-        Some(class_name.to_string())
-    } else {
-        None
-    }
-}
-
-enum ScopeResolution {
-    /// The lookup matched an ancestor class.
-    Ancestor(String),
-    /// Generic scope lookup (class ref, global, etc.).
-    ScopeLookup,
-}
-
-fn resolve_scope_lookup(args: &[Expr], flash: &FlashLowerCtx) -> ScopeResolution {
-    if let Some(class_name) = class_from_scope_arg(args) {
-        if flash.ancestors.contains(&class_name) {
-            return ScopeResolution::Ancestor(class_name);
-        }
-    }
-    ScopeResolution::ScopeLookup
-}
-
-// ---------------------------------------------------------------------------
-// Field resolution (scope-lookup in object position)
-// ---------------------------------------------------------------------------
-
-/// Try to resolve `Field { object: scope_lookup, field }` for Flash.
-///
-/// Returns `Some(JsExpr)` if the object was a scope lookup, `None` otherwise.
-pub fn try_resolve_field(object: &Expr, field: &str, flash: &FlashLowerCtx) -> Option<JsExpr> {
-    let args = scope_lookup_args(object)?;
-    let effective = field.rsplit("::").next().unwrap_or(field);
-
-    Some(match resolve_scope_lookup(args, flash) {
-        ScopeResolution::Ancestor(ref class_name) => {
-            if flash.is_cinit || flash.instance_fields.contains(effective) {
-                JsExpr::Field {
-                    object: Box::new(JsExpr::This),
-                    field: effective.to_string(),
-                }
-            } else {
-                JsExpr::Field {
-                    object: Box::new(JsExpr::Var(class_name.clone())),
-                    field: effective.to_string(),
-                }
-            }
-        }
-        ScopeResolution::ScopeLookup => {
-            // Check if the full field is a known class name.
-            if let Some(short) = flash.class_names.get(field) {
-                return Some(JsExpr::Var(short.clone()));
-            }
-            // In cinit, static fields must be accessed as this.field.
-            if flash.is_cinit && flash.static_fields.contains(effective) {
-                JsExpr::Field {
-                    object: Box::new(JsExpr::This),
-                    field: effective.to_string(),
-                }
-            } else {
-                JsExpr::Var(effective.to_string())
-            }
-        }
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Call resolution (scope-lookup in receiver position)
-// ---------------------------------------------------------------------------
-
-/// Try to resolve a Call where the receiver is a Flash scope lookup.
-///
-/// Returns `Some(JsExpr)` if the receiver was a scope lookup, `None` otherwise.
-pub fn try_resolve_scope_call(
-    method: &str,
-    receiver: &Expr,
-    rest_args: &[Expr],
-    flash: &FlashLowerCtx,
-    ctx: &LowerCtx,
-) -> Option<JsExpr> {
-    if !is_scope_lookup(receiver) {
-        return None;
-    }
-    let lowered_rest = lower_exprs(rest_args, ctx);
-    let use_this = (flash.has_self && flash.method_names.contains(method)) || flash.is_cinit;
-    let callee = if use_this {
-        JsExpr::Field {
-            object: Box::new(JsExpr::This),
-            field: method.to_string(),
-        }
-    } else {
-        JsExpr::Var(method.to_string())
-    };
-    Some(JsExpr::Call {
-        callee: Box::new(callee),
-        args: lowered_rest,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// SystemCall expression rewrites
-// ---------------------------------------------------------------------------
-
-/// Try to rewrite a Flash SystemCall in expression context.
-///
-/// Returns `Some(JsExpr)` if the call was recognized, `None` for unmapped calls.
-pub fn try_lower_system_call_expr(
-    system: &str,
-    method: &str,
-    args: &[Expr],
-    flash: &FlashLowerCtx,
-    ctx: &LowerCtx,
-) -> Option<JsExpr> {
-    // constructSuper → super() or void 0
-    if system == "Flash.Class" && method == "constructSuper" {
-        if flash.suppress_super {
-            return Some(JsExpr::Literal(Constant::Null));
-        }
-        return Some(JsExpr::SuperCall(lower_exprs(&args[1..], ctx)));
-    }
-
-    // newFunction → this.methodRef
-    if system == "Flash.Object" && method == "newFunction" && args.len() == 1 {
-        if let Expr::Literal(Constant::String(name)) = &args[0] {
-            let short = name.rsplit("::").next().unwrap_or(name);
-            return Some(JsExpr::Field {
-                object: Box::new(JsExpr::This),
-                field: short.to_string(),
-            });
-        }
-    }
-
-    // construct → new Ctor(args)
-    if system == "Flash.Object" && method == "construct" {
-        if let Some((ctor, rest)) = args.split_first() {
-            return Some(JsExpr::New {
-                callee: Box::new(lower_expr(ctor, ctx)),
-                args: lower_exprs(rest, ctx),
-            });
-        }
-    }
-
-    // findPropStrict/findProperty → scope resolution
-    if system == "Flash.Scope" && (method == "findPropStrict" || method == "findProperty") {
-        return Some(match resolve_scope_lookup(args, flash) {
-            ScopeResolution::Ancestor(ref class_name) => {
-                if flash.is_cinit {
-                    JsExpr::This
-                } else {
-                    JsExpr::Var(class_name.clone())
-                }
-            }
-            ScopeResolution::ScopeLookup => {
-                // Standalone scope lookup — consumed by Field/Call during lowering.
-                // If it reaches here, emit empty (will be wrapped in Expr stmt and skipped).
-                JsExpr::Var(String::new())
-            }
-        });
-    }
-
-    // newActivation → ({})
-    if system == "Flash.Scope" && method == "newActivation" && args.is_empty() {
-        return Some(JsExpr::Activation);
-    }
-
-    // typeOf → typeof expr
-    if system == "Flash.Object" && method == "typeOf" && args.len() == 1 {
-        return Some(JsExpr::TypeOf(Box::new(lower_expr(&args[0], ctx))));
-    }
-
-    // hasProperty(obj, k) → k in obj
-    if system == "Flash.Object" && method == "hasProperty" && args.len() == 2 {
-        return Some(JsExpr::In {
-            key: Box::new(lower_expr(&args[1], ctx)),
-            object: Box::new(lower_expr(&args[0], ctx)),
-        });
-    }
-
-    // deleteProperty(obj, k) → delete obj[k]
-    if system == "Flash.Object" && method == "deleteProperty" && args.len() == 2 {
-        return Some(JsExpr::Delete {
-            object: Box::new(lower_expr(&args[0], ctx)),
-            key: Box::new(lower_expr(&args[1], ctx)),
-        });
-    }
-
-    // newObject(k1, v1, k2, v2, ...) → { k1: v1, k2: v2, ... }
-    if system == "Flash.Object" && method == "newObject" {
-        if args.is_empty() {
-            return Some(JsExpr::ObjectInit(Vec::new()));
-        }
-        if args.len().is_multiple_of(2) {
-            // Deduplicate keys (last value wins, matching JS/Flash runtime semantics).
-            let mut keys: Vec<String> = Vec::new();
-            let mut values: HashMap<String, JsExpr> = HashMap::new();
-            for pair in args.chunks_exact(2) {
-                let key = extract_object_key(&pair[0], ctx);
-                let val = lower_expr(&pair[1], ctx);
-                if !values.contains_key(&key) {
-                    keys.push(key.clone());
-                }
-                values.insert(key, val);
-            }
-            let pairs: Vec<_> = keys
-                .into_iter()
-                .map(|k| {
-                    let v = values.remove(&k).unwrap();
-                    (k, v)
-                })
-                .collect();
-            return Some(JsExpr::ObjectInit(pairs));
-        }
-    }
-
-    // callSuper(this, "method", ...args) → super.method(args)
-    if system == "Flash.Class" && method == "callSuper" && args.len() >= 2 {
-        if let Expr::Literal(Constant::String(name)) = &args[1] {
-            return Some(JsExpr::SuperMethodCall {
-                method: name.clone(),
-                args: lower_exprs(&args[2..], ctx),
-            });
-        }
-    }
-
-    // getSuper(this, "prop") → super.prop
-    if system == "Flash.Class" && method == "getSuper" && args.len() == 2 {
-        if let Expr::Literal(Constant::String(name)) = &args[1] {
-            return Some(JsExpr::SuperGet(name.clone()));
-        }
-    }
-
-    // setSuper(this, "prop", value) → (super.prop = value) in expression context
-    if system == "Flash.Class" && method == "setSuper" && args.len() == 3 {
-        if let Expr::Literal(Constant::String(name)) = &args[1] {
-            return Some(JsExpr::SuperSet {
-                prop: name.clone(),
-                value: Box::new(lower_expr(&args[2], ctx)),
-            });
-        }
-    }
-
-    None
-}
-
-/// Extract an object-literal key string from a key expression.
-///
-/// For newObject, keys are typically string literals. We extract the raw
-/// string for use as the object property name. For non-string keys, we
-/// fall back to a printed representation.
-fn extract_object_key(expr: &Expr, ctx: &LowerCtx) -> String {
-    match expr {
-        Expr::Literal(Constant::String(s)) => s.clone(),
-        _ => {
-            // Fallback: lower to JsExpr and use debug format.
-            // In practice, newObject keys are always string literals.
-            format!("{:?}", lower_expr(expr, ctx))
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SystemCall statement rewrites
-// ---------------------------------------------------------------------------
-
-/// Result of attempting a statement-level SystemCall rewrite.
-pub enum StmtRewrite {
-    /// Rewrite not applicable — fall through to default lowering.
-    Pass,
-    /// Replace with this statement.
-    Replace(JsStmt),
-    /// Skip entirely (emit nothing).
-    Skip,
-}
-
-/// Try to rewrite a Flash SystemCall in statement context.
-///
-/// Statement context allows producing `Throw`, skipping suppressed super calls,
-/// and converting `setSuper` to assignments.
-pub fn try_lower_system_call_stmt(
-    system: &str,
-    method: &str,
-    args: &[Expr],
-    flash: &FlashLowerCtx,
-    ctx: &LowerCtx,
-) -> StmtRewrite {
-    // constructSuper → super() or skip
-    if system == "Flash.Class" && method == "constructSuper" {
-        if flash.suppress_super {
-            return StmtRewrite::Skip;
-        }
-        return StmtRewrite::Replace(JsStmt::Expr(JsExpr::SuperCall(lower_exprs(
-            &args[1..],
-            ctx,
-        ))));
-    }
-
-    // throw(x) → throw x;
-    if system == "Flash.Exception" && method == "throw" && args.len() == 1 {
-        return StmtRewrite::Replace(JsStmt::Throw(lower_expr(&args[0], ctx)));
-    }
-
-    // setSuper(this, "prop", value) → super.prop = value;
-    if system == "Flash.Class" && method == "setSuper" && args.len() == 3 {
-        if let Expr::Literal(Constant::String(name)) = &args[1] {
-            return StmtRewrite::Replace(JsStmt::Assign {
-                target: JsExpr::SuperGet(name.clone()),
-                value: lower_expr(&args[2], ctx),
-            });
-        }
-    }
-
-    StmtRewrite::Pass
-}
-
-// ===========================================================================
-// JsExpr → JsExpr rewrite pass (runs AFTER mechanical lowering)
-// ===========================================================================
-
-/// Context for Flash/AVM2 rewrites operating on the JS AST.
-pub struct FlashRewriteCtx {
-    /// Qualified class name → sanitized short name.
-    pub class_names: HashMap<String, String>,
-    /// Short names of the current class and all its ancestors.
-    pub ancestors: HashSet<String>,
-    /// Method short names visible in the class hierarchy.
-    pub method_names: HashSet<String>,
-    /// Instance field short names visible in the class hierarchy.
-    pub instance_fields: HashSet<String>,
-    /// Whether we are inside a method (have a `this`).
-    pub has_self: bool,
-    /// Suppress `super()` calls (class has no real superclass).
-    pub suppress_super: bool,
-    /// Whether we are inside a cinit (class static initializer).
-    pub is_cinit: bool,
-    /// Static field short names declared on the current class.
-    pub static_fields: HashSet<String>,
-}
-
-// ---------------------------------------------------------------------------
-// JsExpr scope-lookup detection and resolution
-// ---------------------------------------------------------------------------
-
-/// Check whether a JsExpr is a Flash scope-lookup SystemCall.
-fn is_js_scope_lookup(expr: &JsExpr) -> bool {
-    js_scope_lookup_args(expr).is_some()
-}
-
-/// Extract the args from a JsExpr scope-lookup SystemCall.
-fn js_scope_lookup_args(expr: &JsExpr) -> Option<&[JsExpr]> {
-    match expr {
-        JsExpr::SystemCall {
-            system,
-            method,
-            args,
-        } if system == "Flash.Scope"
-            && (method == "findPropStrict" || method == "findProperty") =>
-        {
-            Some(args)
-        }
-        _ => None,
-    }
-}
-
-/// Extract the class name from a scope-lookup JsExpr arg.
-fn js_class_from_scope_arg(args: &[JsExpr]) -> Option<String> {
+fn class_from_scope_arg(args: &[JsExpr]) -> Option<String> {
     let arg = args.first()?;
     if let JsExpr::Literal(Constant::String(s)) = arg {
         let prefix = s.rsplit_once("::")?.0;
@@ -444,8 +81,8 @@ fn js_class_from_scope_arg(args: &[JsExpr]) -> Option<String> {
     }
 }
 
-fn resolve_js_scope_lookup(args: &[JsExpr], ctx: &FlashRewriteCtx) -> ScopeResolution {
-    if let Some(class_name) = js_class_from_scope_arg(args) {
+fn resolve_scope_lookup(args: &[JsExpr], ctx: &FlashRewriteCtx) -> ScopeResolution {
+    if let Some(class_name) = class_from_scope_arg(args) {
         if ctx.ancestors.contains(&class_name) {
             return ScopeResolution::Ancestor(class_name);
         }
@@ -454,15 +91,15 @@ fn resolve_js_scope_lookup(args: &[JsExpr], ctx: &FlashRewriteCtx) -> ScopeResol
 }
 
 // ---------------------------------------------------------------------------
-// JsExpr scope-lookup resolution helpers
+// Scope-lookup resolution helpers
 // ---------------------------------------------------------------------------
 
-/// Resolve `Field { object: scope_lookup, field }` on JsExpr.
-fn resolve_js_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<JsExpr> {
-    let args = js_scope_lookup_args(object)?;
+/// Resolve `Field { object: scope_lookup, field }`.
+fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<JsExpr> {
+    let args = scope_lookup_args(object)?;
     let effective = field.rsplit("::").next().unwrap_or(field);
 
-    Some(match resolve_js_scope_lookup(args, ctx) {
+    Some(match resolve_scope_lookup(args, ctx) {
         ScopeResolution::Ancestor(ref class_name) => {
             if ctx.is_cinit || ctx.instance_fields.contains(effective) {
                 JsExpr::Field {
@@ -494,7 +131,7 @@ fn resolve_js_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Opti
 }
 
 /// Resolve a Call where the callee is `Field(scope_lookup, method)`.
-fn resolve_js_scope_call(
+fn resolve_scope_call(
     method: &str,
     scope_args: &[JsExpr],
     rest_args: Vec<JsExpr>,
@@ -519,8 +156,6 @@ fn resolve_js_scope_call(
 // ---------------------------------------------------------------------------
 // Top-level rewrite entry point
 // ---------------------------------------------------------------------------
-
-use crate::js_ast::JsFunction;
 
 /// Rewrite a lowered JS function, resolving all Flash SystemCalls and
 /// scope-lookup patterns.
@@ -713,8 +348,8 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
         ref field,
     } = expr
     {
-        if is_js_scope_lookup(object) {
-            if let Some(resolved) = resolve_js_field(object, field, ctx) {
+        if is_scope_lookup(object) {
+            if let Some(resolved) = resolve_field(object, field, ctx) {
                 return resolved;
             }
         }
@@ -731,23 +366,22 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             ref field,
         } = **callee
         {
-            if let Some(scope_args) = js_scope_lookup_args(object) {
-                // Owned versions for the resolved call
+            if let Some(scope_args) = scope_lookup_args(object) {
                 let rewritten_args = rewrite_exprs(args.clone(), ctx);
-                return resolve_js_scope_call(field, scope_args, rewritten_args, ctx);
+                return resolve_scope_call(field, scope_args, rewritten_args, ctx);
             }
         }
     }
 
-    // Binary { lhs: scope_lookup, rhs } → strip scope lookup, return rhs
+    // Binary { lhs: scope_lookup, rhs } → strip scope lookup, return other side
     if let JsExpr::Binary {
         ref lhs, ref rhs, ..
     } = expr
     {
-        if is_js_scope_lookup(lhs) {
+        if is_scope_lookup(lhs) {
             return rewrite_expr(rhs.as_ref().clone(), ctx);
         }
-        if is_js_scope_lookup(rhs) {
+        if is_scope_lookup(rhs) {
             return rewrite_expr(lhs.as_ref().clone(), ctx);
         }
     }
@@ -890,7 +524,7 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
 }
 
 // ---------------------------------------------------------------------------
-// SystemCall expression rewrites (JsExpr version)
+// SystemCall expression rewrites
 // ---------------------------------------------------------------------------
 
 /// Rewrite a Flash SystemCall node in the JsExpr tree.
@@ -934,7 +568,7 @@ fn rewrite_system_call(
 
     // findPropStrict/findProperty → scope resolution
     if system == "Flash.Scope" && (method == "findPropStrict" || method == "findProperty") {
-        return Some(match resolve_js_scope_lookup(args, ctx) {
+        return Some(match resolve_scope_lookup(args, ctx) {
             ScopeResolution::Ancestor(ref class_name) => {
                 if ctx.is_cinit {
                     JsExpr::This
@@ -984,7 +618,7 @@ fn rewrite_system_call(
             let mut keys: Vec<String> = Vec::new();
             let mut values: HashMap<String, JsExpr> = HashMap::new();
             for pair in args.chunks_exact(2) {
-                let key = js_extract_object_key(&pair[0]);
+                let key = extract_object_key(&pair[0]);
                 let val = rewrite_expr(pair[1].clone(), ctx);
                 if !values.contains_key(&key) {
                     keys.push(key.clone());
@@ -1034,7 +668,7 @@ fn rewrite_system_call(
 }
 
 /// Extract an object-literal key string from a JsExpr key.
-fn js_extract_object_key(expr: &JsExpr) -> String {
+fn extract_object_key(expr: &JsExpr) -> String {
     match expr {
         JsExpr::Literal(Constant::String(s)) => s.clone(),
         _ => format!("{:?}", expr),
