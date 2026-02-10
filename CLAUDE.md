@@ -103,6 +103,7 @@ Do not:
 - Create special cases - design to avoid them
 - Add to the monolith - split by domain into sub-crates
 - Cut corners with fallbacks - implement properly for each case
+- Write stubs that return null/undefined — implement the function or don't add it. A `return null` stub is a landmine that crashes at runtime with a misleading error. If the full implementation is complex, implement the subset that covers the actual usage patterns.
 - Mark as done prematurely - note what remains
 - Use path dependencies in Cargo.toml - causes clippy to stash changes across repos
 - Use `--no-verify` - fix the issue or fix the hook
