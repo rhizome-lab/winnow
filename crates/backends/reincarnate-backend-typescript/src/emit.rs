@@ -5,7 +5,7 @@ use std::path::Path;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{
-    structurize, ClassDef, ExternalImport, FuncId, Function, MethodKind, Module, Op,
+    structurize, CastKind, ClassDef, ExternalImport, FuncId, Function, MethodKind, Module, Op,
     StructDef, Type, Visibility,
 };
 use reincarnate_core::pipeline::LoweringConfig;
@@ -760,13 +760,14 @@ fn collect_type_refs_from_function(
             Op::TypeCheck(_, ty) => {
                 collect_type_ref(ty, self_name, registry, external_imports, &mut refs.value_refs, &mut refs.ext_value_refs);
             }
-            // Alloc is type-only. Cast with Struct/Enum emits asType() — runtime value ref.
+            // Alloc is type-only. Cast with Struct/Enum: AsType needs runtime value, Coerce is type-only.
             Op::Alloc(ty) => {
                 collect_type_ref(ty, self_name, registry, external_imports, &mut refs.type_refs, &mut refs.ext_type_refs);
             }
-            Op::Cast(_, ty) => {
+            Op::Cast(_, ty, kind) => {
                 let is_struct_or_enum = matches!(ty, Type::Struct(_) | Type::Enum(_));
-                if is_struct_or_enum {
+                if is_struct_or_enum && *kind == CastKind::AsType {
+                    // AsType needs runtime constructor for asType() call
                     collect_type_ref(ty, self_name, registry, external_imports, &mut refs.value_refs, &mut refs.ext_value_refs);
                 } else {
                     collect_type_ref(ty, self_name, registry, external_imports, &mut refs.type_refs, &mut refs.ext_type_refs);

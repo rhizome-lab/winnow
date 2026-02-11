@@ -3,7 +3,7 @@ use std::fmt;
 use crate::entity::EntityRef;
 
 use super::func::{Function, MethodKind, Visibility};
-use super::inst::{CmpKind, Op};
+use super::inst::{CastKind, CmpKind, Op};
 use super::module::Module;
 use super::ty::Type;
 use super::value::Constant;
@@ -410,8 +410,11 @@ impl fmt::Display for Function {
                         write!(f, ")")?;
                     }
 
-                    Op::Cast(val, ty) => {
-                        write!(f, "cast ")?;
+                    Op::Cast(val, ty, kind) => {
+                        match kind {
+                            CastKind::AsType => write!(f, "as_type ")?,
+                            CastKind::Coerce => write!(f, "coerce ")?,
+                        }
                         fmt_value(*val, f)?;
                         write!(f, ", ")?;
                         fmt_type(ty, f)?;

@@ -16,7 +16,7 @@ fn elim_function(func: &mut Function) -> bool {
     let mut changed = false;
 
     for inst_id in func.insts.keys().collect::<Vec<_>>() {
-        if let Op::Cast(value, ref ty) = func.insts[inst_id].op {
+        if let Op::Cast(value, ref ty, _) = func.insts[inst_id].op {
             if func.value_types[value] == *ty {
                 func.insts[inst_id].op = Op::Copy(value);
                 changed = true;
@@ -98,7 +98,7 @@ mod tests {
 
         let func = &result.module.functions[FuncId::new(0)];
         assert!(
-            matches!(&func.insts.values().find(|i| i.result == Some(cast)).unwrap().op, Op::Cast(_, ty) if *ty == Type::Bool),
+            matches!(&func.insts.values().find(|i| i.result == Some(cast)).unwrap().op, Op::Cast(_, ty, _) if *ty == Type::Bool),
             "non-redundant cast should remain Cast"
         );
     }

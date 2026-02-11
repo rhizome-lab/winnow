@@ -212,9 +212,10 @@ fn lower_expr(expr: &Expr, ctx: &LowerCtx) -> JsExpr {
             rhs: Box::new(lower_expr(rhs, ctx)),
         },
 
-        Expr::Cast { expr: inner, ty } => JsExpr::Cast {
+        Expr::Cast { expr: inner, ty, kind } => JsExpr::Cast {
             expr: Box::new(lower_expr(inner, ctx)),
             ty: ty.clone(),
+            kind: *kind,
         },
 
         Expr::TypeCheck { expr: inner, ty } => JsExpr::TypeCheck {

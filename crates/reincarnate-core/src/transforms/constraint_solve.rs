@@ -472,7 +472,7 @@ fn generate_constraints(
                 }
 
                 // Cast: r = ty (no constraint on source)
-                Op::Cast(_, ty) => {
+                Op::Cast(_, ty, _) => {
                     if let Some(r) = result {
                         solver.constrain_value_to_type(r, ty);
                     }

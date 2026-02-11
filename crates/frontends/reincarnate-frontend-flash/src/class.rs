@@ -631,7 +631,7 @@ fn populate_external_imports(module: &mut Module) {
             func.insts
                 .iter()
                 .filter_map(|(_, inst)| match &inst.op {
-                    Op::TypeCheck(_, ty) | Op::Alloc(ty) | Op::Cast(_, ty) => {
+                    Op::TypeCheck(_, ty) | Op::Alloc(ty) | Op::Cast(_, ty, _) => {
                         Some(Either::Ty(ty.clone()))
                     }
                     Op::GetField { field, .. } => Some(Either::Name(field.clone())),

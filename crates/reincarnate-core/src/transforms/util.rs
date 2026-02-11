@@ -88,7 +88,7 @@ pub fn value_operands(op: &Op) -> Vec<ValueId> {
             ops
         }
         Op::SystemCall { args, .. } => args.clone(),
-        Op::Cast(a, _) | Op::TypeCheck(a, _) => vec![*a],
+        Op::Cast(a, ..) | Op::TypeCheck(a, _) => vec![*a],
         Op::StructInit { fields, .. } => fields.iter().map(|(_, v)| *v).collect(),
         Op::ArrayInit(elems) | Op::TupleInit(elems) => elems.clone(),
         Op::CoroutineCreate { args, .. } => args.clone(),
@@ -214,7 +214,7 @@ pub fn substitute_values_in_op(op: &mut Op, subst: &HashMap<ValueId, ValueId>) {
                 sub(a);
             }
         }
-        Op::Cast(a, _) | Op::TypeCheck(a, _) => sub(a),
+        Op::Cast(a, ..) | Op::TypeCheck(a, _) => sub(a),
         Op::StructInit { fields, .. } => {
             for (_, v) in fields {
                 sub(v);

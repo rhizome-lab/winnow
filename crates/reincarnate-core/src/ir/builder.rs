@@ -4,7 +4,7 @@ use crate::entity::PrimaryMap;
 
 use super::block::{Block, BlockId, BlockParam};
 use super::func::{FuncId, Function, Visibility};
-use super::inst::{CmpKind, Inst, Op};
+use super::inst::{CastKind, CmpKind, Inst, Op};
 use super::func::MethodKind;
 use super::module::{ClassDef, EnumDef, EntryPoint, ExternalImport, Global, Import, Module, StructDef};
 use super::ty::{FunctionSig, Type};
@@ -438,7 +438,11 @@ impl FunctionBuilder {
     // ========================================================================
 
     pub fn cast(&mut self, value: ValueId, ty: Type) -> ValueId {
-        self.emit(Op::Cast(value, ty.clone()), ty)
+        self.emit(Op::Cast(value, ty.clone(), CastKind::AsType), ty)
+    }
+
+    pub fn coerce(&mut self, value: ValueId, ty: Type) -> ValueId {
+        self.emit(Op::Cast(value, ty.clone(), CastKind::Coerce), ty)
     }
 
     pub fn type_check(&mut self, value: ValueId, ty: Type) -> ValueId {

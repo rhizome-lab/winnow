@@ -8,7 +8,7 @@
 //! syntax.
 
 use super::func::{MethodKind, Visibility};
-use super::inst::CmpKind;
+use super::inst::{CastKind, CmpKind};
 use super::ty::Type;
 use super::value::Constant;
 
@@ -82,6 +82,7 @@ pub enum Expr {
     Cast {
         expr: Box<Expr>,
         ty: Type,
+        kind: CastKind,
     },
     /// Runtime type check (returns bool).
     TypeCheck {

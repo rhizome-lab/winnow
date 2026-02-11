@@ -8,7 +8,7 @@
 //! `super`, etc.). The printer handles the final tree with zero engine knowledge.
 
 use reincarnate_core::ir::ast::BinOp;
-use reincarnate_core::ir::{CmpKind, Constant, MethodKind, Type, UnaryOp, Visibility};
+use reincarnate_core::ir::{CastKind, CmpKind, Constant, MethodKind, Type, UnaryOp, Visibility};
 
 // ---------------------------------------------------------------------------
 // Expressions
@@ -80,6 +80,7 @@ pub enum JsExpr {
     Cast {
         expr: Box<JsExpr>,
         ty: Type,
+        kind: CastKind,
     },
     /// Runtime type check (`instanceof` / `typeof ===`).
     TypeCheck {

@@ -299,7 +299,7 @@ fn infer_inst_type(
         Op::Cmp(..) | Op::Not(_) | Op::TypeCheck(..) => Type::Bool,
 
         // Cast always produces the target type.
-        Op::Cast(_, ty) => ty.clone(),
+        Op::Cast(_, ty, _) => ty.clone(),
 
         // Load: use tracked alloc type if available.
         Op::Load(ptr) => {

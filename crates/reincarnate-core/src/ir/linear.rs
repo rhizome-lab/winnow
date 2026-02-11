@@ -1201,7 +1201,7 @@ impl<'a> EmitCtx<'a> {
             if let Some(result) = inst.result {
                 if let Some(name) = value_names.get(&result).cloned() {
                     let src = match &inst.op {
-                        Op::Cast(s, _) | Op::Copy(s) => Some(*s),
+                        Op::Cast(s, ..) | Op::Copy(s) => Some(*s),
                         _ => None,
                     };
                     if let Some(src) = src {
@@ -1469,7 +1469,7 @@ impl<'a> EmitCtx<'a> {
                 }
             }
 
-            Op::Cast(v, ty) => {
+            Op::Cast(v, ty, kind) => {
                 if self
                     .func
                     .value_types
@@ -1482,6 +1482,7 @@ impl<'a> EmitCtx<'a> {
                     Expr::Cast {
                         expr: Box::new(self.build_val(*v)),
                         ty: ty.clone(),
+                        kind: *kind,
                     }
                 }
             }
@@ -1599,7 +1600,7 @@ impl<'a> EmitCtx<'a> {
                     return None;
                 }
                 match &self.func.insts[wiid].op {
-                    Op::Cast(src, _) | Op::Copy(src) => Some((*src, (w, wiid))),
+                    Op::Cast(src, ..) | Op::Copy(src) => Some((*src, (w, wiid))),
                     _ => None,
                 }
             })

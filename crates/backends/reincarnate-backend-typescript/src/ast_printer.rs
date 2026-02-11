@@ -8,7 +8,7 @@
 use std::fmt::Write;
 
 use reincarnate_core::ir::ast::BinOp;
-use reincarnate_core::ir::{CmpKind, Constant, MethodKind, Type, UnaryOp, Visibility};
+use reincarnate_core::ir::{CastKind, CmpKind, Constant, MethodKind, Type, UnaryOp, Visibility};
 
 use crate::emit::sanitize_ident;
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
@@ -136,10 +136,14 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
             let name_str = sanitize_ident(name);
             match (ty, init) {
                 (Some(ty), Some(init)) => {
-                    // Cast to the same type: for primitives, strip cast and use
-                    // type annotation; for struct/enum, keep asType() call.
-                    if let JsExpr::Cast { expr, ty: cast_ty } = init {
-                        if cast_ty == ty && !matches!(ty, Type::Struct(_) | Type::Enum(_)) {
+                    // Cast to the same type: strip TS assertion forms and use type
+                    // annotation. Keep function-call forms (asType, Number, int, etc.).
+                    if let JsExpr::Cast { expr, ty: cast_ty, kind } = init {
+                        let is_ts_assertion = match kind {
+                            CastKind::AsType => !matches!(ty, Type::Struct(_) | Type::Enum(_)),
+                            CastKind::Coerce => matches!(ty, Type::Struct(_) | Type::Enum(_) | Type::Dynamic),
+                        };
+                        if cast_ty == ty && is_ts_assertion {
                             let _ = writeln!(
                                 out,
                                 "{indent}{kw} {name_str}: {} = {};",
@@ -160,22 +164,28 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
                     let _ = writeln!(out, "{indent}{kw} {name_str}: {};", ts_type(ty));
                 }
                 (None, Some(init)) => {
-                    // Cast → for primitives, strip to type annotation + inner expr.
-                    // For struct/enum, keep asType() call with type annotation.
-                    if let JsExpr::Cast { expr, ty } = init {
-                        if matches!(ty, Type::Struct(_) | Type::Enum(_)) {
-                            let _ = writeln!(
-                                out,
-                                "{indent}{kw} {name_str}: {} = {};",
-                                ts_type(ty),
-                                print_expr(init),
-                            );
-                        } else {
+                    // Cast → determine if the cast form is a TS assertion (strippable
+                    // to type annotation) or a runtime call (must keep in expr).
+                    if let JsExpr::Cast { expr, ty, kind } = init {
+                        let is_ts_assertion = match kind {
+                            CastKind::AsType => !matches!(ty, Type::Struct(_) | Type::Enum(_)),
+                            CastKind::Coerce => matches!(ty, Type::Struct(_) | Type::Enum(_) | Type::Dynamic),
+                        };
+                        if is_ts_assertion {
+                            // Strip TS assertion, use type annotation + inner expr.
                             let _ = writeln!(
                                 out,
                                 "{indent}{kw} {name_str}: {} = {};",
                                 ts_type(ty),
                                 print_expr(expr),
+                            );
+                        } else {
+                            // Keep the runtime call (asType/Number/int/etc.), add type annotation.
+                            let _ = writeln!(
+                                out,
+                                "{indent}{kw} {name_str}: {} = {};",
+                                ts_type(ty),
+                                print_expr(init),
                             );
                         }
                     } else {
@@ -425,15 +435,46 @@ fn print_expr(expr: &JsExpr) -> String {
             )
         }
 
-        JsExpr::Cast { expr: inner, ty } => {
-            match ty {
-                // Struct/Enum casts use asType() for runtime null-on-failure semantics.
-                Type::Struct(name) | Type::Enum(name) => {
+        JsExpr::Cast { expr: inner, ty, kind } => {
+            match (kind, ty) {
+                // AsType + Struct/Enum → asType(x, Foo) (runtime null-on-failure).
+                (CastKind::AsType, Type::Struct(name) | Type::Enum(name)) => {
                     let short = name.rsplit("::").next().unwrap_or(name);
                     format!("asType({}, {})", print_expr(inner), sanitize_ident(short))
                 }
-                // Primitive casts stay as TS type assertions.
-                _ => format!("{} as {}", print_expr_operand(inner), ts_type(ty)),
+                // Coerce + Struct/Enum → TS assertion (compiler-guaranteed).
+                (CastKind::Coerce, Type::Struct(name) | Type::Enum(name)) => {
+                    let short = name.rsplit("::").next().unwrap_or(name);
+                    format!("{} as {}", print_expr_operand(inner), sanitize_ident(short))
+                }
+                // Coerce + Float → Number(x).
+                (CastKind::Coerce, Type::Float(_)) => {
+                    format!("Number({})", print_expr(inner))
+                }
+                // Coerce + Int(32) → int(x).
+                (CastKind::Coerce, Type::Int(32)) => {
+                    format!("int({})", print_expr(inner))
+                }
+                // Coerce + UInt(32) → uint(x).
+                (CastKind::Coerce, Type::UInt(32)) => {
+                    format!("uint({})", print_expr(inner))
+                }
+                // Coerce + String → String(x).
+                (CastKind::Coerce, Type::String) => {
+                    format!("String({})", print_expr(inner))
+                }
+                // Coerce + Bool → Boolean(x).
+                (CastKind::Coerce, Type::Bool) => {
+                    format!("Boolean({})", print_expr(inner))
+                }
+                // Coerce + Dynamic/other → passthrough (no-op).
+                (CastKind::Coerce, _) => print_expr(inner),
+                // AsType + Dynamic/other → passthrough (no-op).
+                (CastKind::AsType, Type::Dynamic) => print_expr(inner),
+                // AsType + Primitive → TS type assertion.
+                (CastKind::AsType, _) => {
+                    format!("{} as {}", print_expr_operand(inner), ts_type(ty))
+                }
             }
         }
 
@@ -575,8 +616,16 @@ fn print_expr_operand(expr: &JsExpr) -> String {
 /// Whether an expression needs parentheses when used as an operand.
 fn needs_parens(expr: &JsExpr) -> bool {
     match expr {
-        // Struct/Enum casts emit asType() — function call, no parens needed.
-        JsExpr::Cast { ty, .. } => !matches!(ty, Type::Struct(_) | Type::Enum(_)),
+        // Function-call forms (asType, Number, int, etc.) don't need parens.
+        // Only `x as T` forms need them.
+        JsExpr::Cast { ty, kind, .. } => match (kind, ty) {
+            (CastKind::AsType, Type::Struct(_) | Type::Enum(_)) => false,
+            (CastKind::Coerce, Type::Struct(_) | Type::Enum(_)) => true,  // `x as Foo`
+            (CastKind::Coerce, Type::Float(_) | Type::Int(32) | Type::UInt(32) | Type::String | Type::Bool) => false,
+            (CastKind::Coerce, _) => false,  // passthrough
+            (CastKind::AsType, Type::Dynamic) => false,  // passthrough
+            (CastKind::AsType, _) => true,  // `x as T`
+        },
         JsExpr::Binary { .. }
             | JsExpr::Cmp { .. }
             | JsExpr::Ternary { .. }

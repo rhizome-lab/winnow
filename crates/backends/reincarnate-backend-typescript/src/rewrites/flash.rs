@@ -764,9 +764,10 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             rhs: Box::new(rewrite_expr(*rhs, ctx)),
         },
 
-        JsExpr::Cast { expr: inner, ty } => JsExpr::Cast {
+        JsExpr::Cast { expr: inner, ty, kind } => JsExpr::Cast {
             expr: Box::new(rewrite_expr(*inner, ctx)),
             ty,
+            kind,
         },
 
         JsExpr::TypeCheck { expr: inner, ty } => JsExpr::TypeCheck {

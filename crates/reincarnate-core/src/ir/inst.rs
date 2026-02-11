@@ -26,6 +26,15 @@ pub struct Inst {
     pub span: Option<Span>,
 }
 
+/// Distinguishes the two semantics of `Op::Cast`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CastKind {
+    /// AS3 `as` operator: type-check-or-null.
+    AsType,
+    /// Runtime coercion (Coerce/Convert opcodes).
+    Coerce,
+}
+
 /// Comparison kind for relational operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CmpKind {
@@ -162,7 +171,7 @@ pub enum Op {
 
     // -- Type operations --
     /// Cast a value to a type.
-    Cast(ValueId, Type),
+    Cast(ValueId, Type, CastKind),
     /// Runtime type check (returns bool).
     TypeCheck(ValueId, Type),
 

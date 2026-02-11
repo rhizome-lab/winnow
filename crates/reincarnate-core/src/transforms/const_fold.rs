@@ -186,7 +186,7 @@ fn try_fold(op: &Op, consts: &HashMap<ValueId, Constant>) -> Option<Constant> {
         }
 
         // Cast
-        Op::Cast(a, ty) => fold_cast(consts.get(a)?, ty),
+        Op::Cast(a, ty, _) => fold_cast(consts.get(a)?, ty),
 
         // Copy propagation
         Op::Copy(a) => consts.get(a).cloned(),
