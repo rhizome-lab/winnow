@@ -35,6 +35,8 @@ pub struct FlashRewriteCtx {
     pub static_fields: HashSet<String>,
     /// Static method short name → owning class short name (across hierarchy).
     pub static_method_owners: HashMap<String, String>,
+    /// Const field short name → owning class short name (across hierarchy).
+    pub const_field_owners: HashMap<String, String>,
     /// Instance Const fields promoted to static readonly — `this.FIELD` → `ClassName.FIELD`.
     pub const_instance_fields: HashSet<String>,
     /// Short name of the current class (for `this.CONST` → `ClassName.CONST` rewrites).
@@ -133,6 +135,11 @@ fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<
                 if ctx.const_instance_fields.contains(effective) {
                     JsExpr::Field {
                         object: Box::new(JsExpr::Var(class_name.clone())),
+                        field: effective.to_string(),
+                    }
+                } else if let Some(owner) = ctx.const_field_owners.get(effective) {
+                    JsExpr::Field {
+                        object: Box::new(JsExpr::Var(owner.clone())),
                         field: effective.to_string(),
                     }
                 } else {
