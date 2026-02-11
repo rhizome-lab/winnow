@@ -229,7 +229,9 @@ fn try_fold_one_const(body: &mut Vec<Stmt>) -> bool {
                 .map(|s| count_var_refs_in_stmt(s, name))
                 .sum();
             if refs == 0 {
+                let name = name.clone();
                 body.remove(i);
+                remove_dead_assigns(body, &name);
                 return true;
             }
         }
@@ -269,6 +271,7 @@ fn try_fold_one_const(body: &mut Vec<Stmt>) -> bool {
             } else {
                 body.remove(i);
             }
+            remove_dead_assigns(body, &name);
             return true;
         }
 
@@ -390,6 +393,65 @@ fn expr_has_side_effects(expr: &Expr) -> bool {
         }
         Expr::StructInit { fields, .. } => {
             fields.iter().any(|(_, v)| expr_has_side_effects(v))  // closure needed: tuple destructure
+        }
+    }
+}
+
+/// Remove all bare assignments to `name` from `body` (recursing into nested scopes).
+///
+/// Called after removing a dead uninit decl with 0 read refs — all assignments to
+/// that variable are dead writes. Side-effecting RHS values are preserved as
+/// expression statements.
+fn remove_dead_assigns(body: &mut Vec<Stmt>, name: &str) {
+    let mut i = 0;
+    while i < body.len() {
+        // Recurse into nested bodies first.
+        match &mut body[i] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                remove_dead_assigns(then_body, name);
+                remove_dead_assigns(else_body, name);
+            }
+            Stmt::While { body: inner, .. }
+            | Stmt::Loop { body: inner }
+            | Stmt::ForOf { body: inner, .. } => {
+                remove_dead_assigns(inner, name);
+            }
+            Stmt::For {
+                init,
+                update,
+                body: inner,
+                ..
+            } => {
+                remove_dead_assigns(init, name);
+                remove_dead_assigns(update, name);
+                remove_dead_assigns(inner, name);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    remove_dead_assigns(block_body, name);
+                }
+            }
+            _ => {}
+        }
+        // Check if this statement is a bare assign to the dead variable.
+        let is_dead_assign = matches!(
+            &body[i],
+            Stmt::Assign { target: Expr::Var(n), .. } if n == name
+        );
+        if is_dead_assign {
+            let stmt = body.remove(i);
+            if let Stmt::Assign { value, .. } = stmt {
+                if expr_has_side_effects(&value) {
+                    body.insert(i, Stmt::Expr(value));
+                    i += 1;
+                }
+            }
+        } else {
+            i += 1;
         }
     }
 }
