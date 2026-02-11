@@ -212,21 +212,21 @@ fn generate_state_struct(
     func: &Function,
     live_values: &[ValueId],
     struct_name: &str,
-) -> (StructDef, Vec<(String, Type)>) {
+) -> (StructDef, Vec<(String, Type, Option<crate::ir::Constant>)>) {
     let mut fields = Vec::new();
 
     // Internal state fields.
-    fields.push(("__state".to_string(), Type::UInt(32)));
-    fields.push(("__done".to_string(), Type::Bool));
+    fields.push(("__state".to_string(), Type::UInt(32), None));
+    fields.push(("__done".to_string(), Type::Bool, None));
 
     // Original function parameters.
     for (i, param) in func.blocks[func.entry].params.iter().enumerate() {
-        fields.push((format!("__p{i}"), param.ty.clone()));
+        fields.push((format!("__p{i}"), param.ty.clone(), None));
     }
 
     // Cross-yield live values.
     for (i, &val) in live_values.iter().enumerate() {
-        fields.push((format!("__v{i}"), func.value_types[val].clone()));
+        fields.push((format!("__v{i}"), func.value_types[val].clone(), None));
     }
 
     let struct_def = StructDef {
@@ -999,7 +999,7 @@ mod tests {
         let field_names: Vec<&str> = module.structs[0]
             .fields
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _, _)| name.as_str())
             .collect();
         assert!(field_names.contains(&"__state"));
         assert!(field_names.contains(&"__done"));
@@ -1103,7 +1103,7 @@ mod tests {
         let field_names: Vec<&str> = struct_def
             .fields
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _, _)| name.as_str())
             .collect();
         assert!(
             field_names.contains(&"__p0"),
@@ -1268,7 +1268,7 @@ mod tests {
         let field_names: Vec<&str> = struct_def
             .fields
             .iter()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _, _)| name.as_str())
             .collect();
         assert!(
             field_names.iter().any(|n| n.starts_with("__v")),

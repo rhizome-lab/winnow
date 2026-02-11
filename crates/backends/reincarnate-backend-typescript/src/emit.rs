@@ -256,7 +256,7 @@ fn build_instance_field_sets(module: &Module) -> HashMap<String, HashSet<String>
         let mut current = class;
         loop {
             let struct_def = &module.structs[current.struct_index];
-            for (name, _ty) in &struct_def.fields {
+            for (name, _ty, _) in &struct_def.fields {
                 fields.insert(name.clone());
             }
             match current.super_class {
@@ -638,7 +638,7 @@ fn collect_class_references(
     }
 
     // Struct fields (class instance fields) — type-only.
-    for (_name, ty) in &group.struct_def.fields {
+    for (_name, ty, _) in &group.struct_def.fields {
         collect_type_ref(ty, self_name, registry, external_imports, &mut refs.type_refs, &mut refs.ext_type_refs);
     }
 
@@ -935,7 +935,7 @@ fn emit_structs(module: &Module, out: &mut String) {
 fn emit_struct(def: &StructDef, out: &mut String) {
     let vis = visibility_prefix(def.visibility);
     let _ = writeln!(out, "{vis}interface {} {{", sanitize_ident(&def.name));
-    for (name, ty) in &def.fields {
+    for (name, ty, _) in &def.fields {
         let _ = writeln!(out, "  {}: {};", sanitize_ident(name), ts_type(ty));
     }
     let _ = writeln!(out, "}}\n");
@@ -1115,7 +1115,7 @@ fn emit_register_class_traits(
 
     // Collect instance traits: fields from struct_def + instance methods/getters/setters
     let mut instance_traits = Vec::new();
-    for (name, ty) in &group.struct_def.fields {
+    for (name, ty, _) in &group.struct_def.fields {
         let type_name = as3_type_name(ty);
         instance_traits.push(format!(
             "{{ name: \"{name}\", kind: \"variable\", type: \"{type_name}\" }}"
@@ -1211,7 +1211,7 @@ fn emit_class(
     let _ = writeln!(out, "  static [QN_KEY] = \"{qualified}\";");
 
     // Fields from struct def.
-    for (name, ty) in &group.struct_def.fields {
+    for (name, ty, _default) in &group.struct_def.fields {
         let _ = writeln!(out, "  {}: {};", sanitize_ident(name), ts_type(ty));
     }
     if !group.struct_def.fields.is_empty() && !group.methods.is_empty() {
@@ -1236,7 +1236,7 @@ fn emit_class(
     let instance_fields = class_meta.instance_field_sets.get(&qualified).unwrap_or(&empty_set);
     let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_map);
     let static_fields: HashSet<String> = group.class_def.static_fields.iter()
-        .map(|(name, _)| name.clone())
+        .map(|(name, _, _)| name.clone())
         .collect();
 
     let suppress_super = extends.is_empty();
@@ -1403,8 +1403,8 @@ mod tests {
                 name: "Point".into(),
                 namespace: Vec::new(),
                 fields: vec![
-                    ("x".into(), Type::Float(64)),
-                    ("y".into(), Type::Float(64)),
+                    ("x".into(), Type::Float(64), None),
+                    ("y".into(), Type::Float(64), None),
                 ],
                 visibility: Visibility::Public,
             });
@@ -1787,7 +1787,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Fighter".into(),
             namespace: vec!["classes".into(), "Scenes".into()],
-            fields: vec![("hp".into(), Type::Int(32))],
+            fields: vec![("hp".into(), Type::Int(32), None)],
             visibility: Visibility::Public,
         });
 
@@ -1979,7 +1979,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Swamp".into(),
             namespace: vec!["classes".into(), "Scenes".into()],
-            fields: vec![("hp".into(), Type::Int(32))],
+            fields: vec![("hp".into(), Type::Int(32), None)],
             visibility: Visibility::Public,
         });
 
@@ -2046,7 +2046,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Swamp".into(),
             namespace: vec!["classes".into(), "Scenes".into()],
-            fields: vec![("boss".into(), Type::Struct("classes::Monster".into()))],
+            fields: vec![("boss".into(), Type::Struct("classes::Monster".into()), None)],
             visibility: Visibility::Public,
         });
 
@@ -2317,7 +2317,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Hero".into(),
             namespace: vec!["classes".into()],
-            fields: vec![("hp".into(), Type::Int(32))],
+            fields: vec![("hp".into(), Type::Int(32), None)],
             visibility: Visibility::Public,
         });
 
@@ -2364,7 +2364,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Base".into(),
             namespace: vec!["classes".into()],
-            fields: vec![("player".into(), Type::Dynamic)],
+            fields: vec![("player".into(), Type::Dynamic, None)],
             visibility: Visibility::Public,
         });
         mb.add_struct(StructDef {
@@ -2461,7 +2461,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Villain".into(),
             namespace: vec!["classes".into()],
-            fields: vec![("power".into(), Type::Int(32))],
+            fields: vec![("power".into(), Type::Int(32), None)],
             visibility: Visibility::Public,
         });
 
@@ -2577,7 +2577,7 @@ mod tests {
         mb.add_struct(StructDef {
             name: "Base".into(),
             namespace: vec!["classes".into()],
-            fields: vec![("temp".into(), Type::Dynamic)],
+            fields: vec![("temp".into(), Type::Dynamic, None)],
             visibility: Visibility::Public,
         });
 
@@ -3181,7 +3181,7 @@ mod tests {
             methods: vec![cinit_id],
             super_class: None,
             visibility: Visibility::Public,
-            static_fields: vec![("debugBuild".into(), Type::Bool)],
+            static_fields: vec![("debugBuild".into(), Type::Bool, None)],
         });
 
         let mut module = mb.build();

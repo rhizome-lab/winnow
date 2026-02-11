@@ -513,7 +513,7 @@ impl fmt::Display for Module {
         for s in &self.structs {
             writeln!(f)?;
             writeln!(f, "struct {} {{", s.name)?;
-            for (field_name, field_ty) in &s.fields {
+            for (field_name, field_ty, _) in &s.fields {
                 write!(f, "    {field_name}: ")?;
                 fmt_type(field_ty, f)?;
                 writeln!(f, ",")?;
@@ -674,8 +674,8 @@ fn choose(v0: bool, v1: i64, v2: i64) -> i64 {
             name: "Point".into(),
             namespace: Vec::new(),
             fields: vec![
-                ("x".into(), Type::Float(64)),
-                ("y".into(), Type::Float(64)),
+                ("x".into(), Type::Float(64), None),
+                ("y".into(), Type::Float(64), None),
             ],
             visibility: Visibility::Public,
         });

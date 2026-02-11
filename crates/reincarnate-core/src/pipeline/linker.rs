@@ -237,7 +237,7 @@ mod tests {
         mb_a.add_struct(StructDef {
             name: "Point".into(),
             namespace: Vec::new(),
-            fields: vec![("x".into(), Type::Float(64)), ("y".into(), Type::Float(64))],
+            fields: vec![("x".into(), Type::Float(64), None), ("y".into(), Type::Float(64), None)],
             visibility: Visibility::Public,
         });
         mb_a.add_global(Global {

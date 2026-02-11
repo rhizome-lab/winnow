@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::PrimaryMap;
 
+use super::value::Constant;
 use super::func::{FuncId, Function, Visibility};
 use super::ty::Type;
 
@@ -27,7 +28,7 @@ pub struct StructDef {
     pub name: String,
     #[serde(default)]
     pub namespace: Vec<String>,
-    pub fields: Vec<(String, Type)>,
+    pub fields: Vec<(String, Type, Option<Constant>)>,
     pub visibility: Visibility,
 }
 
@@ -92,7 +93,7 @@ pub struct ClassDef {
     pub visibility: Visibility,
     /// Static (class-level) fields from Slot/Const traits on the Class object.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub static_fields: Vec<(String, Type)>,
+    pub static_fields: Vec<(String, Type, Option<Constant>)>,
 }
 
 /// A module — the top-level compilation unit.

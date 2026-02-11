@@ -30,7 +30,7 @@ impl ModuleContext {
     fn from_module(module: &Module) -> Self {
         let mut struct_fields = HashMap::new();
         for s in &module.structs {
-            let fields: HashMap<String, Type> = s.fields.iter().cloned().collect();
+            let fields: HashMap<String, Type> = s.fields.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
             struct_fields.insert(s.name.clone(), fields);
         }
 
@@ -69,7 +69,7 @@ impl ModuleContext {
             class_hierarchy.insert(class.name.clone(), super_short);
             if !class.static_fields.is_empty() {
                 let fields: HashMap<String, Type> =
-                    class.static_fields.iter().cloned().collect();
+                    class.static_fields.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
                 static_fields_map.insert(class.name.clone(), fields);
             }
         }
@@ -702,8 +702,8 @@ mod tests {
             name: "Point".into(),
             namespace: Vec::new(),
             fields: vec![
-                ("x".into(), Type::Int(64)),
-                ("y".into(), Type::Int(64)),
+                ("x".into(), Type::Int(64), None),
+                ("y".into(), Type::Int(64), None),
             ],
             visibility: Visibility::Public,
         });

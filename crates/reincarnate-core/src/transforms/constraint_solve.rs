@@ -199,7 +199,7 @@ impl ConstraintModuleContext {
     fn from_module(module: &Module) -> Self {
         let mut struct_fields = HashMap::new();
         for s in &module.structs {
-            let fields: HashMap<String, Type> = s.fields.iter().cloned().collect();
+            let fields: HashMap<String, Type> = s.fields.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
             struct_fields.insert(s.name.clone(), fields);
         }
 
@@ -1061,8 +1061,8 @@ mod tests {
             name: "Point".into(),
             namespace: Vec::new(),
             fields: vec![
-                ("x".into(), Type::Int(64)),
-                ("y".into(), Type::Int(64)),
+                ("x".into(), Type::Int(64), None),
+                ("y".into(), Type::Int(64), None),
             ],
             visibility: Visibility::Public,
         });
