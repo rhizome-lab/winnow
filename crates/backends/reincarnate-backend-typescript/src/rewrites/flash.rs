@@ -129,6 +129,15 @@ fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<
                     object: Box::new(JsExpr::This),
                     field: effective.to_string(),
                 }
+            } else if let Some(ref class_name) = ctx.class_short_name {
+                if ctx.const_instance_fields.contains(effective) {
+                    JsExpr::Field {
+                        object: Box::new(JsExpr::Var(class_name.clone())),
+                        field: effective.to_string(),
+                    }
+                } else {
+                    JsExpr::Var(effective.to_string())
+                }
             } else {
                 JsExpr::Var(effective.to_string())
             }
