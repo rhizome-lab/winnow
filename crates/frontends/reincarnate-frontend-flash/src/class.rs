@@ -44,12 +44,14 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         None
     };
 
-    // Build StructDef from instance slot/const traits (fields).
-    let fields = extract_fields(pool, &instance.traits, class_private_ns.as_deref());
+    // Build StructDef from instance Slot traits (mutable instance fields).
+    // Instance Const traits become static readonly fields on the class.
+    let (instance_fields, const_fields) =
+        extract_instance_fields(pool, &instance.traits, class_private_ns.as_deref());
     let struct_def = StructDef {
         name: class_short_name.clone(),
         namespace: class_ns.clone(),
-        fields,
+        fields: instance_fields,
         visibility: Visibility::Public,
     };
 
@@ -109,8 +111,9 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         functions.push(func);
     }
 
-    // Extract static fields from class-level slot/const traits.
-    let static_fields = extract_fields(pool, &class.traits, class_private_ns.as_deref());
+    // Extract static fields: class-level slot/const traits + promoted instance Const traits.
+    let mut static_fields = extract_fields(pool, &class.traits, class_private_ns.as_deref());
+    static_fields.extend(const_fields);
 
     // Static methods from class traits.
     // AVM2 register 0 is always reserved (global scope for statics), so
@@ -151,6 +154,39 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
         super_class,
         static_fields,
     })
+}
+
+type FieldVec = Vec<(String, Type, Option<Constant>)>;
+
+/// Extract instance traits, splitting Slot (mutable fields) from Const (static readonly).
+///
+/// Returns `(slot_fields, const_fields)` — Slot fields stay on the struct,
+/// Const fields are promoted to `ClassDef.static_fields`.
+fn extract_instance_fields(
+    pool: &ConstantPool,
+    traits: &[Trait],
+    class_private_ns: Option<&str>,
+) -> (FieldVec, FieldVec) {
+    let mut slots = Vec::new();
+    let mut consts = Vec::new();
+    for trait_ in traits {
+        match &trait_.kind {
+            TraitKind::Slot { type_name, value, .. } => {
+                let name = resolve_trait_bare_name(pool, trait_, class_private_ns);
+                let ty = resolve_type(pool, type_name);
+                let default = value.as_ref().and_then(|dv| convert_default_value(pool, dv));
+                slots.push((name, ty, default));
+            }
+            TraitKind::Const { type_name, value, .. } => {
+                let name = resolve_trait_bare_name(pool, trait_, class_private_ns);
+                let ty = resolve_type(pool, type_name);
+                let default = value.as_ref().and_then(|dv| convert_default_value(pool, dv));
+                consts.push((name, ty, default));
+            }
+            _ => {}
+        }
+    }
+    (slots, consts)
 }
 
 /// Extract slot/const trait fields as IR struct fields with optional default values.
