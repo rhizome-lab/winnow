@@ -21,7 +21,7 @@ pub struct FlashRewriteCtx {
     pub class_names: HashMap<String, String>,
     /// Short names of the current class and all its ancestors.
     pub ancestors: HashSet<String>,
-    /// Method short names visible in the class hierarchy.
+    /// Instance method short names visible in the class hierarchy.
     pub method_names: HashSet<String>,
     /// Instance field short names visible in the class hierarchy.
     pub instance_fields: HashSet<String>,
@@ -33,6 +33,8 @@ pub struct FlashRewriteCtx {
     pub is_cinit: bool,
     /// Static field short names declared on the current class.
     pub static_fields: HashSet<String>,
+    /// Static method short name → owning class short name (across hierarchy).
+    pub static_method_owners: HashMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -137,15 +139,48 @@ fn resolve_scope_call(
     rest_args: Vec<JsExpr>,
     ctx: &FlashRewriteCtx,
 ) -> JsExpr {
-    let _ = scope_args; // Resolution is based on method name + hierarchy metadata
-    let use_this = (ctx.has_self && ctx.method_names.contains(method)) || ctx.is_cinit;
-    let callee = if use_this {
-        JsExpr::Field {
-            object: Box::new(JsExpr::This),
-            field: method.to_string(),
+    let effective = method.rsplit("::").next().unwrap_or(method);
+
+    let callee = match resolve_scope_lookup(scope_args, ctx) {
+        ScopeResolution::Ancestor(ref class_name) => {
+            if ctx.is_cinit || ctx.method_names.contains(effective) {
+                // Instance method (or cinit scope) → this.method
+                JsExpr::Field {
+                    object: Box::new(JsExpr::This),
+                    field: effective.to_string(),
+                }
+            } else {
+                // Static method on ancestor class → ClassName.method
+                JsExpr::Field {
+                    object: Box::new(JsExpr::Var(class_name.clone())),
+                    field: effective.to_string(),
+                }
+            }
         }
-    } else {
-        JsExpr::Var(method.to_string())
+        ScopeResolution::ScopeLookup => {
+            // Non-ancestor: try to extract a class name for static dispatch.
+            if let Some(class_name) = class_from_scope_arg(scope_args) {
+                JsExpr::Field {
+                    object: Box::new(JsExpr::Var(class_name)),
+                    field: effective.to_string(),
+                }
+            } else if (ctx.has_self && ctx.method_names.contains(effective))
+                || ctx.is_cinit
+            {
+                JsExpr::Field {
+                    object: Box::new(JsExpr::This),
+                    field: effective.to_string(),
+                }
+            } else if let Some(owner) = ctx.static_method_owners.get(effective) {
+                // Static method found in ancestor hierarchy → OwnerClass.method
+                JsExpr::Field {
+                    object: Box::new(JsExpr::Var(owner.clone())),
+                    field: effective.to_string(),
+                }
+            } else {
+                JsExpr::Var(effective.to_string())
+            }
+        }
     };
     JsExpr::Call {
         callee: Box::new(callee),

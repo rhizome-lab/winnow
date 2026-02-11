@@ -126,6 +126,7 @@ struct ClassMeta {
     ancestor_sets: HashMap<String, HashSet<String>>,
     method_name_sets: HashMap<String, HashSet<String>>,
     instance_field_sets: HashMap<String, HashSet<String>>,
+    static_method_owner_map: HashMap<String, HashMap<String, String>>,
 }
 
 impl ClassMeta {
@@ -134,6 +135,7 @@ impl ClassMeta {
             ancestor_sets: build_ancestor_sets(module),
             method_name_sets: build_method_name_sets(module),
             instance_field_sets: build_instance_field_sets(module),
+            static_method_owner_map: build_static_method_owner_map(module),
         }
     }
 }
@@ -177,8 +179,12 @@ fn build_method_name_sets(module: &Module) -> HashMap<String, HashSet<String>> {
         loop {
             for &fid in &current.methods {
                 if let Some(f) = module.functions.get(fid) {
-                    if let Some(short) = f.name.rsplit("::").next() {
-                        names.insert(short.to_string());
+                    // Only include instance-callable methods (not static).
+                    // Static methods are called as ClassName.method(), not this.method().
+                    if f.method_kind != MethodKind::Static {
+                        if let Some(short) = f.name.rsplit("::").next() {
+                            names.insert(short.to_string());
+                        }
                     }
                 }
             }
@@ -194,6 +200,46 @@ fn build_method_name_sets(module: &Module) -> HashMap<String, HashSet<String>> {
             }
         }
         result.insert(qualified_class_name(class), names);
+    }
+    result
+}
+
+/// Build a mapping from qualified class name → map of static method short names
+/// to the owning class short name, across the full ancestor chain.  Most-derived
+/// class wins when multiple ancestors define the same static method.
+fn build_static_method_owner_map(module: &Module) -> HashMap<String, HashMap<String, String>> {
+    let class_by_short: HashMap<&str, &ClassDef> =
+        module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    let mut result = HashMap::new();
+    for class in &module.classes {
+        let mut owners: HashMap<String, String> = HashMap::new();
+        let mut current = class;
+        loop {
+            for &fid in &current.methods {
+                if let Some(f) = module.functions.get(fid) {
+                    if f.method_kind == MethodKind::Static {
+                        if let Some(short) = f.name.rsplit("::").next() {
+                            // Most-derived wins: don't overwrite if already present.
+                            owners
+                                .entry(short.to_string())
+                                .or_insert_with(|| current.name.clone());
+                        }
+                    }
+                }
+            }
+            match current.super_class {
+                Some(ref sc) => {
+                    let short = sc.rsplit("::").next().unwrap_or(sc);
+                    match class_by_short.get(short) {
+                        Some(parent) => current = parent,
+                        None => break,
+                    }
+                }
+                None => break,
+            }
+        }
+        result.insert(qualified_class_name(class), owners);
     }
     result
 }
@@ -948,6 +994,7 @@ fn emit_function(
         suppress_super: false,
         is_cinit: false,
         static_fields: HashSet::new(),
+        static_method_owners: HashMap::new(),
     };
     let js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     crate::ast_printer::print_function(&js_func, out);
@@ -1142,10 +1189,12 @@ fn emit_class(
         MethodKind::Free => 5,
     });
 
-    let empty = HashSet::new();
-    let ancestors = class_meta.ancestor_sets.get(&qualified).unwrap_or(&empty);
-    let method_names = class_meta.method_name_sets.get(&qualified).unwrap_or(&empty);
-    let instance_fields = class_meta.instance_field_sets.get(&qualified).unwrap_or(&empty);
+    let empty_set = HashSet::new();
+    let empty_map = HashMap::new();
+    let ancestors = class_meta.ancestor_sets.get(&qualified).unwrap_or(&empty_set);
+    let method_names = class_meta.method_name_sets.get(&qualified).unwrap_or(&empty_set);
+    let instance_fields = class_meta.instance_field_sets.get(&qualified).unwrap_or(&empty_set);
+    let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_map);
     let static_fields: HashSet<String> = group.class_def.static_fields.iter()
         .map(|(name, _)| name.clone())
         .collect();
@@ -1155,7 +1204,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, suppress_super, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, suppress_super, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -1172,6 +1221,7 @@ fn emit_class_method(
     method_names: &HashSet<String>,
     instance_fields: &HashSet<String>,
     static_fields: &HashSet<String>,
+    static_method_owners: &HashMap<String, String>,
     suppress_super: bool,
     lowering_config: &LoweringConfig,
     out: &mut String,
@@ -1219,6 +1269,7 @@ fn emit_class_method(
         suppress_super,
         is_cinit,
         static_fields: static_fields.clone(),
+        static_method_owners: static_method_owners.clone(),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     // Hoist super() to top of constructor body (after rewrite produces SuperCall nodes).
