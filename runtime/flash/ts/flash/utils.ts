@@ -234,6 +234,54 @@ export function describeType(value: any): any {
 }
 
 // ---------------------------------------------------------------------------
+// IDataInput / IDataOutput / IExternalizable — AS3 serialization interfaces
+// ---------------------------------------------------------------------------
+
+/** AS3 `flash.utils.IDataInput` — readable binary stream interface. */
+export abstract class IDataInput {
+  abstract readBoolean(): boolean;
+  abstract readByte(): number;
+  abstract readDouble(): number;
+  abstract readFloat(): number;
+  abstract readInt(): number;
+  abstract readMultiByte(length: number, charSet: string): string;
+  abstract readObject(): any;
+  abstract readShort(): number;
+  abstract readUTF(): string;
+  abstract readUTFBytes(length: number): string;
+  abstract readUnsignedByte(): number;
+  abstract readUnsignedInt(): number;
+  abstract readUnsignedShort(): number;
+  abstract get bytesAvailable(): number;
+  abstract endian: string;
+  abstract objectEncoding: number;
+}
+
+/** AS3 `flash.utils.IDataOutput` — writable binary stream interface. */
+export abstract class IDataOutput {
+  abstract writeBoolean(value: boolean): void;
+  abstract writeByte(value: number): void;
+  abstract writeBytes(bytes: any, offset?: number, length?: number): void;
+  abstract writeDouble(value: number): void;
+  abstract writeFloat(value: number): void;
+  abstract writeInt(value: number): void;
+  abstract writeMultiByte(value: string, charSet: string): void;
+  abstract writeObject(object: any): void;
+  abstract writeShort(value: number): void;
+  abstract writeUTF(value: string): void;
+  abstract writeUTFBytes(value: string): void;
+  abstract writeUnsignedInt(value: number): void;
+  abstract endian: string;
+  abstract objectEncoding: number;
+}
+
+/** AS3 `flash.utils.IExternalizable` — custom AMF serialization interface. */
+export abstract class IExternalizable {
+  abstract readExternal(input: IDataInput): void;
+  abstract writeExternal(output: IDataOutput): void;
+}
+
+// ---------------------------------------------------------------------------
 // ByteArray
 // ---------------------------------------------------------------------------
 

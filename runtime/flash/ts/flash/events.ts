@@ -4,6 +4,19 @@
  */
 
 // ---------------------------------------------------------------------------
+// IEventDispatcher
+// ---------------------------------------------------------------------------
+
+/** AS3 `flash.events.IEventDispatcher` — event-dispatching capability. */
+export abstract class IEventDispatcher {
+  abstract addEventListener(type: string, listener: (event: Event) => void, useCapture?: boolean, priority?: number, useWeakReference?: boolean): void;
+  abstract dispatchEvent(event: Event): boolean;
+  abstract hasEventListener(type: string): boolean;
+  abstract removeEventListener(type: string, listener: (event: Event) => void, useCapture?: boolean): void;
+  abstract willTrigger(type: string): boolean;
+}
+
+// ---------------------------------------------------------------------------
 // EventDispatcher
 // ---------------------------------------------------------------------------
 

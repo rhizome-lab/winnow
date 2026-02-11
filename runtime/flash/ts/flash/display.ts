@@ -8,6 +8,25 @@ import { EventDispatcher, Event, ProgressEvent, IOErrorEvent } from "./events";
 import { fetchResource, hasFetch, loadImageBitmap } from "./platform";
 
 // ---------------------------------------------------------------------------
+// AS3 display interfaces
+// ---------------------------------------------------------------------------
+
+/** AS3 `flash.display.IBitmapDrawable` — can be drawn to a BitmapData. */
+export abstract class IBitmapDrawable {}
+
+/** AS3 `flash.display.IGraphicsData` — parameter for Graphics.drawGraphicsData(). */
+export abstract class IGraphicsData {}
+
+/** AS3 `flash.display.IGraphicsFill` — fill specification for Graphics methods. */
+export abstract class IGraphicsFill {}
+
+/** AS3 `flash.display.IGraphicsPath` — path specification for Graphics methods. */
+export abstract class IGraphicsPath {}
+
+/** AS3 `flash.display.IGraphicsStroke` — stroke specification for Graphics methods. */
+export abstract class IGraphicsStroke {}
+
+// ---------------------------------------------------------------------------
 // Graphics
 // ---------------------------------------------------------------------------
 

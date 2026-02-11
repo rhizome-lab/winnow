@@ -488,7 +488,18 @@ pub fn translate_abc_to_module(
 // ---------------------------------------------------------------------------
 
 /// Flash package names that have runtime module implementations.
-const FLASH_PACKAGES: &[&str] = &["display", "events", "geom", "net", "text", "utils"];
+const FLASH_PACKAGES: &[&str] = &[
+    "accessibility",
+    "desktop",
+    "display",
+    "events",
+    "geom",
+    "net",
+    "security",
+    "text",
+    "text.ime",
+    "utils",
+];
 
 /// Resolve a Flash qualified name to an `ExternalImport`, if it maps to a
 /// runtime module we implement.
@@ -506,7 +517,7 @@ fn resolve_flash_external_import(name: &str) -> Option<ExternalImport> {
         }
         return Some(ExternalImport {
             short_name: short.to_string(),
-            module_path: format!("flash/{pkg}"),
+            module_path: format!("flash/{}", pkg.replace('.', "/")),
         });
     }
     // Special runtime values (not namespaced in IR).

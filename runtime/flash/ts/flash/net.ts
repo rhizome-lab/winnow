@@ -14,6 +14,20 @@ import {
 } from "./platform";
 
 // ---------------------------------------------------------------------------
+// AS3 net interfaces
+// ---------------------------------------------------------------------------
+
+/** AS3 `flash.net.IDynamicPropertyOutput` — receives dynamic property key/value pairs during serialization. */
+export abstract class IDynamicPropertyOutput {
+  abstract writeDynamicProperty(name: string, value: any): void;
+}
+
+/** AS3 `flash.net.IDynamicPropertyWriter` — controls serialization of dynamic properties. */
+export abstract class IDynamicPropertyWriter {
+  abstract writeDynamicProperties(obj: any, output: IDynamicPropertyOutput): void;
+}
+
+// ---------------------------------------------------------------------------
 // URLRequest
 // ---------------------------------------------------------------------------
 
