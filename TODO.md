@@ -517,13 +517,21 @@ risks that need careful analysis.
 
 - [ ] **Redundant type casts** — Eliminate `as number` etc. when the expression
   already has the target type. Pure type-level, no runtime effect.
-- [ ] **Primitive coercion opcodes** — AVM2 `CoerceI`/`CoerceD`/`ConvertI`/
-  `ConvertD` etc. are runtime coercions (e.g. string→number), but the frontend
-  emits `Cast` which becomes `x as number` (a TS type assertion, no-op at
-  runtime). When the source type differs from the target, this silently drops
-  the coercion. Fix: emit `Number(x)`, `int(x)`, `String(x)` for cross-type
-  coerce/convert opcodes instead of Cast. Most in-practice casts are same-type
-  (eliminated by redundant cast pass) but cross-type cases are incorrect.
+- [ ] **Separate AsType from Coerce/Convert in IR** — The frontend maps both
+  AVM2 `AsType` (AS3 `as` operator: type-check-or-null) and `Coerce`/`Convert`
+  opcodes (actual runtime coercion: string→number, etc.) to the same IR
+  `Op::Cast`. These have completely different runtime semantics:
+  - **AsType** (`x as Foo`): returns x if `x is Foo`, null otherwise. For
+    classes/interfaces this now correctly emits `asType(x, Foo)`. For primitives
+    it still emits a TS type assertion (`x as number`), which is a no-op — the
+    null-on-failure semantics are lost.
+  - **Coerce/Convert** (`CoerceI`, `CoerceD`, `ConvertS`, etc.): actual runtime
+    coercion. Should emit `Number(x)`, `int(x)`, `String(x)`, `Boolean(x)`.
+    Currently emits `x as number` (TS assertion, no-op at runtime), silently
+    dropping the coercion when source and target types differ.
+  Fix: either add a flag to `Op::Cast` distinguishing the two semantics, or
+  introduce a separate `Op::Coerce` IR op. Then the backend can emit `asType()`
+  for AsType and coercion calls for Coerce/Convert.
 - [ ] **Demote `asType()` to compile-time `as T`** — When type inference can
   prove a value is always the target type, the runtime `asType(x, Foo)` call
   is unnecessary overhead. Replace with a TS type assertion (`x as Foo`) in
