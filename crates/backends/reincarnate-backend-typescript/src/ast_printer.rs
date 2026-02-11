@@ -136,9 +136,10 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
             let name_str = sanitize_ident(name);
             match (ty, init) {
                 (Some(ty), Some(init)) => {
-                    // Cast to the same type → use type annotation, strip cast.
+                    // Cast to the same type: for primitives, strip cast and use
+                    // type annotation; for struct/enum, keep asType() call.
                     if let JsExpr::Cast { expr, ty: cast_ty } = init {
-                        if cast_ty == ty {
+                        if cast_ty == ty && !matches!(ty, Type::Struct(_) | Type::Enum(_)) {
                             let _ = writeln!(
                                 out,
                                 "{indent}{kw} {name_str}: {} = {};",
@@ -159,14 +160,24 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
                     let _ = writeln!(out, "{indent}{kw} {name_str}: {};", ts_type(ty));
                 }
                 (None, Some(init)) => {
-                    // Cast → use type annotation instead of `as`.
+                    // Cast → for primitives, strip to type annotation + inner expr.
+                    // For struct/enum, keep asType() call with type annotation.
                     if let JsExpr::Cast { expr, ty } = init {
-                        let _ = writeln!(
-                            out,
-                            "{indent}{kw} {name_str}: {} = {};",
-                            ts_type(ty),
-                            print_expr(expr),
-                        );
+                        if matches!(ty, Type::Struct(_) | Type::Enum(_)) {
+                            let _ = writeln!(
+                                out,
+                                "{indent}{kw} {name_str}: {} = {};",
+                                ts_type(ty),
+                                print_expr(init),
+                            );
+                        } else {
+                            let _ = writeln!(
+                                out,
+                                "{indent}{kw} {name_str}: {} = {};",
+                                ts_type(ty),
+                                print_expr(expr),
+                            );
+                        }
                     } else {
                         let _ = writeln!(
                             out,
@@ -415,7 +426,15 @@ fn print_expr(expr: &JsExpr) -> String {
         }
 
         JsExpr::Cast { expr: inner, ty } => {
-            format!("{} as {}", print_expr_operand(inner), ts_type(ty))
+            match ty {
+                // Struct/Enum casts use asType() for runtime null-on-failure semantics.
+                Type::Struct(name) | Type::Enum(name) => {
+                    let short = name.rsplit("::").next().unwrap_or(name);
+                    format!("asType({}, {})", print_expr(inner), sanitize_ident(short))
+                }
+                // Primitive casts stay as TS type assertions.
+                _ => format!("{} as {}", print_expr_operand(inner), ts_type(ty)),
+            }
         }
 
         JsExpr::TypeCheck { expr: inner, ty } => print_type_check(inner, ty),
@@ -555,19 +574,20 @@ fn print_expr_operand(expr: &JsExpr) -> String {
 
 /// Whether an expression needs parentheses when used as an operand.
 fn needs_parens(expr: &JsExpr) -> bool {
-    matches!(
-        expr,
+    match expr {
+        // Struct/Enum casts emit asType() — function call, no parens needed.
+        JsExpr::Cast { ty, .. } => !matches!(ty, Type::Struct(_) | Type::Enum(_)),
         JsExpr::Binary { .. }
             | JsExpr::Cmp { .. }
             | JsExpr::Ternary { .. }
             | JsExpr::LogicalOr { .. }
             | JsExpr::LogicalAnd { .. }
-            | JsExpr::Cast { .. }
             | JsExpr::Unary { .. }
             | JsExpr::Not(_)
             | JsExpr::In { .. }
-            | JsExpr::SuperSet { .. }
-    )
+            | JsExpr::SuperSet { .. } => true,
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -584,7 +604,8 @@ fn print_type_check(expr: &JsExpr, ty: &Type) -> String {
         Type::String => format!("typeof {operand} === \"string\""),
         Type::Struct(name) | Type::Enum(name) => {
             let short = name.rsplit("::").next().unwrap_or(name);
-            format!("{operand} instanceof {}", sanitize_ident(short))
+            // Use isType() instead of instanceof — works for both classes and interfaces.
+            format!("isType({}, {})", print_expr(expr), sanitize_ident(short))
         }
         Type::Union(types) => {
             let checks: Vec<_> = types
