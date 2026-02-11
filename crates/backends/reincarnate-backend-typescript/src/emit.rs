@@ -3384,4 +3384,165 @@ mod tests {
         );
     }
 
+    #[test]
+    fn emit_interface_class() {
+        let mut mb = ModuleBuilder::new("test");
+
+        mb.add_struct(StructDef {
+            name: "IEventListener".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+
+        // Interface constructor (will be skipped).
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("IEventListener::new", sig, Visibility::Public);
+        fb.set_class(Vec::new(), "IEventListener".into(), MethodKind::Constructor);
+        fb.ret(None);
+        let ctor_id = mb.add_function(fb.build());
+
+        mb.add_class(ClassDef {
+            name: "IEventListener".into(),
+            namespace: Vec::new(),
+            struct_index: 0,
+            methods: vec![ctor_id],
+            super_class: None,
+            visibility: Visibility::Public,
+            static_fields: vec![],
+            is_interface: true,
+            interfaces: vec![],
+        });
+
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+
+        assert!(
+            out.contains("export abstract class IEventListener {"),
+            "Interface should emit abstract class:\n{out}"
+        );
+        assert!(
+            !out.contains("constructor("),
+            "Interface should not have constructor:\n{out}"
+        );
+        assert!(
+            !out.contains("registerClassTraits("),
+            "Interface should not have registerClassTraits:\n{out}"
+        );
+        assert!(
+            out.contains("registerClass(IEventListener)"),
+            "Interface should still have registerClass:\n{out}"
+        );
+    }
+
+    #[test]
+    fn emit_class_with_interfaces() {
+        let mut mb = ModuleBuilder::new("test");
+
+        // Interface.
+        mb.add_struct(StructDef {
+            name: "IClickable".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("IClickable::new", sig.clone(), Visibility::Public);
+        fb.set_class(Vec::new(), "IClickable".into(), MethodKind::Constructor);
+        fb.ret(None);
+        let iface_ctor = mb.add_function(fb.build());
+        mb.add_class(ClassDef {
+            name: "IClickable".into(),
+            namespace: Vec::new(),
+            struct_index: 0,
+            methods: vec![iface_ctor],
+            super_class: None,
+            visibility: Visibility::Public,
+            static_fields: vec![],
+            is_interface: true,
+            interfaces: vec![],
+        });
+
+        // Implementing class.
+        mb.add_struct(StructDef {
+            name: "Button".into(),
+            namespace: Vec::new(),
+            fields: vec![],
+            visibility: Visibility::Public,
+        });
+        let mut fb = FunctionBuilder::new("Button::new", sig, Visibility::Public);
+        fb.set_class(Vec::new(), "Button".into(), MethodKind::Constructor);
+        fb.ret(None);
+        let button_ctor = mb.add_function(fb.build());
+        mb.add_class(ClassDef {
+            name: "Button".into(),
+            namespace: Vec::new(),
+            struct_index: 1,
+            methods: vec![button_ctor],
+            super_class: None,
+            visibility: Visibility::Public,
+            static_fields: vec![],
+            is_interface: false,
+            interfaces: vec!["IClickable".into()],
+        });
+
+        let mut module = mb.build();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+
+        assert!(
+            out.contains("registerInterface(Button, IClickable)"),
+            "Implementing class should have registerInterface:\n{out}"
+        );
+    }
+
+    #[test]
+    fn type_check_struct_uses_is_type() {
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Bool, ..Default::default() };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let check = fb.type_check(x, Type::Struct("Monster".into()));
+            fb.ret(Some(check));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("isType(v0, Monster)"),
+            "TypeCheck with Struct should use isType():\n{out}"
+        );
+        assert!(
+            !out.contains("instanceof"),
+            "Should not use instanceof:\n{out}"
+        );
+    }
+
+    #[test]
+    fn cast_struct_uses_as_type() {
+        let out = build_and_emit(|mb| {
+            let sig = FunctionSig {
+                params: vec![Type::Dynamic],
+                return_ty: Type::Struct("Monster".into()), ..Default::default() };
+            let mut fb = FunctionBuilder::new("test_fn", sig, Visibility::Public);
+            let x = fb.param(0);
+            let casted = fb.cast(x, Type::Struct("Monster".into()));
+            fb.ret(Some(casted));
+            mb.add_function(fb.build());
+        });
+
+        assert!(
+            out.contains("asType(v0, Monster)"),
+            "Cast with Struct should use asType():\n{out}"
+        );
+        assert!(
+            !out.contains("as Monster"),
+            "Should not use 'as Monster':\n{out}"
+        );
+    }
+
 }
