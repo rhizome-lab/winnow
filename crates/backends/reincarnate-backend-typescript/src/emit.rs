@@ -361,7 +361,10 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             );
             out.push('\n');
         }
-        emit_intra_imports(group, module, &segments, &registry, depth, &mut out);
+        let qualified = qualified_class_name(&group.class_def);
+        let empty_smo = HashMap::new();
+        let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
+        emit_intra_imports(group, module, &segments, &registry, static_method_owners, depth, &mut out);
         emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -386,7 +389,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             let func = &module.functions[fid];
             collect_type_refs_from_function(
                 func, "", &registry, &module.external_imports,
-                &mut refs,
+                &HashMap::new(), &mut refs,
             );
         }
         emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, "..", &mut out);
@@ -617,6 +620,7 @@ fn collect_class_references(
     module: &Module,
     registry: &ClassRegistry,
     external_imports: &BTreeMap<String, ExternalImport>,
+    static_method_owners: &HashMap<String, String>,
 ) -> RefSets {
     let self_name = &group.class_def.name;
     let mut refs = RefSets::default();
@@ -641,7 +645,7 @@ fn collect_class_references(
     // Scan all method bodies for type references.
     for &fid in &group.methods {
         let func = &module.functions[fid];
-        collect_type_refs_from_function(func, self_name, registry, external_imports, &mut refs);
+        collect_type_refs_from_function(func, self_name, registry, external_imports, static_method_owners, &mut refs);
     }
 
     refs
@@ -653,13 +657,29 @@ fn collect_type_refs_from_function(
     self_name: &str,
     registry: &ClassRegistry,
     external_imports: &BTreeMap<String, ExternalImport>,
+    static_method_owners: &HashMap<String, String>,
     refs: &mut RefSets,
 ) {
+    use reincarnate_core::ir::Constant;
+
     // Return type and param types — type-only.
     collect_type_ref(&func.sig.return_ty, self_name, registry, external_imports, &mut refs.type_refs, &mut refs.ext_type_refs);
     for ty in &func.sig.params {
         collect_type_ref(ty, self_name, registry, external_imports, &mut refs.type_refs, &mut refs.ext_type_refs);
     }
+
+    // Build ValueId → &str map for const strings (to resolve SystemCall args).
+    let const_strings: HashMap<_, _> = func
+        .insts
+        .iter()
+        .filter_map(|(_id, inst)| {
+            if let Op::Const(Constant::String(s)) = &inst.op {
+                inst.result.map(|v| (v, s.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Instructions.
     for (_inst_id, inst) in func.insts.iter() {
@@ -692,6 +712,25 @@ fn collect_type_refs_from_function(
                             eprintln!(
                                 "warning: unmapped external reference: {field}"
                             );
+                        }
+                    }
+                }
+            }
+            // Scope-lookup SystemCalls may resolve to static methods on ancestor
+            // classes, producing ClassName.method() references in the output.
+            // Add the owning class as a value import.
+            Op::SystemCall { system, method, args }
+                if system == "Flash.Scope"
+                    && (method == "findPropStrict" || method == "findProperty") =>
+            {
+                if let Some(&scope_str) = args.first().and_then(|v| const_strings.get(v)) {
+                    // Extract the bare method name from the scope arg.
+                    let bare = scope_str.rsplit("::").next().unwrap_or(scope_str);
+                    if let Some(owner) = static_method_owners.get(bare) {
+                        if owner != self_name {
+                            if let Some(entry) = registry.lookup(owner) {
+                                refs.value_refs.insert(entry.short_name.clone());
+                            }
                         }
                     }
                 }
@@ -826,10 +865,11 @@ fn emit_intra_imports(
     module: &Module,
     source_segments: &[String],
     registry: &ClassRegistry,
+    static_method_owners: &HashMap<String, String>,
     depth: usize,
     out: &mut String,
 ) {
-    let refs = collect_class_references(group, module, registry, &module.external_imports);
+    let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners);
     let has_intra = !refs.value_refs.is_empty() || !refs.type_refs.is_empty();
     let has_ext = !refs.ext_value_refs.is_empty() || !refs.ext_type_refs.is_empty();
     if !has_intra && !has_ext {
