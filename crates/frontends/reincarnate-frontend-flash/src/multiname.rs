@@ -245,6 +245,28 @@ pub fn resolve_multiname_structured(
     }
 }
 
+/// Convert a resolved class/type name string to an IR `Type`.
+///
+/// This is the core name→type mapping shared by `resolve_type` (multiname index)
+/// and runtime type resolution (e.g. `IsTypeLate` where the type comes from the stack).
+pub fn type_from_name(name: &str) -> reincarnate_core::ir::Type {
+    use reincarnate_core::ir::Type;
+    match name {
+        "int" => Type::Int(32),
+        "uint" => Type::UInt(32),
+        "Number" => Type::Float(64),
+        "Boolean" => Type::Bool,
+        "String" => Type::String,
+        "void" => Type::Void,
+        "*" | "Object" => Type::Dynamic,
+        "Array" => Type::Array(Box::new(Type::Dynamic)),
+        "flash.utils::Dictionary" | "Dictionary" => {
+            Type::Map(Box::new(Type::Dynamic), Box::new(Type::Dynamic))
+        }
+        _ => Type::Struct(name.to_string()),
+    }
+}
+
 /// Resolve a multiname index to an IR `Type`.
 pub fn resolve_type(pool: &ConstantPool, index: &Index<Multiname>) -> reincarnate_core::ir::Type {
     use reincarnate_core::ir::Type;
@@ -271,20 +293,7 @@ pub fn resolve_type(pool: &ConstantPool, index: &Index<Multiname>) -> reincarnat
     }
 
     let name = resolve_multiname_index(pool, index);
-    match name.as_str() {
-        "int" => Type::Int(32),
-        "uint" => Type::UInt(32),
-        "Number" => Type::Float(64),
-        "Boolean" => Type::Bool,
-        "String" => Type::String,
-        "void" => Type::Void,
-        "*" | "Object" => Type::Dynamic,
-        "Array" => Type::Array(Box::new(Type::Dynamic)),
-        "flash.utils::Dictionary" | "Dictionary" => {
-            Type::Map(Box::new(Type::Dynamic), Box::new(Type::Dynamic))
-        }
-        _ => Type::Struct(name),
-    }
+    type_from_name(&name)
 }
 
 #[cfg(test)]

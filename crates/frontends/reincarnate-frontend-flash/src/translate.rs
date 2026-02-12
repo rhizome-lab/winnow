@@ -16,7 +16,7 @@ use crate::abc::{
     offset_to_index_map, parse_bytecode, resolve_branch_target, resolve_switch_target, LocatedOp,
 };
 use crate::class::convert_default_value;
-use crate::multiname::{classify_multiname, pool_string, resolve_multiname_index, resolve_type, MultinameKind};
+use crate::multiname::{classify_multiname, pool_string, resolve_multiname_index, resolve_type, type_from_name, MultinameKind};
 use crate::scope::ScopeStack;
 
 /// Translate a single method body into an IR function.
@@ -116,6 +116,11 @@ pub fn translate_method_body(
     // Track block params we've already created for merge points (op_idx → Vec<ValueId>).
     let mut block_param_values: HashMap<usize, Vec<ValueId>> = HashMap::new();
 
+    // Track ValueIds that are known to represent class/type references (from GetLex,
+    // FindPropStrict). Used by IsTypeLate/AsTypeLate/InstanceOf to resolve the runtime
+    // type argument instead of falling back to Dynamic.
+    let mut class_value_hints: HashMap<ValueId, String> = HashMap::new();
+
     // For exception handler entry blocks, record the param values.
     for &start in &exception_entries {
         if let Some(&block) = block_map.get(&start) {
@@ -180,6 +185,7 @@ pub fn translate_method_body(
             num_params,
             func_name,
             inner_functions,
+            &mut class_value_hints,
         );
     }
 
@@ -549,6 +555,7 @@ fn translate_op(
     num_params: usize,
     func_name: &str,
     inner_functions: &mut Vec<Function>,
+    class_value_hints: &mut HashMap<ValueId, String>,
 ) {
     let pool = &abc.constant_pool;
     let loc = &ops[op_idx];
@@ -945,9 +952,12 @@ fn translate_op(
             }
         }
         Op::IsTypeLate => {
-            if let (Some(_type_val), Some(a)) = (stack.pop(), stack.pop()) {
-                // Runtime type check — approximate as Dynamic type check.
-                let v = fb.type_check(a, Type::Dynamic);
+            if let (Some(type_val), Some(a)) = (stack.pop(), stack.pop()) {
+                let ty = class_value_hints
+                    .get(&type_val)
+                    .map(|name| type_from_name(name))
+                    .unwrap_or(Type::Dynamic);
+                let v = fb.type_check(a, ty);
                 stack.push(v);
             }
         }
@@ -959,14 +969,22 @@ fn translate_op(
             }
         }
         Op::AsTypeLate => {
-            if let (Some(_type_val), Some(a)) = (stack.pop(), stack.pop()) {
-                let v = fb.cast(a, Type::Dynamic);
+            if let (Some(type_val), Some(a)) = (stack.pop(), stack.pop()) {
+                let ty = class_value_hints
+                    .get(&type_val)
+                    .map(|name| type_from_name(name))
+                    .unwrap_or(Type::Dynamic);
+                let v = fb.cast(a, ty);
                 stack.push(v);
             }
         }
         Op::InstanceOf => {
-            if let (Some(_type_val), Some(a)) = (stack.pop(), stack.pop()) {
-                let v = fb.type_check(a, Type::Dynamic);
+            if let (Some(type_val), Some(a)) = (stack.pop(), stack.pop()) {
+                let ty = class_value_hints
+                    .get(&type_val)
+                    .map(|name| type_from_name(name))
+                    .unwrap_or(Type::Dynamic);
+                let v = fb.type_check(a, ty);
                 stack.push(v);
             }
         }
@@ -1141,6 +1159,7 @@ fn translate_op(
                 Type::Dynamic,
             );
             let result = fb.get_field(v, &name, Type::Dynamic);
+            class_value_hints.insert(result, name);
             stack.push(result);
         }
 
@@ -1164,7 +1183,7 @@ fn translate_op(
         Op::FindPropStrict { index } => {
             let prop = resolve_property(pool, index, stack);
             let name_val = match prop {
-                PropertyAccess::Named(name) => fb.const_string(&name),
+                PropertyAccess::Named(ref name) => fb.const_string(name),
                 PropertyAccess::Indexed(idx) => idx,
             };
             let v = fb.system_call(
@@ -1173,6 +1192,9 @@ fn translate_op(
                 &[name_val],
                 Type::Dynamic,
             );
+            if let PropertyAccess::Named(name) = prop {
+                class_value_hints.insert(v, name);
+            }
             stack.push(v);
         }
         Op::FindDef { index } => {
