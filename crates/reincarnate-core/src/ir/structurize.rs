@@ -1479,8 +1479,12 @@ impl<'a> Structurizer<'a> {
     /// that must execute before the loop exits. This method follows a linear
     /// chain of blocks from `target`, emitting their instructions before Break.
     ///
-    /// Safety: only includes blocks where all predecessors are in the loop body
-    /// (prevents stealing blocks that are also reachable from outside the loop).
+    /// Safety: The first block's predecessors must all be in the loop body
+    /// (it's exclusively reachable from the break path). Subsequent blocks'
+    /// predecessors must all be in the chain itself — if any predecessor is
+    /// in the loop body but not the chain, it means the block is also the
+    /// post-loop continuation (reachable from the normal loop exit) and must
+    /// not be consumed here.
     fn loop_exit_shape(
         &mut self,
         target: BlockId,
@@ -1488,20 +1492,29 @@ impl<'a> Structurizer<'a> {
     ) -> Shape {
         // Collect a linear chain of blocks starting from target that:
         // 1. Have non-terminator instructions (worth emitting)
-        // 2. All predecessors are in the loop body or in our chain
+        // 2. Are exclusively reachable from the break path (see safety above)
         // 3. End with an unconditional Br (linear chain, not a branch)
         let mut chain: Vec<BlockId> = Vec::new();
         let mut chain_set: HashSet<BlockId> = HashSet::new();
         let mut current = target;
 
         loop {
-            // Safety: all predecessors must come from the loop body or
-            // blocks we've already claimed in this chain.
+            // Safety: check that this block is exclusively reachable from
+            // our break path and not also from the normal loop exit.
             if let Some(preds) = self.cfg.preds.get(&current) {
-                let all_from_loop_or_chain = preds.iter().all(|p| {
-                    loop_body.contains(p) || chain_set.contains(p)
-                });
-                if !all_from_loop_or_chain {
+                let safe = if chain.is_empty() {
+                    // First block: all predecessors must be in the loop body.
+                    // This ensures the block is only reachable from the break
+                    // path, not from outside the loop.
+                    preds.iter().all(|p| loop_body.contains(p))
+                } else {
+                    // Subsequent blocks: all predecessors must be in our chain.
+                    // If any predecessor is in the loop body (but not the chain),
+                    // this block is the post-loop merge point and must not be
+                    // consumed here (structurize_loop will handle it).
+                    preds.iter().all(|p| chain_set.contains(p))
+                };
+                if !safe {
                     break;
                 }
             }
