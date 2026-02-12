@@ -191,7 +191,11 @@ fn validate_member_accesses(
         let has_method = class_meta
             .method_name_sets
             .get(qualified)
-            .is_some_and(|m| m.contains(bare));
+            .is_some_and(|m| {
+                m.contains(bare)
+                    || m.contains(&format!("get_{bare}"))
+                    || m.contains(&format!("set_{bare}"))
+            });
         let has_static_field = class_meta
             .static_field_owner_map
             .get(qualified)
