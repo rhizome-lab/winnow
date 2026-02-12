@@ -1,8 +1,10 @@
 //! AVM2 class/instance → IR StructDef + method functions.
 
+use std::collections::HashSet;
+
 use reincarnate_core::ir::{
-    ClassDef, Constant, EntryPoint, ExternalImport, Function, FunctionSig, MethodKind, Module,
-    ModuleBuilder, Op, StructDef, Type, Visibility,
+    ClassDef, Constant, EntryPoint, ExternalImport, Function, FunctionSig, Global, MethodKind,
+    Module, ModuleBuilder, Op, StructDef, Type, Visibility,
 };
 use swf::avm2::types::{AbcFile, ConstantPool, DefaultValue, Index, MethodFlags, Trait, TraitKind};
 
@@ -472,6 +474,58 @@ pub fn translate_abc_to_module(
             is_interface: info.is_interface,
             interfaces: info.interfaces,
         });
+    }
+
+    // Extract package-level globals from script traits.
+    // Script Class traits duplicate class definitions — skip those.
+    let class_names: HashSet<String> = (0..abc.instances.len())
+        .map(|i| resolve_multiname_index(&abc.constant_pool, &abc.instances[i].name))
+        .collect();
+
+    for script in &abc.scripts {
+        for trait_ in &script.traits {
+            match &trait_.kind {
+                TraitKind::Slot {
+                    type_name, value, ..
+                } => {
+                    let name = resolve_trait_bare_name(&abc.constant_pool, trait_, None);
+                    if class_names.contains(&name) {
+                        continue;
+                    }
+                    let ty = resolve_type(&abc.constant_pool, type_name);
+                    let default = value
+                        .as_ref()
+                        .and_then(|dv| convert_default_value(&abc.constant_pool, dv));
+                    let _ = default; // Global decl only — default assigned in script init
+                    mb.add_global(Global {
+                        name,
+                        ty,
+                        visibility: Visibility::Public,
+                        mutable: true,
+                    });
+                }
+                TraitKind::Const {
+                    type_name, value, ..
+                } => {
+                    let name = resolve_trait_bare_name(&abc.constant_pool, trait_, None);
+                    if class_names.contains(&name) {
+                        continue;
+                    }
+                    let ty = resolve_type(&abc.constant_pool, type_name);
+                    let default = value
+                        .as_ref()
+                        .and_then(|dv| convert_default_value(&abc.constant_pool, dv));
+                    let _ = default;
+                    mb.add_global(Global {
+                        name,
+                        ty,
+                        visibility: Visibility::Public,
+                        mutable: false,
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 
     if let Some(name) = document_class {
