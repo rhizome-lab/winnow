@@ -204,20 +204,28 @@ fn validate_member_accesses(
             _ => continue,
         };
         let short = type_name.rsplit("::").next().unwrap_or(type_name);
-        let qualified = match short_to_qualified.get(short) {
-            Some(qn) => qn.as_str(),
-            None => {
-                // Pure-external type — validate against type_defs.
-                if type_defs.contains_key(short) {
-                    let ext_members = collect_external_members(short, type_defs);
-                    if !ext_members.contains(bare) {
-                        eprintln!(
-                            "warning: {short} has no member '{bare}' (in {})",
-                            func.name
-                        );
+        // Try direct qualified-name lookup first (handles duplicate short names).
+        // Fall back to short-name lookup.
+        let qualified = if class_meta.instance_field_sets.contains_key(type_name)
+            || class_meta.method_name_sets.contains_key(type_name)
+        {
+            type_name
+        } else {
+            match short_to_qualified.get(short) {
+                Some(qn) => qn.as_str(),
+                None => {
+                    // Pure-external type — validate against type_defs.
+                    if type_defs.contains_key(short) {
+                        let ext_members = collect_external_members(short, type_defs);
+                        if !ext_members.contains(bare) {
+                            eprintln!(
+                                "warning: {short} has no member '{bare}' (in {})",
+                                func.name
+                            );
+                        }
                     }
+                    continue;
                 }
-                continue;
             }
         };
         let has_instance_field = class_meta
@@ -249,6 +257,22 @@ fn validate_member_accesses(
     }
 }
 
+/// Resolve a super_class string to a ClassDef, trying qualified name first
+/// (handles duplicate short names) then falling back to short-name lookup.
+fn resolve_parent<'a>(
+    sc: &str,
+    class_by_qualified: &HashMap<String, &'a ClassDef>,
+    class_by_short: &HashMap<&str, &'a ClassDef>,
+) -> Option<&'a ClassDef> {
+    // Try qualified first (e.g. "Items.Armors::GooArmor").
+    if let Some(parent) = class_by_qualified.get(sc) {
+        return Some(parent);
+    }
+    // Fall back to short name.
+    let short = sc.rsplit("::").next().unwrap_or(sc);
+    class_by_short.get(short).copied()
+}
+
 /// Build a map from qualified class name to the set of ancestor short names.
 ///
 /// For each class, the set includes the class's own short name and the short
@@ -256,6 +280,8 @@ fn validate_member_accesses(
 fn build_ancestor_sets(module: &Module, type_defs: &BTreeMap<String, ExternalTypeDef>) -> HashMap<String, HashSet<String>> {
     let class_by_short: HashMap<&str, &ClassDef> =
         module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
 
     let mut result = HashMap::new();
     for class in &module.classes {
@@ -266,7 +292,7 @@ fn build_ancestor_sets(module: &Module, type_defs: &BTreeMap<String, ExternalTyp
         while let Some(ref sc) = current.super_class {
             let short = sc.rsplit("::").next().unwrap_or(sc);
             ancestors.insert(short.to_string());
-            match class_by_short.get(short) {
+            match resolve_parent(sc, &class_by_qualified, &class_by_short) {
                 Some(parent) => current = parent,
                 None => {
                     external_start = Some(short);
@@ -296,6 +322,8 @@ fn build_ancestor_sets(module: &Module, type_defs: &BTreeMap<String, ExternalTyp
 fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, ExternalTypeDef>) -> HashMap<String, HashSet<String>> {
     let class_by_short: HashMap<&str, &ClassDef> =
         module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
 
     let mut result = HashMap::new();
     for class in &module.classes {
@@ -305,8 +333,6 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
         loop {
             for &fid in &current.methods {
                 if let Some(f) = module.functions.get(fid) {
-                    // Only include instance-callable methods (not static).
-                    // Static methods are called as ClassName.method(), not this.method().
                     if f.method_kind != MethodKind::Static {
                         if let Some(short) = f.name.rsplit("::").next() {
                             names.insert(short.to_string());
@@ -317,7 +343,7 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
             match current.super_class {
                 Some(ref sc) => {
                     let short = sc.rsplit("::").next().unwrap_or(sc);
-                    match class_by_short.get(short) {
+                    match resolve_parent(sc, &class_by_qualified, &class_by_short) {
                         Some(parent) => current = parent,
                         None => {
                             external_parent = Some(short);
@@ -349,6 +375,8 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
 fn build_static_method_owner_map(module: &Module) -> HashMap<String, HashMap<String, String>> {
     let class_by_short: HashMap<&str, &ClassDef> =
         module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
 
     let mut result = HashMap::new();
     for class in &module.classes {
@@ -359,7 +387,6 @@ fn build_static_method_owner_map(module: &Module) -> HashMap<String, HashMap<Str
                 if let Some(f) = module.functions.get(fid) {
                     if f.method_kind == MethodKind::Static {
                         if let Some(short) = f.name.rsplit("::").next() {
-                            // Most-derived wins: don't overwrite if already present.
                             owners
                                 .entry(short.to_string())
                                 .or_insert_with(|| current.name.clone());
@@ -369,8 +396,7 @@ fn build_static_method_owner_map(module: &Module) -> HashMap<String, HashMap<Str
             }
             match current.super_class {
                 Some(ref sc) => {
-                    let short = sc.rsplit("::").next().unwrap_or(sc);
-                    match class_by_short.get(short) {
+                    match resolve_parent(sc, &class_by_qualified, &class_by_short) {
                         Some(parent) => current = parent,
                         None => break,
                     }
@@ -390,6 +416,8 @@ fn build_static_method_owner_map(module: &Module) -> HashMap<String, HashMap<Str
 fn build_static_field_owner_map(module: &Module) -> HashMap<String, HashMap<String, String>> {
     let class_by_short: HashMap<&str, &ClassDef> =
         module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
 
     let mut result = HashMap::new();
     for class in &module.classes {
@@ -397,15 +425,13 @@ fn build_static_field_owner_map(module: &Module) -> HashMap<String, HashMap<Stri
         let mut current = class;
         loop {
             for (name, _, _) in &current.static_fields {
-                // Most-derived wins: don't overwrite if already present.
                 owners
                     .entry(name.clone())
                     .or_insert_with(|| current.name.clone());
             }
             match current.super_class {
                 Some(ref sc) => {
-                    let short = sc.rsplit("::").next().unwrap_or(sc);
-                    match class_by_short.get(short) {
+                    match resolve_parent(sc, &class_by_qualified, &class_by_short) {
                         Some(parent) => current = parent,
                         None => break,
                     }
@@ -423,6 +449,8 @@ fn build_static_field_owner_map(module: &Module) -> HashMap<String, HashMap<Stri
 fn build_instance_field_sets(module: &Module, type_defs: &BTreeMap<String, ExternalTypeDef>) -> HashMap<String, HashSet<String>> {
     let class_by_short: HashMap<&str, &ClassDef> =
         module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
 
     let mut result = HashMap::new();
     for class in &module.classes {
@@ -437,7 +465,7 @@ fn build_instance_field_sets(module: &Module, type_defs: &BTreeMap<String, Exter
             match current.super_class {
                 Some(ref sc) => {
                     let short = sc.rsplit("::").next().unwrap_or(sc);
-                    match class_by_short.get(short) {
+                    match resolve_parent(sc, &class_by_qualified, &class_by_short) {
                         Some(parent) => current = parent,
                         None => {
                             external_parent = Some(short);
