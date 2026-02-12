@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
@@ -1623,6 +1623,10 @@ struct ClassGroup {
 }
 
 /// Partition module contents into class groups and free functions.
+///
+/// Classes are returned in topological order (superclass before subclass) so
+/// that barrel-file exports work correctly with bundlers like esbuild that
+/// flatten modules into a single scope.
 fn group_by_class(module: &Module) -> (Vec<ClassGroup>, Vec<FuncId>) {
     let mut claimed: HashSet<FuncId> = HashSet::new();
     let mut groups = Vec::new();
@@ -1648,6 +1652,77 @@ fn group_by_class(module: &Module) -> (Vec<ClassGroup>, Vec<FuncId>) {
             methods,
         });
     }
+
+    // Topological sort: superclasses before subclasses.
+    // Build lookup maps from class name → index in `groups`.
+    let mut by_qualified: HashMap<String, usize> = HashMap::new();
+    let mut by_short: HashMap<String, usize> = HashMap::new();
+    for (i, g) in groups.iter().enumerate() {
+        by_qualified.insert(qualified_class_name(&g.class_def), i);
+        // Only use short name if unambiguous (first wins; collisions drop).
+        by_short.entry(g.class_def.name.clone()).or_insert(i);
+    }
+
+    // For each class, find its in-module parent index (if any).
+    let n = groups.len();
+    let mut parent_idx: Vec<Option<usize>> = vec![None; n];
+    let mut in_degree: Vec<usize> = vec![0; n];
+    for (i, g) in groups.iter().enumerate() {
+        if let Some(sc) = &g.class_def.super_class {
+            // Try qualified name first, then short name.
+            let idx = by_qualified.get(sc.as_str()).copied().or_else(|| {
+                let short = sc.rsplit("::").next().unwrap_or(sc);
+                by_short.get(short).copied()
+            });
+            if let Some(pi) = idx {
+                parent_idx[i] = Some(pi);
+                in_degree[i] += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm: BFS from roots (no in-module parent).
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    for (i, &deg) in in_degree.iter().enumerate() {
+        if deg == 0 {
+            queue.push_back(i);
+        }
+    }
+    // Build children adjacency for efficient traversal.
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, pi) in parent_idx.iter().enumerate() {
+        if let Some(p) = pi {
+            children[*p].push(i);
+        }
+    }
+
+    let mut sorted_indices: Vec<usize> = Vec::with_capacity(n);
+    while let Some(idx) = queue.pop_front() {
+        sorted_indices.push(idx);
+        for &child in &children[idx] {
+            in_degree[child] -= 1;
+            if in_degree[child] == 0 {
+                queue.push_back(child);
+            }
+        }
+    }
+
+    // Defensive: append any remaining classes (cycles — shouldn't happen).
+    if sorted_indices.len() < n {
+        let in_sorted: HashSet<usize> = sorted_indices.iter().copied().collect();
+        for i in 0..n {
+            if !in_sorted.contains(&i) {
+                sorted_indices.push(i);
+            }
+        }
+    }
+
+    // Reorder groups by the sorted indices.
+    let mut sorted_groups: Vec<Option<ClassGroup>> = groups.into_iter().map(Some).collect();
+    let groups = sorted_indices
+        .into_iter()
+        .map(|i| sorted_groups[i].take().unwrap())
+        .collect();
 
     let free: Vec<FuncId> = module
         .functions
