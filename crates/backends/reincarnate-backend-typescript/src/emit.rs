@@ -638,6 +638,21 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         barrel_exports.push("_globals".to_string());
     }
 
+    // Pre-collect all classes' direct value imports for cycle detection.
+    let mut direct_value_imports: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for group in &class_groups {
+        let qualified = qualified_class_name(&group.class_def);
+        let empty_smo = HashMap::new();
+        let smo = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
+        let sfo = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
+        let refs = collect_class_references(group, module, &registry, &module.external_imports, smo, sfo, &global_names);
+        direct_value_imports.insert(
+            sanitize_ident(&group.class_def.name),
+            refs.value_refs,
+        );
+    }
+    let transitive_value_imports = compute_transitive_value_imports(&direct_value_imports);
+
     for group in &class_groups {
         let class_def = &group.class_def;
         let short_name = sanitize_ident(&class_def.name);
@@ -677,8 +692,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        let descendants = compute_descendant_names(&short_name, &class_meta.ancestor_sets);
-        let late_bound = emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, module_exports, &descendants, &short_to_qualified, depth, &mut out);
+        let late_bound = emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, module_exports, &transitive_value_imports, &short_to_qualified, depth, &mut out);
 
         // Validate member accesses before emitting (warnings only).
         for &fid in &group.methods {
@@ -1334,21 +1348,39 @@ fn validate_module_export(
     }
 }
 
-/// Compute the set of short names that are descendants of `self_name` in the
-/// class hierarchy. A class X is a descendant of Y if Y appears in X's ancestor
-/// set (and X ≠ Y).
-fn compute_descendant_names(
-    self_name: &str,
-    ancestor_sets: &HashMap<String, HashSet<String>>,
-) -> HashSet<String> {
-    let mut descendants = HashSet::new();
-    for (qualified, ancestors) in ancestor_sets {
-        let short = qualified.rsplit("::").next().unwrap_or(qualified);
-        if short != self_name && ancestors.contains(self_name) {
-            descendants.insert(short.to_string());
+/// Compute the transitive closure of the value-import graph.
+///
+/// For each class, find all classes reachable through value imports (extends,
+/// interfaces, static method owners, etc.). Used to detect cycles: if target T
+/// transitively imports source S, then adding S→T would create a circular
+/// dependency.
+fn compute_transitive_value_imports(
+    direct_imports: &HashMap<String, BTreeSet<String>>,
+) -> HashMap<String, HashSet<String>> {
+    let mut result: HashMap<String, HashSet<String>> = HashMap::new();
+    for start in direct_imports.keys() {
+        let mut visited = HashSet::new();
+        let mut stack = Vec::new();
+        // Seed with direct imports of the start node.
+        if let Some(direct) = direct_imports.get(start) {
+            for dep in direct {
+                if dep != start && visited.insert(dep.clone()) {
+                    stack.push(dep.clone());
+                }
+            }
         }
+        while let Some(current) = stack.pop() {
+            if let Some(deps) = direct_imports.get(&current) {
+                for dep in deps {
+                    if dep != start && visited.insert(dep.clone()) {
+                        stack.push(dep.clone());
+                    }
+                }
+            }
+        }
+        result.insert(start.clone(), visited);
     }
-    descendants
+    result
 }
 
 /// Emit `import` / `import type` statements for intra-module class references.
@@ -1366,21 +1398,29 @@ fn emit_intra_imports(
     global_names: &HashSet<String>,
     mutable_global_names: &HashSet<String>,
     module_exports: &BTreeMap<String, Vec<String>>,
-    descendants: &HashSet<String>,
+    transitive_value_imports: &HashMap<String, HashSet<String>>,
     short_to_qualified: &HashMap<String, String>,
     depth: usize,
     out: &mut String,
 ) -> HashSet<String> {
     let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners, static_field_owners, global_names);
 
-    // Compute late-bound set: typecheck refs that are descendants and NOT also
-    // referenced as regular value refs (e.g. `new X()` or `extends X`).
+    // Compute late-bound set: typecheck refs whose targets transitively import
+    // this class (i.e. adding a static import would create a cycle), and that
+    // are NOT also referenced as regular value refs (e.g. `new X()` or `extends X`).
+    let self_short = sanitize_ident(&group.class_def.name);
     let mut late_bound: HashSet<String> = HashSet::new();
     for name in &refs.typecheck_value_refs {
-        if descendants.contains(name.as_str()) && !refs.value_refs.contains(name) {
-            // Only late-bind if we have a qualified name to resolve at runtime.
-            if short_to_qualified.contains_key(name.as_str()) {
-                late_bound.insert(name.clone());
+        if !refs.value_refs.contains(name) {
+            // Target T transitively imports self → adding self→T would be circular.
+            let target_imports_self = transitive_value_imports
+                .get(name.as_str())
+                .is_some_and(|reachable| reachable.contains(&self_short));
+            if target_imports_self {
+                // Only late-bind if we have a qualified name to resolve at runtime.
+                if short_to_qualified.contains_key(name.as_str()) {
+                    late_bound.insert(name.clone());
+                }
             }
         }
     }
