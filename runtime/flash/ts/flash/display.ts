@@ -174,7 +174,24 @@ export class DisplayObject extends EventDispatcher {
   blendMode = "normal";
   cacheAsBitmap = false;
   filters: any[] = [];
-  height = 0;
+  // These four properties are commonly overridden by subclass setters
+  // (e.g. UIComponent).  Using backing-field + getter/setter ensures that
+  // the field initialiser (_height = 0) never triggers a subclass setter
+  // during construction — matching AVM2 native-property semantics.
+  _height = 0;
+  _width = 0;
+  _x = 0;
+  _y = 0;
+
+  get height() { return this._height; }
+  set height(v: number) { this._height = v; }
+  get width() { return this._width; }
+  set width(v: number) { this._width = v; }
+  get x() { return this._x; }
+  set x(v: number) { this._x = v; }
+  get y() { return this._y; }
+  set y(v: number) { this._y = v; }
+
   loaderInfo: LoaderInfo | null = null;
   mask: DisplayObject | null = null;
   mouseX = 0;
@@ -195,9 +212,6 @@ export class DisplayObject extends EventDispatcher {
   stage: Stage | null = null;
   transform: Transform;
   visible = true;
-  width = 0;
-  x = 0;
-  y = 0;
   z = 0;
 
   constructor() {
