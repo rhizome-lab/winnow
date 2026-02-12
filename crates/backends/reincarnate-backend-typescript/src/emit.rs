@@ -152,6 +152,63 @@ impl ClassMeta {
     }
 }
 
+/// Validate member accesses in a function against known type definitions.
+///
+/// Checks `GetField` and `SetField` operations: if the object has a known
+/// `Struct` type, verifies that the field exists in the class hierarchy's
+/// instance fields, method names (getters/setters), or static fields.
+fn validate_member_accesses(
+    func: &Function,
+    class_meta: &ClassMeta,
+    registry: &ClassRegistry,
+    short_to_qualified: &HashMap<String, String>,
+) {
+    for (_iid, inst) in func.insts.iter() {
+        let (object, field) = match &inst.op {
+            Op::GetField { object, field } => (*object, field.as_str()),
+            Op::SetField { object, field, .. } => (*object, field.as_str()),
+            _ => continue,
+        };
+        let bare = field.rsplit("::").next().unwrap_or(field);
+        // Skip fields that are themselves class names (constructor references).
+        if registry.lookup(field).is_some() {
+            continue;
+        }
+        let ty = &func.value_types[object];
+        let type_name = match ty {
+            Type::Struct(name) => name.as_str(),
+            _ => continue,
+        };
+        let short = type_name.rsplit("::").next().unwrap_or(type_name);
+        let qualified = match short_to_qualified.get(short) {
+            Some(qn) => qn.as_str(),
+            None => continue, // External type — can't validate
+        };
+        let has_instance_field = class_meta
+            .instance_field_sets
+            .get(qualified)
+            .is_some_and(|f| f.contains(bare));
+        let has_method = class_meta
+            .method_name_sets
+            .get(qualified)
+            .is_some_and(|m| m.contains(bare));
+        let has_static_field = class_meta
+            .static_field_owner_map
+            .get(qualified)
+            .is_some_and(|m| m.contains_key(bare));
+        let has_static_method = class_meta
+            .static_method_owner_map
+            .get(qualified)
+            .is_some_and(|m| m.contains_key(bare));
+        if !has_instance_field && !has_method && !has_static_field && !has_static_method {
+            eprintln!(
+                "warning: {short} has no member '{bare}' (in {})",
+                func.name
+            );
+        }
+    }
+}
+
 /// Build a map from qualified class name to the set of ancestor short names.
 ///
 /// For each class, the set includes the class's own short name and the short
@@ -372,6 +429,11 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     let class_names = build_class_names(module);
     let class_meta = ClassMeta::build(module);
     let global_names: HashSet<String> = module.globals.iter().map(|g| g.name.clone()).collect();
+    let short_to_qualified: HashMap<String, String> = module
+        .classes
+        .iter()
+        .map(|c| (c.name.clone(), qualified_class_name(c)))
+        .collect();
     let mut barrel_exports: Vec<String> = Vec::new();
 
     // Globals → _globals.ts (at module root).
@@ -447,6 +509,12 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
         emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, depth, &mut out);
+
+        // Validate member accesses before emitting (warnings only).
+        for &fid in &group.methods {
+            validate_member_accesses(&module.functions[fid], &class_meta, &registry, &short_to_qualified);
+        }
+
         emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
