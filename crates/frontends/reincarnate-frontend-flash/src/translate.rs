@@ -1026,9 +1026,9 @@ fn translate_op(
             stack.push(v);
         }
         Op::GetOuterScope { index } => {
+            let idx = fb.const_int(*index as i64);
             let v =
-                fb.system_call("Flash.Scope", "getOuterScope", &[], Type::Dynamic);
-            let _ = index;
+                fb.system_call("Flash.Scope", "getOuterScope", &[idx], Type::Dynamic);
             stack.push(v);
         }
 
