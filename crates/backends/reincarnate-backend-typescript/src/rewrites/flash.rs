@@ -518,9 +518,10 @@ fn rewrite_stmt(stmt: JsStmt, ctx: &FlashRewriteCtx) -> Option<JsStmt> {
         // setSuper(this, "prop", value) → super.prop = value;
         if system == "Flash.Class" && method == "setSuper" && args.len() == 3 {
             if let JsExpr::Literal(Constant::String(ref name)) = args[1] {
+                let short = name.rsplit("::").next().unwrap_or(name);
                 let value = rewrite_expr(args[2].clone(), ctx);
                 return Some(JsStmt::Assign {
-                    target: JsExpr::SuperGet(name.clone()),
+                    target: JsExpr::SuperGet(short.to_string()),
                     value,
                 });
             }
@@ -960,9 +961,10 @@ fn rewrite_system_call(
     // callSuper(this, "method", ...args) → super.method(args)
     if system == "Flash.Class" && method == "callSuper" && args.len() >= 2 {
         if let JsExpr::Literal(Constant::String(ref name)) = args[1] {
+            let short = name.rsplit("::").next().unwrap_or(name);
             let rest = rewrite_exprs(args[2..].to_vec(), ctx);
             return Some(JsExpr::SuperMethodCall {
-                method: name.clone(),
+                method: short.to_string(),
                 args: rest,
             });
         }
@@ -971,15 +973,17 @@ fn rewrite_system_call(
     // getSuper(this, "prop") → super.prop
     if system == "Flash.Class" && method == "getSuper" && args.len() == 2 {
         if let JsExpr::Literal(Constant::String(ref name)) = args[1] {
-            return Some(JsExpr::SuperGet(name.clone()));
+            let short = name.rsplit("::").next().unwrap_or(name);
+            return Some(JsExpr::SuperGet(short.to_string()));
         }
     }
 
     // setSuper(this, "prop", value) → (super.prop = value)
     if system == "Flash.Class" && method == "setSuper" && args.len() == 3 {
         if let JsExpr::Literal(Constant::String(ref name)) = args[1] {
+            let short = name.rsplit("::").next().unwrap_or(name);
             return Some(JsExpr::SuperSet {
-                prop: name.clone(),
+                prop: short.to_string(),
                 value: Box::new(rewrite_expr(args[2].clone(), ctx)),
             });
         }
