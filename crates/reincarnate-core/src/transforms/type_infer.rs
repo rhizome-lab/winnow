@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::CoreError;
+use crate::ir::ty::parse_type_notation;
 use crate::ir::{BlockId, Constant, Function, Inst, Module, Op, Type, ValueId};
 use crate::pipeline::{Transform, TransformResult};
 
@@ -71,6 +72,29 @@ impl ModuleContext {
                 let fields: HashMap<String, Type> =
                     class.static_fields.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
                 static_fields_map.insert(class.name.clone(), fields);
+            }
+        }
+
+        // Extend with external type definitions from runtime.
+        for (name, ext) in &module.external_type_defs {
+            // class_hierarchy: insert with parent short name
+            class_hierarchy
+                .entry(name.clone())
+                .or_insert_with(|| ext.extends.clone());
+            // struct_fields: parse field types
+            if !ext.fields.is_empty() {
+                let fields: HashMap<String, Type> = ext
+                    .fields
+                    .iter()
+                    .map(|(f, t)| (f.clone(), parse_type_notation(t)))
+                    .collect();
+                struct_fields.entry(name.clone()).or_default().extend(fields);
+            }
+            // method_return_types: parse return types
+            for (method, sig) in &ext.methods {
+                method_return_types
+                    .entry((name.clone(), method.clone()))
+                    .or_insert_with(|| parse_type_notation(&sig.returns));
             }
         }
 
