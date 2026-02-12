@@ -653,6 +653,32 @@ fn emit_runtime_imports_with_prefix(
 // Intra-module imports (class-to-class references)
 // ---------------------------------------------------------------------------
 
+/// Emit a categorized warning for an unmapped external reference, filtering
+/// out known false positives (private/protected namespace accesses, `fl.*`
+/// authoring library types).
+fn warn_unmapped_reference(name: &str) {
+    let (ns, _short) = name.rsplit_once("::").unwrap_or(("", name));
+    // No namespace at all — bare name, not a qualified reference.
+    if ns.is_empty() {
+        return;
+    }
+    // Private/protected namespace member access (e.g. "classes:Monster::consumables").
+    // These contain a colon within the namespace portion.
+    if ns.contains(':') {
+        return;
+    }
+    // Flash authoring library — not part of the runtime.
+    if ns.starts_with("fl.") {
+        return;
+    }
+    // Flash runtime stdlib — actionable: add to runtime.
+    if let Some(pkg) = ns.strip_prefix("flash.") {
+        eprintln!("warning: flash package '{pkg}' not in runtime stdlib (referenced: {name})");
+        return;
+    }
+    eprintln!("warning: unmapped external reference: {name}");
+}
+
 /// Bundled output sets for collecting class/type references.
 #[derive(Default)]
 struct RefSets {
@@ -790,10 +816,8 @@ fn collect_type_refs_from_function(
                     if short != self_name {
                         if external_imports.contains_key(field.as_str()) {
                             refs.ext_value_refs.insert(field.to_string());
-                        } else if field.contains("::") {
-                            eprintln!(
-                                "warning: unmapped external reference: {field}"
-                            );
+                        } else {
+                            warn_unmapped_reference(field);
                         }
                     }
                 }
@@ -852,8 +876,8 @@ fn collect_type_ref(
                     refs.insert(entry.short_name.clone());
                 } else if external_imports.contains_key(name.as_str()) {
                     ext_refs.insert(name.to_string());
-                } else if name.contains("::") {
-                    eprintln!("warning: unmapped external reference: {name}");
+                } else {
+                    warn_unmapped_reference(name);
                 }
             }
         }
