@@ -682,11 +682,12 @@ impl<'a> Structurizer<'a> {
 
                     // then→exit, else→continue (back to header)
                     if !then_in_loop && else_is_header {
+                        let exit_shape = self.loop_exit_shape(then_target, lb);
                         return Shape::IfElse {
                             block,
                             cond,
                             then_assigns,
-                            then_body: Box::new(Shape::Break),
+                            then_body: Box::new(exit_shape),
                             then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(Shape::Continue),
@@ -696,6 +697,7 @@ impl<'a> Structurizer<'a> {
 
                     // then→continue (back to header), else→exit
                     if then_is_header && !else_in_loop {
+                        let exit_shape = self.loop_exit_shape(else_target, lb);
                         return Shape::IfElse {
                             block,
                             cond,
@@ -703,20 +705,21 @@ impl<'a> Structurizer<'a> {
                             then_body: Box::new(Shape::Continue),
                             then_trailing_assigns: vec![],
                             else_assigns,
-                            else_body: Box::new(Shape::Break),
+                            else_body: Box::new(exit_shape),
                             else_trailing_assigns: vec![],
                         };
                     }
 
                     // then→exit, else→body (continues in loop)
                     if !then_in_loop && else_in_loop {
+                        let exit_shape = self.loop_exit_shape(then_target, lb);
                         let else_body_shape =
                             self.structurize_region(else_target, None, loop_body);
                         return Shape::IfElse {
                             block,
                             cond,
                             then_assigns,
-                            then_body: Box::new(Shape::Break),
+                            then_body: Box::new(exit_shape),
                             then_trailing_assigns: vec![],
                             else_assigns,
                             else_body: Box::new(else_body_shape),
@@ -726,6 +729,7 @@ impl<'a> Structurizer<'a> {
 
                     // then→body (continues in loop), else→exit
                     if then_in_loop && !else_in_loop {
+                        let exit_shape = self.loop_exit_shape(else_target, lb);
                         let then_body_shape =
                             self.structurize_region(then_target, None, loop_body);
                         return Shape::IfElse {
@@ -735,7 +739,7 @@ impl<'a> Structurizer<'a> {
                             then_body: Box::new(then_body_shape),
                             then_trailing_assigns: vec![],
                             else_assigns,
-                            else_body: Box::new(Shape::Break),
+                            else_body: Box::new(exit_shape),
                             else_trailing_assigns: vec![],
                         };
                     }
@@ -1448,6 +1452,91 @@ impl<'a> Structurizer<'a> {
         }
 
         shape
+    }
+
+    /// Check if a block has non-terminator instructions (i.e. actual work
+    /// that must execute, not just a branch).
+    fn block_has_body(&self, block: BlockId) -> bool {
+        let blk = &self.func.blocks[block];
+        for &inst_id in &blk.insts {
+            let op = &self.func.insts[inst_id].op;
+            if !matches!(
+                op,
+                Op::Br { .. } | Op::BrIf { .. } | Op::Switch { .. } | Op::Return(_)
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Build a shape for a loop-exit path: emit the exit target block's
+    /// non-terminator instructions before `break`.
+    ///
+    /// When a block inside a loop branches to a block outside the loop body,
+    /// the structurizer normally emits just `Shape::Break`. But the exit-target
+    /// block may have non-terminator instructions (function calls, stores, etc.)
+    /// that must execute before the loop exits. This method follows a linear
+    /// chain of blocks from `target`, emitting their instructions before Break.
+    ///
+    /// Safety: only includes blocks where all predecessors are in the loop body
+    /// (prevents stealing blocks that are also reachable from outside the loop).
+    fn loop_exit_shape(
+        &mut self,
+        target: BlockId,
+        loop_body: &HashSet<BlockId>,
+    ) -> Shape {
+        // Collect a linear chain of blocks starting from target that:
+        // 1. Have non-terminator instructions (worth emitting)
+        // 2. All predecessors are in the loop body or in our chain
+        // 3. End with an unconditional Br (linear chain, not a branch)
+        let mut chain: Vec<BlockId> = Vec::new();
+        let mut chain_set: HashSet<BlockId> = HashSet::new();
+        let mut current = target;
+
+        loop {
+            // Safety: all predecessors must come from the loop body or
+            // blocks we've already claimed in this chain.
+            if let Some(preds) = self.cfg.preds.get(&current) {
+                let all_from_loop_or_chain = preds.iter().all(|p| {
+                    loop_body.contains(p) || chain_set.contains(p)
+                });
+                if !all_from_loop_or_chain {
+                    break;
+                }
+            }
+
+            // Only include blocks that have actual work.
+            if !self.block_has_body(current) {
+                break;
+            }
+
+            // Only follow unconditional branches (linear chain).
+            let term = self.terminator(current).cloned();
+            chain.push(current);
+            chain_set.insert(current);
+            self.emitted.insert(current);
+
+            match term {
+                Some(Op::Br { target: next, .. }) => {
+                    // If the next block is also outside the loop, continue
+                    // the chain. Otherwise stop here.
+                    if loop_body.contains(&next) {
+                        break;
+                    }
+                    current = next;
+                }
+                _ => break, // BrIf, Return, etc. — stop the chain.
+            }
+        }
+
+        if chain.is_empty() {
+            Shape::Break
+        } else {
+            let mut parts: Vec<Shape> = chain.into_iter().map(Shape::Block).collect();
+            parts.push(Shape::Break);
+            Shape::Seq(parts)
+        }
     }
 
     /// Structurize a general loop (while(true) with break/continue).
@@ -2321,5 +2410,88 @@ mod tests {
         } else {
             unreachable!();
         }
+    }
+
+    #[test]
+    fn test_loop_exit_with_instructions() {
+        // Tests that when a block inside a loop branches to an exit block
+        // that has non-terminator instructions, those instructions are
+        // emitted before the break (not silently dropped).
+        //
+        //   entry:     br header
+        //   header:    br_if cond, body, exit
+        //   body:      br_if inner_cond, exit_path, header
+        //   exit_path: <store instruction>; br exit
+        //   exit:      return
+        //
+        // exit_path has a store that must execute before the loop exits.
+        // Without loop_exit_shape, this would be just `break;`.
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Bool],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("loop_exit_insts", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let inner_cond = fb.param(1);
+
+        let header = fb.create_block();
+        let body = fb.create_block();
+        let exit_path = fb.create_block();
+        let exit = fb.create_block();
+
+        // entry → header
+        fb.br(header, &[]);
+
+        // header: br_if cond, body, exit
+        fb.switch_to_block(header);
+        fb.br_if(cond, body, &[], exit, &[]);
+
+        // body: br_if inner_cond, exit_path, header
+        fb.switch_to_block(body);
+        fb.br_if(inner_cond, exit_path, &[], header, &[]);
+
+        // exit_path: store something, then br exit
+        fb.switch_to_block(exit_path);
+        let ptr = fb.alloc(Type::Int(64));
+        let val = fb.const_int(42);
+        fb.store(ptr, val);
+        fb.br(exit, &[]);
+
+        // exit: return
+        fb.switch_to_block(exit);
+        fb.ret(None);
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+
+        // The exit_path block should appear as Shape::Block(exit_path)
+        // before a Break, not be dropped entirely.
+        fn find_exit_path_block(shape: &Shape, target: BlockId) -> bool {
+            match shape {
+                Shape::Seq(parts) => {
+                    // Look for [Block(exit_path), Break] pattern
+                    for window in parts.windows(2) {
+                        if window[0] == Shape::Block(target)
+                            && window[1] == Shape::Break
+                        {
+                            return true;
+                        }
+                    }
+                    parts.iter().any(|p| find_exit_path_block(p, target))
+                }
+                Shape::IfElse { then_body, else_body, .. } => {
+                    find_exit_path_block(then_body, target)
+                        || find_exit_path_block(else_body, target)
+                }
+                Shape::WhileLoop { body, .. }
+                | Shape::ForLoop { body, .. }
+                | Shape::Loop { body, .. } => find_exit_path_block(body, target),
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_exit_path_block(&shape, exit_path),
+            "Expected Block(exit_path) before Break in shape, got: {shape:?}"
+        );
     }
 }
