@@ -105,6 +105,24 @@ Measured on CoC.ts (36k lines) after TypeInference + ConstraintSolve.
   - For TypeScript, the pragmatic fix is to emit a union type annotation
     (`number | string`) instead of `any`, which at least preserves type safety.
 
+## Diagnostics & Validation
+
+- [x] **Warning categorization** — Unmapped external reference warnings now
+  filter private namespace member accesses and `fl.*` authoring library types.
+  Flash stdlib references get specific package-level warnings.
+- [x] **Script globals extraction** — AVM2 script `Slot`/`Const` traits
+  extracted as IR `Global` entries via `ModuleBuilder.add_global()`. Class
+  traits filtered by name to avoid duplicates. Emitted as `_globals.ts`.
+- [x] **Global import detection** — `findPropStrict` scope lookups checked
+  against `global_names`; class files import from `_globals.ts` as needed.
+- [x] **Member access validation** — `GetField`/`SetField` ops validated
+  against class hierarchy (instance fields, methods, getters/setters via
+  `get_`/`set_` prefix, static fields/methods). 90 remaining warnings from
+  external superclass members (Flash DisplayObject, Sprite, etc.).
+- [ ] **External type member validation** — The remaining 90 member warnings
+  are from types inheriting Flash stdlib classes. Need structured member
+  metadata from runtime type definitions to validate these.
+
 ## Output Quality — FFDec Comparison
 
 Compared our TypeScript output against JPEXS FFDec's ActionScript decompilation
