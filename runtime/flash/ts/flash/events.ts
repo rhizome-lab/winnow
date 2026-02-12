@@ -141,21 +141,34 @@ export class Event {
   static readonly TAB_INDEX_CHANGE = "tabIndexChange";
   static readonly UNLOAD = "unload";
 
-  type: string;
-  bubbles: boolean;
-  cancelable: boolean;
-  target: any = null;
-  currentTarget: any = null;
-  eventPhase: number = 0;
+  _type: string;
+  _bubbles: boolean;
+  _cancelable: boolean;
+  _target: object | null = null;
+  _currentTarget: object | null = null;
+  _eventPhase: number = 0;
+
+  get type() { return this._type; }
+  set type(v: string) { this._type = v; }
+  get bubbles() { return this._bubbles; }
+  set bubbles(v: boolean) { this._bubbles = v; }
+  get cancelable() { return this._cancelable; }
+  set cancelable(v: boolean) { this._cancelable = v; }
+  get target() { return this._target; }
+  set target(v: object | null) { this._target = v; }
+  get currentTarget() { return this._currentTarget; }
+  set currentTarget(v: object | null) { this._currentTarget = v; }
+  get eventPhase() { return this._eventPhase; }
+  set eventPhase(v: number) { this._eventPhase = v; }
 
   private _defaultPrevented = false;
   private _stopImmediate = false;
   private _stopPropagation = false;
 
   constructor(type: string, bubbles = false, cancelable = false) {
-    this.type = type;
-    this.bubbles = bubbles;
-    this.cancelable = cancelable;
+    this._type = type;
+    this._bubbles = bubbles;
+    this._cancelable = cancelable;
   }
 
   clone(): Event {
@@ -207,11 +220,14 @@ export class TextEvent extends Event {
   static readonly LINK = "link";
   static readonly TEXT_INPUT = "textInput";
 
-  text: string;
+  _text: string;
+
+  get text() { return this._text; }
+  set text(v: string) { this._text = v; }
 
   constructor(type: string, bubbles = false, cancelable = false, text = "") {
     super(type, bubbles, cancelable);
-    this.text = text;
+    this._text = text;
   }
 
   override clone(): TextEvent {
@@ -230,7 +246,10 @@ export class TextEvent extends Event {
 export class ErrorEvent extends TextEvent {
   static readonly ERROR = "error";
 
-  errorID: number;
+  _errorID: number;
+
+  get errorID() { return this._errorID; }
+  set errorID(v: number) { this._errorID = v; }
 
   constructor(
     type: string,
@@ -240,7 +259,7 @@ export class ErrorEvent extends TextEvent {
     errorID = 0,
   ) {
     super(type, bubbles, cancelable, text);
-    this.errorID = errorID;
+    this._errorID = errorID;
   }
 
   override clone(): ErrorEvent {
@@ -276,19 +295,46 @@ export class MouseEvent extends Event {
   static readonly ROLL_OUT = "rollOut";
   static readonly ROLL_OVER = "rollOver";
 
-  localX: number;
-  localY: number;
-  stageX: number = 0;
-  stageY: number = 0;
-  relatedObject: any = null;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-  buttonDown: boolean;
-  delta: number;
-  clickCount: number = 0;
-  commandKey: boolean = false;
-  controlKey: boolean = false;
+  _localX: number;
+  _localY: number;
+  _stageX: number = 0;
+  _stageY: number = 0;
+  _relatedObject: object | null = null;
+  _ctrlKey: boolean;
+  _altKey: boolean;
+  _shiftKey: boolean;
+  _buttonDown: boolean;
+  _delta: number;
+  _clickCount: number = 0;
+  _commandKey: boolean = false;
+  _controlKey: boolean = false;
+
+  get localX() { return this._localX; }
+  set localX(v: number) { this._localX = v; }
+  get localY() { return this._localY; }
+  set localY(v: number) { this._localY = v; }
+  get stageX() { return this._stageX; }
+  set stageX(v: number) { this._stageX = v; }
+  get stageY() { return this._stageY; }
+  set stageY(v: number) { this._stageY = v; }
+  get relatedObject() { return this._relatedObject; }
+  set relatedObject(v: object | null) { this._relatedObject = v; }
+  get ctrlKey() { return this._ctrlKey; }
+  set ctrlKey(v: boolean) { this._ctrlKey = v; }
+  get altKey() { return this._altKey; }
+  set altKey(v: boolean) { this._altKey = v; }
+  get shiftKey() { return this._shiftKey; }
+  set shiftKey(v: boolean) { this._shiftKey = v; }
+  get buttonDown() { return this._buttonDown; }
+  set buttonDown(v: boolean) { this._buttonDown = v; }
+  get delta() { return this._delta; }
+  set delta(v: number) { this._delta = v; }
+  get clickCount() { return this._clickCount; }
+  set clickCount(v: number) { this._clickCount = v; }
+  get commandKey() { return this._commandKey; }
+  set commandKey(v: boolean) { this._commandKey = v; }
+  get controlKey() { return this._controlKey; }
+  set controlKey(v: boolean) { this._controlKey = v; }
 
   constructor(
     type: string,
@@ -296,7 +342,7 @@ export class MouseEvent extends Event {
     cancelable = false,
     localX = 0,
     localY = 0,
-    relatedObject: any = null,
+    relatedObject: object | null = null,
     ctrlKey = false,
     altKey = false,
     shiftKey = false,
@@ -304,14 +350,14 @@ export class MouseEvent extends Event {
     delta = 0,
   ) {
     super(type, bubbles, cancelable);
-    this.localX = localX;
-    this.localY = localY;
-    this.relatedObject = relatedObject;
-    this.ctrlKey = ctrlKey;
-    this.altKey = altKey;
-    this.shiftKey = shiftKey;
-    this.buttonDown = buttonDown;
-    this.delta = delta;
+    this._localX = localX;
+    this._localY = localY;
+    this._relatedObject = relatedObject;
+    this._ctrlKey = ctrlKey;
+    this._altKey = altKey;
+    this._shiftKey = shiftKey;
+    this._buttonDown = buttonDown;
+    this._delta = delta;
   }
 
   override clone(): MouseEvent {
@@ -356,12 +402,25 @@ export class KeyboardEvent extends Event {
   static readonly KEY_DOWN = "keyDown";
   static readonly KEY_UP = "keyUp";
 
-  charCode: number;
-  keyCode: number;
-  keyLocation: number;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
+  _charCode: number;
+  _keyCode: number;
+  _keyLocation: number;
+  _ctrlKey: boolean;
+  _altKey: boolean;
+  _shiftKey: boolean;
+
+  get charCode() { return this._charCode; }
+  set charCode(v: number) { this._charCode = v; }
+  get keyCode() { return this._keyCode; }
+  set keyCode(v: number) { this._keyCode = v; }
+  get keyLocation() { return this._keyLocation; }
+  set keyLocation(v: number) { this._keyLocation = v; }
+  get ctrlKey() { return this._ctrlKey; }
+  set ctrlKey(v: boolean) { this._ctrlKey = v; }
+  get altKey() { return this._altKey; }
+  set altKey(v: boolean) { this._altKey = v; }
+  get shiftKey() { return this._shiftKey; }
+  set shiftKey(v: boolean) { this._shiftKey = v; }
 
   constructor(
     type: string,
@@ -375,12 +434,12 @@ export class KeyboardEvent extends Event {
     shiftKey = false,
   ) {
     super(type, bubbles, cancelable);
-    this.charCode = charCode;
-    this.keyCode = keyCode;
-    this.keyLocation = keyLocation;
-    this.ctrlKey = ctrlKey;
-    this.altKey = altKey;
-    this.shiftKey = shiftKey;
+    this._charCode = charCode;
+    this._keyCode = keyCode;
+    this._keyLocation = keyLocation;
+    this._ctrlKey = ctrlKey;
+    this._altKey = altKey;
+    this._shiftKey = shiftKey;
   }
 
   override clone(): KeyboardEvent {
@@ -422,28 +481,39 @@ export class FocusEvent extends Event {
   static readonly KEY_FOCUS_CHANGE = "keyFocusChange";
   static readonly MOUSE_FOCUS_CHANGE = "mouseFocusChange";
 
-  relatedObject: any;
-  shiftKey: boolean;
-  keyCode: number;
-  direction: string;
-  isRelatedObjectInaccessible: boolean;
+  _relatedObject: object | null;
+  _shiftKey: boolean;
+  _keyCode: number;
+  _direction: string;
+  _isRelatedObjectInaccessible: boolean;
+
+  get relatedObject() { return this._relatedObject; }
+  set relatedObject(v: object | null) { this._relatedObject = v; }
+  get shiftKey() { return this._shiftKey; }
+  set shiftKey(v: boolean) { this._shiftKey = v; }
+  get keyCode() { return this._keyCode; }
+  set keyCode(v: number) { this._keyCode = v; }
+  get direction() { return this._direction; }
+  set direction(v: string) { this._direction = v; }
+  get isRelatedObjectInaccessible() { return this._isRelatedObjectInaccessible; }
+  set isRelatedObjectInaccessible(v: boolean) { this._isRelatedObjectInaccessible = v; }
 
   constructor(
     type: string,
     bubbles = true,
     cancelable = false,
-    relatedObject: any = null,
+    relatedObject: object | null = null,
     shiftKey = false,
     keyCode = 0,
     direction = "none",
     isRelatedObjectInaccessible = false,
   ) {
     super(type, bubbles, cancelable);
-    this.relatedObject = relatedObject;
-    this.shiftKey = shiftKey;
-    this.keyCode = keyCode;
-    this.direction = direction;
-    this.isRelatedObjectInaccessible = isRelatedObjectInaccessible;
+    this._relatedObject = relatedObject;
+    this._shiftKey = shiftKey;
+    this._keyCode = keyCode;
+    this._direction = direction;
+    this._isRelatedObjectInaccessible = isRelatedObjectInaccessible;
   }
 
   override clone(): FocusEvent {
@@ -480,8 +550,13 @@ export class ProgressEvent extends Event {
   static readonly PROGRESS = "progress";
   static readonly SOCKET_DATA = "socketData";
 
-  bytesLoaded: number;
-  bytesTotal: number;
+  _bytesLoaded: number;
+  _bytesTotal: number;
+
+  get bytesLoaded() { return this._bytesLoaded; }
+  set bytesLoaded(v: number) { this._bytesLoaded = v; }
+  get bytesTotal() { return this._bytesTotal; }
+  set bytesTotal(v: number) { this._bytesTotal = v; }
 
   constructor(
     type: string,
@@ -491,8 +566,8 @@ export class ProgressEvent extends Event {
     bytesTotal = 0,
   ) {
     super(type, bubbles, cancelable);
-    this.bytesLoaded = bytesLoaded;
-    this.bytesTotal = bytesTotal;
+    this._bytesLoaded = bytesLoaded;
+    this._bytesTotal = bytesTotal;
   }
 
   override clone(): ProgressEvent {
@@ -583,13 +658,20 @@ export class HTTPStatusEvent extends Event {
   static readonly HTTP_STATUS = "httpStatus";
   static readonly HTTP_RESPONSE_STATUS = "httpResponseStatus";
 
-  status: number;
-  responseHeaders: any[] = [];
-  responseURL: string = "";
+  _status: number;
+  _responseHeaders: object[] = [];
+  _responseURL: string = "";
+
+  get status() { return this._status; }
+  set status(v: number) { this._status = v; }
+  get responseHeaders() { return this._responseHeaders; }
+  set responseHeaders(v: object[]) { this._responseHeaders = v; }
+  get responseURL() { return this._responseURL; }
+  set responseURL(v: string) { this._responseURL = v; }
 
   constructor(type: string, bubbles = false, cancelable = false, status = 0) {
     super(type, bubbles, cancelable);
-    this.status = status;
+    this._status = status;
   }
 
   override clone(): HTTPStatusEvent {
@@ -611,17 +693,20 @@ export class HTTPStatusEvent extends Event {
 export class AsyncErrorEvent extends ErrorEvent {
   static readonly ASYNC_ERROR = "asyncError";
 
-  error: any;
+  _error: Error | null;
+
+  get error() { return this._error; }
+  set error(v: Error | null) { this._error = v; }
 
   constructor(
     type: string,
     bubbles = false,
     cancelable = false,
     text = "",
-    error: any = null,
+    error: Error | null = null,
   ) {
     super(type, bubbles, cancelable, text);
-    this.error = error;
+    this._error = error;
   }
 
   override clone(): AsyncErrorEvent {

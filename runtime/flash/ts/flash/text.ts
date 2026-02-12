@@ -135,41 +135,112 @@ export class TextFormat {
 // ---------------------------------------------------------------------------
 
 export class TextField extends InteractiveObject {
-  alwaysShowSelection = false;
-  antiAliasType = "normal";
-  autoSize = TextFieldAutoSize.NONE;
-  background = false;
-  backgroundColor = 0xffffff;
-  border = false;
-  borderColor = 0x000000;
-  bottomScrollV = 1;
-  caretIndex = 0;
-  condenseWhite = false;
-  defaultTextFormat: TextFormat = new TextFormat();
-  displayAsPassword = false;
-  embedFonts = false;
-  gridFitType = "pixel";
-  maxChars = 0;
-  maxScrollH = 0;
-  maxScrollV = 1;
-  mouseWheelEnabled = true;
-  multiline = false;
-  numLines = 1;
-  restrict: string | null = null;
-  scrollH = 0;
-  scrollV = 1;
-  selectable = true;
-  selectionBeginIndex = 0;
-  selectionEndIndex = 0;
-  sharpness = 0;
-  styleSheet: any = null;
-  textColor = 0x000000;
-  textHeight = 0;
-  textWidth = 0;
-  thickness = 0;
-  type = TextFieldType.DYNAMIC;
-  useRichTextClipboard = false;
-  wordWrap = false;
+  _alwaysShowSelection = false;
+  _antiAliasType = "normal";
+  _autoSize: string = TextFieldAutoSize.NONE;
+  _background = false;
+  _backgroundColor = 0xffffff;
+  _border = false;
+  _borderColor = 0x000000;
+  _bottomScrollV = 1;
+  _caretIndex = 0;
+  _condenseWhite = false;
+  _defaultTextFormat: TextFormat = new TextFormat();
+  _displayAsPassword = false;
+  _embedFonts = false;
+  _gridFitType = "pixel";
+  _maxChars = 0;
+  _maxScrollH = 0;
+  _maxScrollV = 1;
+  _mouseWheelEnabled = true;
+  _multiline = false;
+  _numLines = 1;
+  _restrict: string | null = null;
+  _scrollH = 0;
+  _scrollV = 1;
+  _selectable = true;
+  _selectionBeginIndex = 0;
+  _selectionEndIndex = 0;
+  _sharpness = 0;
+  _styleSheet: object | null = null;
+  _textColor = 0x000000;
+  _textHeight = 0;
+  _textWidth = 0;
+  _thickness = 0;
+  _type: string = TextFieldType.DYNAMIC;
+  _useRichTextClipboard = false;
+  _wordWrap = false;
+
+  get alwaysShowSelection() { return this._alwaysShowSelection; }
+  set alwaysShowSelection(v: boolean) { this._alwaysShowSelection = v; }
+  get antiAliasType() { return this._antiAliasType; }
+  set antiAliasType(v: string) { this._antiAliasType = v; }
+  get autoSize() { return this._autoSize; }
+  set autoSize(v: string) { this._autoSize = v; }
+  get background() { return this._background; }
+  set background(v: boolean) { this._background = v; }
+  get backgroundColor() { return this._backgroundColor; }
+  set backgroundColor(v: number) { this._backgroundColor = v; }
+  get border() { return this._border; }
+  set border(v: boolean) { this._border = v; }
+  get borderColor() { return this._borderColor; }
+  set borderColor(v: number) { this._borderColor = v; }
+  get bottomScrollV() { return this._bottomScrollV; }
+  set bottomScrollV(v: number) { this._bottomScrollV = v; }
+  get caretIndex() { return this._caretIndex; }
+  set caretIndex(v: number) { this._caretIndex = v; }
+  get condenseWhite() { return this._condenseWhite; }
+  set condenseWhite(v: boolean) { this._condenseWhite = v; }
+  get defaultTextFormat() { return this._defaultTextFormat; }
+  set defaultTextFormat(v: TextFormat) { this._defaultTextFormat = v; }
+  get displayAsPassword() { return this._displayAsPassword; }
+  set displayAsPassword(v: boolean) { this._displayAsPassword = v; }
+  get embedFonts() { return this._embedFonts; }
+  set embedFonts(v: boolean) { this._embedFonts = v; }
+  get gridFitType() { return this._gridFitType; }
+  set gridFitType(v: string) { this._gridFitType = v; }
+  get maxChars() { return this._maxChars; }
+  set maxChars(v: number) { this._maxChars = v; }
+  get maxScrollH() { return this._maxScrollH; }
+  set maxScrollH(v: number) { this._maxScrollH = v; }
+  get maxScrollV() { return this._maxScrollV; }
+  set maxScrollV(v: number) { this._maxScrollV = v; }
+  get mouseWheelEnabled() { return this._mouseWheelEnabled; }
+  set mouseWheelEnabled(v: boolean) { this._mouseWheelEnabled = v; }
+  get multiline() { return this._multiline; }
+  set multiline(v: boolean) { this._multiline = v; }
+  get numLines() { return this._numLines; }
+  set numLines(v: number) { this._numLines = v; }
+  get restrict() { return this._restrict; }
+  set restrict(v: string | null) { this._restrict = v; }
+  get scrollH() { return this._scrollH; }
+  set scrollH(v: number) { this._scrollH = v; }
+  get scrollV() { return this._scrollV; }
+  set scrollV(v: number) { this._scrollV = v; }
+  get selectable() { return this._selectable; }
+  set selectable(v: boolean) { this._selectable = v; }
+  get selectionBeginIndex() { return this._selectionBeginIndex; }
+  set selectionBeginIndex(v: number) { this._selectionBeginIndex = v; }
+  get selectionEndIndex() { return this._selectionEndIndex; }
+  set selectionEndIndex(v: number) { this._selectionEndIndex = v; }
+  get sharpness() { return this._sharpness; }
+  set sharpness(v: number) { this._sharpness = v; }
+  get styleSheet() { return this._styleSheet; }
+  set styleSheet(v: object | null) { this._styleSheet = v; }
+  get textColor() { return this._textColor; }
+  set textColor(v: number) { this._textColor = v; }
+  get textHeight() { return this._textHeight; }
+  set textHeight(v: number) { this._textHeight = v; }
+  get textWidth() { return this._textWidth; }
+  set textWidth(v: number) { this._textWidth = v; }
+  get thickness() { return this._thickness; }
+  set thickness(v: number) { this._thickness = v; }
+  get type() { return this._type; }
+  set type(v: string) { this._type = v; }
+  get useRichTextClipboard() { return this._useRichTextClipboard; }
+  set useRichTextClipboard(v: boolean) { this._useRichTextClipboard = v; }
+  get wordWrap() { return this._wordWrap; }
+  set wordWrap(v: boolean) { this._wordWrap = v; }
 
   private _text = "";
   private _htmlText = "";
@@ -181,7 +252,7 @@ export class TextField extends InteractiveObject {
   set text(value: string) {
     this._text = value;
     this._htmlText = value;
-    this.numLines = (value.match(/\n/g) || []).length + 1;
+    this._numLines = (value.match(/\n/g) || []).length + 1;
   }
 
   get htmlText(): string {
@@ -191,7 +262,7 @@ export class TextField extends InteractiveObject {
     this._htmlText = value;
     // Strip tags for the plain text representation.
     this._text = value.replace(/<[^>]*>/g, "");
-    this.numLines = (this._text.match(/\n/g) || []).length + 1;
+    this._numLines = (this._text.match(/\n/g) || []).length + 1;
   }
 
   get length(): number {
@@ -374,9 +445,16 @@ export class TextField extends InteractiveObject {
 // ---------------------------------------------------------------------------
 
 export class Font {
-  fontName = "";
-  fontStyle = "regular";
-  fontType = "embedded";
+  _fontName = "";
+  _fontStyle = "regular";
+  _fontType = "embedded";
+
+  get fontName() { return this._fontName; }
+  set fontName(v: string) { this._fontName = v; }
+  get fontStyle() { return this._fontStyle; }
+  set fontStyle(v: string) { this._fontStyle = v; }
+  get fontType() { return this._fontType; }
+  set fontType(v: string) { this._fontType = v; }
 
   /** @internal */
   static _registry: Font[] = [];

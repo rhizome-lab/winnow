@@ -499,8 +499,13 @@ export class ColorTransform {
 // ---------------------------------------------------------------------------
 
 export class Transform {
-  matrix: Matrix = new Matrix();
-  colorTransform: ColorTransform = new ColorTransform();
+  _matrix: Matrix = new Matrix();
+  _colorTransform: ColorTransform = new ColorTransform();
+
+  get matrix() { return this._matrix; }
+  set matrix(v: Matrix) { this._matrix = v; }
+  get colorTransform() { return this._colorTransform; }
+  set colorTransform(v: ColorTransform) { this._colorTransform = v; }
 
   /** @internal */
   _owner: any;

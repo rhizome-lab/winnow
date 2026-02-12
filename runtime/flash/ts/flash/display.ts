@@ -170,60 +170,101 @@ export class Graphics {
 // ---------------------------------------------------------------------------
 
 export class DisplayObject extends EventDispatcher {
-  alpha = 1;
-  blendMode = "normal";
-  cacheAsBitmap = false;
-  filters: any[] = [];
-  // These four properties are commonly overridden by subclass setters
-  // (e.g. UIComponent).  Using backing-field + getter/setter ensures that
-  // the field initialiser (_height = 0) never triggers a subclass setter
-  // during construction — matching AVM2 native-property semantics.
+  // All DisplayObject properties are native in AVM2 (getter/setter provided
+  // by the VM).  We use backing-field + getter/setter so that field
+  // initialisers never trigger subclass setters during construction.
+  _alpha = 1;
+  _blendMode: string = "normal";
+  _cacheAsBitmap = false;
+  _filters: any[] = [];
   _height = 0;
+  _loaderInfo: LoaderInfo | null = null;
+  _mask: DisplayObject | null = null;
+  _mouseX = 0;
+  _mouseY = 0;
+  _name = "";
+  _opaqueBackground: number | null = null;
+  _parent: DisplayObjectContainer | null = null;
+  _root: DisplayObject | null = null;
+  _rotation = 0;
+  _rotationX = 0;
+  _rotationY = 0;
+  _rotationZ = 0;
+  _scale9Grid: Rectangle | null = null;
+  _scaleX = 1;
+  _scaleY = 1;
+  _scaleZ = 1;
+  _scrollRect: Rectangle | null = null;
+  _stage: Stage | null = null;
+  _transform: Transform;
+  _visible = true;
   _width = 0;
   _x = 0;
   _y = 0;
+  _z = 0;
 
-  _scaleX = 1;
-  _scaleY = 1;
-  _visible = true;
-
+  get alpha() { return this._alpha; }
+  set alpha(v: number) { this._alpha = v; }
+  get blendMode() { return this._blendMode; }
+  set blendMode(v: string) { this._blendMode = v; }
+  get cacheAsBitmap() { return this._cacheAsBitmap; }
+  set cacheAsBitmap(v: boolean) { this._cacheAsBitmap = v; }
+  get filters() { return this._filters; }
+  set filters(v: any[]) { this._filters = v; }
   get height() { return this._height; }
   set height(v: number) { this._height = v; }
+  get loaderInfo() { return this._loaderInfo; }
+  set loaderInfo(v: LoaderInfo | null) { this._loaderInfo = v; }
+  get mask() { return this._mask; }
+  set mask(v: DisplayObject | null) { this._mask = v; }
+  get mouseX() { return this._mouseX; }
+  set mouseX(v: number) { this._mouseX = v; }
+  get mouseY() { return this._mouseY; }
+  set mouseY(v: number) { this._mouseY = v; }
+  get name() { return this._name; }
+  set name(v: string) { this._name = v; }
+  get opaqueBackground() { return this._opaqueBackground; }
+  set opaqueBackground(v: number | null) { this._opaqueBackground = v; }
+  get parent() { return this._parent; }
+  set parent(v: DisplayObjectContainer | null) { this._parent = v; }
+  get root() { return this._root; }
+  set root(v: DisplayObject | null) { this._root = v; }
+  get rotation() { return this._rotation; }
+  set rotation(v: number) { this._rotation = v; }
+  get rotationX() { return this._rotationX; }
+  set rotationX(v: number) { this._rotationX = v; }
+  get rotationY() { return this._rotationY; }
+  set rotationY(v: number) { this._rotationY = v; }
+  get rotationZ() { return this._rotationZ; }
+  set rotationZ(v: number) { this._rotationZ = v; }
+  get scale9Grid() { return this._scale9Grid; }
+  set scale9Grid(v: Rectangle | null) { this._scale9Grid = v; }
+  get scaleX() { return this._scaleX; }
+  set scaleX(v: number) { this._scaleX = v; }
+  get scaleY() { return this._scaleY; }
+  set scaleY(v: number) { this._scaleY = v; }
+  get scaleZ() { return this._scaleZ; }
+  set scaleZ(v: number) { this._scaleZ = v; }
+  get scrollRect() { return this._scrollRect; }
+  set scrollRect(v: Rectangle | null) { this._scrollRect = v; }
+  get stage() { return this._stage; }
+  set stage(v: Stage | null) { this._stage = v; }
+  get transform() { return this._transform; }
+  set transform(v: Transform) { this._transform = v; }
+  get visible() { return this._visible; }
+  set visible(v: boolean) { this._visible = v; }
   get width() { return this._width; }
   set width(v: number) { this._width = v; }
   get x() { return this._x; }
   set x(v: number) { this._x = v; }
   get y() { return this._y; }
   set y(v: number) { this._y = v; }
-  get scaleX() { return this._scaleX; }
-  set scaleX(v: number) { this._scaleX = v; }
-  get scaleY() { return this._scaleY; }
-  set scaleY(v: number) { this._scaleY = v; }
-  get visible() { return this._visible; }
-  set visible(v: boolean) { this._visible = v; }
-
-  loaderInfo: LoaderInfo | null = null;
-  mask: DisplayObject | null = null;
-  mouseX = 0;
-  mouseY = 0;
-  name = "";
-  opaqueBackground: number | null = null;
-  parent: DisplayObjectContainer | null = null;
-  root: DisplayObject | null = null;
-  rotation = 0;
-  rotationX = 0;
-  rotationY = 0;
-  rotationZ = 0;
-  scale9Grid: Rectangle | null = null;
-  scaleZ = 1;
-  scrollRect: Rectangle | null = null;
-  stage: Stage | null = null;
-  transform: Transform;
-  z = 0;
+  get z() { return this._z; }
+  set z(v: number) { this._z = v; }
 
   constructor() {
     super();
-    this.transform = new Transform(this);
+    this._transform = new Transform(this);
   }
 
   getBounds(targetCoordinateSpace: DisplayObject): Rectangle {
@@ -335,12 +376,25 @@ export class DisplayObject extends EventDispatcher {
 // ---------------------------------------------------------------------------
 
 export class InteractiveObject extends DisplayObject {
-  contextMenu: any = null;
-  doubleClickEnabled = false;
-  focusRect: any = null;
-  mouseEnabled = true;
-  tabEnabled = false;
-  tabIndex = -1;
+  _contextMenu: object | null = null;
+  _doubleClickEnabled = false;
+  _focusRect: boolean | null = null;
+  _mouseEnabled = true;
+  _tabEnabled = false;
+  _tabIndex = -1;
+
+  get contextMenu() { return this._contextMenu; }
+  set contextMenu(v: object | null) { this._contextMenu = v; }
+  get doubleClickEnabled() { return this._doubleClickEnabled; }
+  set doubleClickEnabled(v: boolean) { this._doubleClickEnabled = v; }
+  get focusRect() { return this._focusRect; }
+  set focusRect(v: boolean | null) { this._focusRect = v; }
+  get mouseEnabled() { return this._mouseEnabled; }
+  set mouseEnabled(v: boolean) { this._mouseEnabled = v; }
+  get tabEnabled() { return this._tabEnabled; }
+  set tabEnabled(v: boolean) { this._tabEnabled = v; }
+  get tabIndex() { return this._tabIndex; }
+  set tabIndex(v: number) { this._tabIndex = v; }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,9 +402,14 @@ export class InteractiveObject extends DisplayObject {
 // ---------------------------------------------------------------------------
 
 export class DisplayObjectContainer extends InteractiveObject {
-  mouseChildren = true;
-  tabChildren = true;
+  _mouseChildren = true;
+  _tabChildren = true;
   private _children: DisplayObject[] = [];
+
+  get mouseChildren() { return this._mouseChildren; }
+  set mouseChildren(v: boolean) { this._mouseChildren = v; }
+  get tabChildren() { return this._tabChildren; }
+  set tabChildren(v: boolean) { this._tabChildren = v; }
 
   get numChildren(): number {
     return this._children.length;
@@ -454,7 +513,10 @@ export class DisplayObjectContainer extends InteractiveObject {
 // ---------------------------------------------------------------------------
 
 export class Shape extends DisplayObject {
-  graphics: Graphics = new Graphics();
+  _graphics: Graphics = new Graphics();
+
+  get graphics() { return this._graphics; }
+  set graphics(v: Graphics) { this._graphics = v; }
 }
 
 // ---------------------------------------------------------------------------
@@ -462,15 +524,22 @@ export class Shape extends DisplayObject {
 // ---------------------------------------------------------------------------
 
 export class Bitmap extends DisplayObject {
-  bitmapData: any = null;
-  pixelSnapping = "auto";
-  smoothing = false;
+  _bitmapData: any /* BitmapData */ | null = null;
+  _pixelSnapping = "auto";
+  _smoothing = false;
 
-  constructor(bitmapData: any = null, pixelSnapping = "auto", smoothing = false) {
+  get bitmapData() { return this._bitmapData; }
+  set bitmapData(v: any /* BitmapData */ | null) { this._bitmapData = v; }
+  get pixelSnapping() { return this._pixelSnapping; }
+  set pixelSnapping(v: string) { this._pixelSnapping = v; }
+  get smoothing() { return this._smoothing; }
+  set smoothing(v: boolean) { this._smoothing = v; }
+
+  constructor(bitmapData: any /* BitmapData */ | null = null, pixelSnapping = "auto", smoothing = false) {
     super();
-    this.bitmapData = bitmapData;
-    this.pixelSnapping = pixelSnapping;
-    this.smoothing = smoothing;
+    this._bitmapData = bitmapData;
+    this._pixelSnapping = pixelSnapping;
+    this._smoothing = smoothing;
   }
 }
 
@@ -500,12 +569,25 @@ export function _setDragOffset(ox: number, oy: number): void {
 // ---------------------------------------------------------------------------
 
 export class Sprite extends DisplayObjectContainer {
-  buttonMode = false;
-  dropTarget: DisplayObject | null = null;
-  graphics: Graphics = new Graphics();
-  hitArea: Sprite | null = null;
-  soundTransform: any = null;
-  useHandCursor = true;
+  _buttonMode = false;
+  _dropTarget: DisplayObject | null = null;
+  _graphics: Graphics = new Graphics();
+  _hitArea: Sprite | null = null;
+  _soundTransform: object | null = null;
+  _useHandCursor = true;
+
+  get buttonMode() { return this._buttonMode; }
+  set buttonMode(v: boolean) { this._buttonMode = v; }
+  get dropTarget() { return this._dropTarget; }
+  set dropTarget(v: DisplayObject | null) { this._dropTarget = v; }
+  get graphics() { return this._graphics; }
+  set graphics(v: Graphics) { this._graphics = v; }
+  get hitArea() { return this._hitArea; }
+  set hitArea(v: Sprite | null) { this._hitArea = v; }
+  get soundTransform() { return this._soundTransform; }
+  set soundTransform(v: object | null) { this._soundTransform = v; }
+  get useHandCursor() { return this._useHandCursor; }
+  set useHandCursor(v: boolean) { this._useHandCursor = v; }
 
   startDrag(lockCenter = false, bounds: Rectangle | null = null): void {
     _dragTarget = this;
@@ -555,19 +637,40 @@ export class Scene {
 // ---------------------------------------------------------------------------
 
 export class MovieClip extends Sprite {
-  currentFrame = 1;
-  currentFrameLabel: string | null = null;
-  currentLabel: string | null = null;
-  currentLabels: FrameLabel[] = [];
-  currentScene: Scene | null = null;
+  _currentFrame = 1;
+  _currentFrameLabel: string | null = null;
+  _currentLabel: string | null = null;
+  _currentLabels: FrameLabel[] = [];
+  _currentScene: Scene | null = null;
   _enabled = true;
+  _framesLoaded = 1;
+  _isPlaying = false;
+  _scenes: Scene[] = [];
+  _totalFrames = 1;
+  _trackAsMenu = false;
+
+  get currentFrame() { return this._currentFrame; }
+  set currentFrame(v: number) { this._currentFrame = v; }
+  get currentFrameLabel() { return this._currentFrameLabel; }
+  set currentFrameLabel(v: string | null) { this._currentFrameLabel = v; }
+  get currentLabel() { return this._currentLabel; }
+  set currentLabel(v: string | null) { this._currentLabel = v; }
+  get currentLabels() { return this._currentLabels; }
+  set currentLabels(v: FrameLabel[]) { this._currentLabels = v; }
+  get currentScene() { return this._currentScene; }
+  set currentScene(v: Scene | null) { this._currentScene = v; }
   get enabled() { return this._enabled; }
   set enabled(v: boolean) { this._enabled = v; }
-  framesLoaded = 1;
-  isPlaying = false;
-  scenes: Scene[] = [];
-  totalFrames = 1;
-  trackAsMenu = false;
+  get framesLoaded() { return this._framesLoaded; }
+  set framesLoaded(v: number) { this._framesLoaded = v; }
+  get isPlaying() { return this._isPlaying; }
+  set isPlaying(v: boolean) { this._isPlaying = v; }
+  get scenes() { return this._scenes; }
+  set scenes(v: Scene[]) { this._scenes = v; }
+  get totalFrames() { return this._totalFrames; }
+  set totalFrames(v: number) { this._totalFrames = v; }
+  get trackAsMenu() { return this._trackAsMenu; }
+  set trackAsMenu(v: boolean) { this._trackAsMenu = v; }
 
   /** @internal */
   _frameScripts: Map<number, Function> = new Map();
@@ -774,24 +877,61 @@ _timelineFactories.set("Bitmap", () => new Bitmap());
 // ---------------------------------------------------------------------------
 
 export class LoaderInfo extends EventDispatcher {
-  actionScriptVersion = 3;
-  applicationDomain: any = null;
-  bytes: any = null;
-  bytesLoaded = 0;
-  bytesTotal = 0;
-  childAllowsParent = true;
-  content: DisplayObject | null = null;
-  contentType = "";
-  frameRate = 24;
-  height = 0;
-  loader: Loader | null = null;
-  loaderURL = "";
-  parameters: Record<string, string> = {};
-  sameDomain = true;
-  sharedEvents: EventDispatcher = new EventDispatcher();
-  swfVersion = 0;
-  url = "";
-  width = 0;
+  _actionScriptVersion = 3;
+  _applicationDomain: object | null = null;
+  _bytes: ArrayBuffer | null = null;
+  _bytesLoaded = 0;
+  _bytesTotal = 0;
+  _childAllowsParent = true;
+  _content: DisplayObject | null = null;
+  _contentType = "";
+  _frameRate = 24;
+  _height = 0;
+  _loader: Loader | null = null;
+  _loaderURL = "";
+  _parameters: Record<string, string> = {};
+  _sameDomain = true;
+  _sharedEvents: EventDispatcher = new EventDispatcher();
+  _swfVersion = 0;
+  _url = "";
+  _width = 0;
+
+  get actionScriptVersion() { return this._actionScriptVersion; }
+  set actionScriptVersion(v: number) { this._actionScriptVersion = v; }
+  get applicationDomain() { return this._applicationDomain; }
+  set applicationDomain(v: object | null) { this._applicationDomain = v; }
+  get bytes() { return this._bytes; }
+  set bytes(v: ArrayBuffer | null) { this._bytes = v; }
+  get bytesLoaded() { return this._bytesLoaded; }
+  set bytesLoaded(v: number) { this._bytesLoaded = v; }
+  get bytesTotal() { return this._bytesTotal; }
+  set bytesTotal(v: number) { this._bytesTotal = v; }
+  get childAllowsParent() { return this._childAllowsParent; }
+  set childAllowsParent(v: boolean) { this._childAllowsParent = v; }
+  get content() { return this._content; }
+  set content(v: DisplayObject | null) { this._content = v; }
+  get contentType() { return this._contentType; }
+  set contentType(v: string) { this._contentType = v; }
+  get frameRate() { return this._frameRate; }
+  set frameRate(v: number) { this._frameRate = v; }
+  get height() { return this._height; }
+  set height(v: number) { this._height = v; }
+  get loader() { return this._loader; }
+  set loader(v: Loader | null) { this._loader = v; }
+  get loaderURL() { return this._loaderURL; }
+  set loaderURL(v: string) { this._loaderURL = v; }
+  get parameters() { return this._parameters; }
+  set parameters(v: Record<string, string>) { this._parameters = v; }
+  get sameDomain() { return this._sameDomain; }
+  set sameDomain(v: boolean) { this._sameDomain = v; }
+  get sharedEvents() { return this._sharedEvents; }
+  set sharedEvents(v: EventDispatcher) { this._sharedEvents = v; }
+  get swfVersion() { return this._swfVersion; }
+  set swfVersion(v: number) { this._swfVersion = v; }
+  get url() { return this._url; }
+  set url(v: string) { this._url = v; }
+  get width() { return this._width; }
+  set width(v: number) { this._width = v; }
 }
 
 // ---------------------------------------------------------------------------
@@ -799,13 +939,18 @@ export class LoaderInfo extends EventDispatcher {
 // ---------------------------------------------------------------------------
 
 export class Loader extends DisplayObjectContainer {
-  content: DisplayObject | null = null;
-  contentLoaderInfo: LoaderInfo = new LoaderInfo();
+  _content: DisplayObject | null = null;
+  _contentLoaderInfo: LoaderInfo = new LoaderInfo();
   private _abortController: AbortController | null = null;
+
+  get content() { return this._content; }
+  set content(v: DisplayObject | null) { this._content = v; }
+  get contentLoaderInfo() { return this._contentLoaderInfo; }
+  set contentLoaderInfo(v: LoaderInfo) { this._contentLoaderInfo = v; }
 
   constructor() {
     super();
-    this.contentLoaderInfo.loader = this;
+    this._contentLoaderInfo.loader = this;
   }
 
   close(): void {
@@ -921,20 +1066,49 @@ function clearStageRecursive(node: DisplayObject): void {
 // ---------------------------------------------------------------------------
 
 export class Stage extends DisplayObjectContainer {
-  stageWidth = 550;
-  stageHeight = 400;
-  frameRate = 24;
-  quality = "HIGH";
-  focus: InteractiveObject | null = null;
-  align = "";
-  scaleMode = "showAll";
-  showDefaultContextMenu = true;
-  stageFocusRect = true;
-  color = 0xffffff;
-  displayState = "normal";
-  fullScreenSourceRect: Rectangle | null = null;
-  fullScreenWidth = 0;
-  fullScreenHeight = 0;
+  _stageWidth = 550;
+  _stageHeight = 400;
+  _frameRate = 24;
+  _quality = "HIGH";
+  _focus: InteractiveObject | null = null;
+  _align = "";
+  _scaleMode = "showAll";
+  _showDefaultContextMenu = true;
+  _stageFocusRect = true;
+  _color = 0xffffff;
+  _displayState = "normal";
+  _fullScreenSourceRect: Rectangle | null = null;
+  _fullScreenWidth = 0;
+  _fullScreenHeight = 0;
+
+  get stageWidth() { return this._stageWidth; }
+  set stageWidth(v: number) { this._stageWidth = v; }
+  get stageHeight() { return this._stageHeight; }
+  set stageHeight(v: number) { this._stageHeight = v; }
+  get frameRate() { return this._frameRate; }
+  set frameRate(v: number) { this._frameRate = v; }
+  get quality() { return this._quality; }
+  set quality(v: string) { this._quality = v; }
+  get focus() { return this._focus; }
+  set focus(v: InteractiveObject | null) { this._focus = v; }
+  get align() { return this._align; }
+  set align(v: string) { this._align = v; }
+  get scaleMode() { return this._scaleMode; }
+  set scaleMode(v: string) { this._scaleMode = v; }
+  get showDefaultContextMenu() { return this._showDefaultContextMenu; }
+  set showDefaultContextMenu(v: boolean) { this._showDefaultContextMenu = v; }
+  get stageFocusRect() { return this._stageFocusRect; }
+  set stageFocusRect(v: boolean) { this._stageFocusRect = v; }
+  get color() { return this._color; }
+  set color(v: number) { this._color = v; }
+  get displayState() { return this._displayState; }
+  set displayState(v: string) { this._displayState = v; }
+  get fullScreenSourceRect() { return this._fullScreenSourceRect; }
+  set fullScreenSourceRect(v: Rectangle | null) { this._fullScreenSourceRect = v; }
+  get fullScreenWidth() { return this._fullScreenWidth; }
+  set fullScreenWidth(v: number) { this._fullScreenWidth = v; }
+  get fullScreenHeight() { return this._fullScreenHeight; }
+  set fullScreenHeight(v: number) { this._fullScreenHeight = v; }
 
   /** @internal */
   _invalidated = false;

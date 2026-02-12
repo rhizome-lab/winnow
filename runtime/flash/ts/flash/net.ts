@@ -32,15 +32,28 @@ export abstract class IDynamicPropertyWriter {
 // ---------------------------------------------------------------------------
 
 export class URLRequest {
-  url: string;
-  method = "GET";
-  data: any = null;
-  contentType = "application/x-www-form-urlencoded";
-  requestHeaders: any[] = [];
-  digest: string | null = null;
+  _url: string;
+  _method = "GET";
+  _data: object | string | null = null;
+  _contentType = "application/x-www-form-urlencoded";
+  _requestHeaders: object[] = [];
+  _digest: string | null = null;
+
+  get url() { return this._url; }
+  set url(v: string) { this._url = v; }
+  get method() { return this._method; }
+  set method(v: string) { this._method = v; }
+  get data() { return this._data; }
+  set data(v: object | string | null) { this._data = v; }
+  get contentType() { return this._contentType; }
+  set contentType(v: string) { this._contentType = v; }
+  get requestHeaders() { return this._requestHeaders; }
+  set requestHeaders(v: object[]) { this._requestHeaders = v; }
+  get digest() { return this._digest; }
+  set digest(v: string | null) { this._digest = v; }
 
   constructor(url = "") {
-    this.url = url;
+    this._url = url;
   }
 }
 
@@ -59,10 +72,19 @@ export class URLLoaderDataFormat {
 // ---------------------------------------------------------------------------
 
 export class URLLoader extends EventDispatcher {
-  bytesLoaded = 0;
-  bytesTotal = 0;
-  data: any = null;
-  dataFormat = URLLoaderDataFormat.TEXT;
+  _bytesLoaded = 0;
+  _bytesTotal = 0;
+  _data: any = null;
+  _dataFormat: string = URLLoaderDataFormat.TEXT;
+
+  get bytesLoaded() { return this._bytesLoaded; }
+  set bytesLoaded(v: number) { this._bytesLoaded = v; }
+  get bytesTotal() { return this._bytesTotal; }
+  set bytesTotal(v: number) { this._bytesTotal = v; }
+  get data() { return this._data; }
+  set data(v: any) { this._data = v; }
+  get dataFormat() { return this._dataFormat; }
+  set dataFormat(v: string) { this._dataFormat = v; }
 
   constructor(request?: URLRequest) {
     super();
@@ -106,14 +128,31 @@ export class URLLoader extends EventDispatcher {
 // ---------------------------------------------------------------------------
 
 export class FileReference extends EventDispatcher {
-  creationDate: Date | null = null;
-  creator: string | null = null;
-  data: any = null;
-  extension: string | null = null;
-  modificationDate: Date | null = null;
-  name: string | null = null;
-  size = 0;
-  type: string | null = null;
+  _creationDate: Date | null = null;
+  _creator: string | null = null;
+  _data: ArrayBuffer | null = null;
+  _extension: string | null = null;
+  _modificationDate: Date | null = null;
+  _name: string | null = null;
+  _size = 0;
+  _type: string | null = null;
+
+  get creationDate() { return this._creationDate; }
+  set creationDate(v: Date | null) { this._creationDate = v; }
+  get creator() { return this._creator; }
+  set creator(v: string | null) { this._creator = v; }
+  get data() { return this._data; }
+  set data(v: ArrayBuffer | null) { this._data = v; }
+  get extension() { return this._extension; }
+  set extension(v: string | null) { this._extension = v; }
+  get modificationDate() { return this._modificationDate; }
+  set modificationDate(v: Date | null) { this._modificationDate = v; }
+  get name() { return this._name; }
+  set name(v: string | null) { this._name = v; }
+  get size() { return this._size; }
+  set size(v: number) { this._size = v; }
+  get type() { return this._type; }
+  set type(v: string | null) { this._type = v; }
 
   browse(_typeFilter?: any[]): boolean {
     return false;
@@ -152,9 +191,16 @@ const SHARED_OBJECT_PREFIX = "flash_so_";
 export class SharedObject {
   private _name = "";
   private _data: Record<string, any> = {};
-  size = 0;
-  client: any = null;
-  objectEncoding = 3;
+  _size = 0;
+  _client: object | null = null;
+  _objectEncoding = 3;
+
+  get size() { return this._size; }
+  set size(v: number) { this._size = v; }
+  get client() { return this._client; }
+  set client(v: object | null) { this._client = v; }
+  get objectEncoding() { return this._objectEncoding; }
+  set objectEncoding(v: number) { this._objectEncoding = v; }
 
   get data(): Record<string, any> {
     return this._data;

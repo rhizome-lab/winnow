@@ -298,9 +298,16 @@ export class ByteArray {
   private _buffer: ArrayBuffer;
   private _view: DataView;
   private _length: number;
-  position = 0;
-  endian: string = BIG_ENDIAN;
-  objectEncoding = 3;
+  _position = 0;
+  _endian: string = BIG_ENDIAN;
+  _objectEncoding = 3;
+
+  get position() { return this._position; }
+  set position(v: number) { this._position = v; }
+  get endian() { return this._endian; }
+  set endian(v: string) { this._endian = v; }
+  get objectEncoding() { return this._objectEncoding; }
+  set objectEncoding(v: number) { this._objectEncoding = v; }
 
   constructor() {
     this._buffer = new ArrayBuffer(64);
