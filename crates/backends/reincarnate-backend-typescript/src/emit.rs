@@ -5,8 +5,8 @@ use std::path::Path;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{
-    structurize, CastKind, ClassDef, ExternalImport, FuncId, Function, MethodKind, Module, Op,
-    StructDef, Type, Visibility,
+    structurize, CastKind, ClassDef, Constant, ExternalImport, FuncId, Function, MethodKind,
+    Module, Op, StructDef, Type, Visibility,
 };
 use reincarnate_core::pipeline::LoweringConfig;
 use reincarnate_core::project::{ExternalTypeDef, RuntimeConfig};
@@ -58,15 +58,17 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     emit_enums(module, &mut out);
     emit_globals(module, &mut out);
 
+    // Single-file mode — globals are in the same scope, no ESM setter rewrite needed.
+    let no_mutable_globals = HashSet::new();
     if module.classes.is_empty() {
-        emit_functions(module, &class_names, lowering_config, &mut out)?;
+        emit_functions(module, &class_names, &no_mutable_globals, lowering_config, &mut out)?;
     } else {
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, lowering_config, &mut out)?;
         }
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, lowering_config, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &no_mutable_globals, lowering_config, &mut out)?;
         }
     }
 
@@ -574,6 +576,10 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     let type_defs = runtime_config.map(|c| &c.type_definitions).unwrap_or(&empty_type_defs);
     let class_meta = ClassMeta::build(module, type_defs);
     let global_names: HashSet<String> = module.globals.iter().map(|g| g.name.clone()).collect();
+    let mutable_global_names: HashSet<String> = module.globals.iter()
+        .filter(|g| g.mutable)
+        .map(|g| g.name.clone())
+        .collect();
     let short_to_qualified: HashMap<String, String> = module
         .classes
         .iter()
@@ -613,6 +619,13 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
                 );
             } else {
                 let _ = writeln!(out, "export {kw} {ident}: {ts};");
+            }
+            // ESM setter for mutable globals — imports are read-only bindings.
+            if global.mutable {
+                let _ = writeln!(
+                    out,
+                    "export function $set_{ident}(v: {ts}) {{ {ident} = v; }}"
+                );
             }
         }
         let path = module_dir.join("_globals.ts");
@@ -659,14 +672,14 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, depth, &mut out);
+        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, depth, &mut out);
 
         // Validate member accesses before emitting (warnings only).
         for &fid in &group.methods {
             validate_member_accesses(&module.functions[fid], Some(&qualified), &class_meta, &registry, &short_to_qualified, type_defs);
         }
 
-        emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -706,9 +719,21 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         }
         emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, "..", &mut out);
 
+        // Globals imports for free functions.
+        if !refs.globals_used.is_empty() {
+            let mut import_names: Vec<String> = Vec::new();
+            for name in &refs.globals_used {
+                import_names.push(sanitize_ident(name));
+                if mutable_global_names.contains(name.as_str()) {
+                    import_names.push(format!("$set_{}", sanitize_ident(name)));
+                }
+            }
+            let _ = writeln!(out, "import {{ {} }} from \"./_globals\";", import_names.join(", "));
+        }
+
         emit_imports(module, &mut out);
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, lowering_config, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &mutable_global_names, lowering_config, &mut out)?;
         }
         let path = module_dir.join("_init.ts");
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -1274,6 +1299,7 @@ fn emit_intra_imports(
     static_method_owners: &HashMap<String, String>,
     static_field_owners: &HashMap<String, String>,
     global_names: &HashSet<String>,
+    mutable_global_names: &HashSet<String>,
     depth: usize,
     out: &mut String,
 ) {
@@ -1317,8 +1343,15 @@ fn emit_intra_imports(
             let prefix = "../".repeat(depth);
             format!("{}_globals", prefix)
         };
-        let names: Vec<_> = refs.globals_used.iter().map(|s| s.as_str()).collect();
-        let _ = writeln!(out, "import {{ {} }} from \"{globals_path}\";", names.join(", "));
+        let mut import_names: Vec<String> = Vec::new();
+        for name in &refs.globals_used {
+            import_names.push(sanitize_ident(name));
+            // Also import the setter for mutable globals.
+            if mutable_global_names.contains(name.as_str()) {
+                import_names.push(format!("$set_{}", sanitize_ident(name)));
+            }
+        }
+        let _ = writeln!(out, "import {{ {} }} from \"{globals_path}\";", import_names.join(", "));
     }
     out.push('\n');
 }
@@ -1422,17 +1455,91 @@ fn emit_globals(module: &Module, out: &mut String) {
 }
 
 // ---------------------------------------------------------------------------
+// Global assignment rewriting (ESM compatibility)
+// ---------------------------------------------------------------------------
+
+/// Rewrite assignments to mutable globals into setter function calls.
+///
+/// ES modules make `import { x }` a read-only binding. To write to `x` from
+/// another module, the exporting module provides `$set_x(v)`. This pass
+/// rewrites `x = v` → `$set_x(v)` and `x op= v` → `$set_x(x op v)`.
+fn rewrite_global_assignments(body: &mut [JsStmt], mutable_globals: &HashSet<String>) {
+    if mutable_globals.is_empty() {
+        return;
+    }
+    for stmt in body.iter_mut() {
+        match stmt {
+            JsStmt::Assign {
+                target: JsExpr::Var(name),
+                ..
+            } if mutable_globals.contains(name.as_str()) => {
+                // Replace: `name = value` → `$set_name(value)`
+                let setter = format!("$set_{name}");
+                let dummy = JsExpr::Literal(Constant::Null);
+                if let JsStmt::Assign { value, .. } = std::mem::replace(stmt, JsStmt::Expr(dummy.clone())) {
+                    *stmt = JsStmt::Expr(JsExpr::Call {
+                        callee: Box::new(JsExpr::Var(setter)),
+                        args: vec![value],
+                    });
+                }
+            }
+            JsStmt::CompoundAssign {
+                target: JsExpr::Var(name),
+                ..
+            } if mutable_globals.contains(name.as_str()) => {
+                // Replace: `name op= value` → `$set_name(name op value)`
+                let var_name = name.clone();
+                let setter = format!("$set_{var_name}");
+                let dummy = JsExpr::Literal(Constant::Null);
+                if let JsStmt::CompoundAssign { op, value, .. } = std::mem::replace(stmt, JsStmt::Expr(dummy.clone())) {
+                    *stmt = JsStmt::Expr(JsExpr::Call {
+                        callee: Box::new(JsExpr::Var(setter)),
+                        args: vec![JsExpr::Binary {
+                            op,
+                            lhs: Box::new(JsExpr::Var(var_name)),
+                            rhs: Box::new(value),
+                        }],
+                    });
+                }
+            }
+            // Recurse into nested bodies.
+            JsStmt::If { then_body, else_body, .. } => {
+                rewrite_global_assignments(then_body, mutable_globals);
+                rewrite_global_assignments(else_body, mutable_globals);
+            }
+            JsStmt::While { body, .. }
+            | JsStmt::Loop { body }
+            | JsStmt::ForOf { body, .. } => {
+                rewrite_global_assignments(body, mutable_globals);
+            }
+            JsStmt::For { init, body, update, .. } => {
+                rewrite_global_assignments(init, mutable_globals);
+                rewrite_global_assignments(body, mutable_globals);
+                rewrite_global_assignments(update, mutable_globals);
+            }
+            JsStmt::Dispatch { blocks, .. } => {
+                for (_, stmts) in blocks {
+                    rewrite_global_assignments(stmts, mutable_globals);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Functions
 // ---------------------------------------------------------------------------
 
 fn emit_functions(
     module: &mut Module,
     class_names: &HashMap<String, String>,
+    mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     for id in module.functions.keys().collect::<Vec<_>>() {
-        emit_function(&mut module.functions[id], class_names, lowering_config, out)?;
+        emit_function(&mut module.functions[id], class_names, mutable_global_names, lowering_config, out)?;
     }
     Ok(())
 }
@@ -1440,6 +1547,7 @@ fn emit_functions(
 fn emit_function(
     func: &mut Function,
     class_names: &HashMap<String, String>,
+    mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -1465,7 +1573,8 @@ fn emit_function(
         const_instance_fields: HashSet::new(),
         class_short_name: None,
     };
-    let js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
+    let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
+    rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     crate::ast_printer::print_function(&js_func, out);
     Ok(())
 }
@@ -1622,6 +1731,7 @@ fn emit_class(
     module: &mut Module,
     class_names: &HashMap<String, String>,
     class_meta: &ClassMeta,
+    mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -1713,7 +1823,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -1748,6 +1858,7 @@ fn emit_class_method(
     suppress_super: bool,
     const_instance_fields: &HashSet<String>,
     class_short_name: &str,
+    mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -1800,6 +1911,7 @@ fn emit_class_method(
         class_short_name: Some(class_short_name.to_string()),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
+    rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     // Hoist super() to top of constructor body (after rewrite produces SuperCall nodes).
     if func.method_kind == MethodKind::Constructor {
         crate::rewrites::flash::hoist_super_call(
