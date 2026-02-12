@@ -371,7 +371,41 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     let registry = ClassRegistry::from_module(module);
     let class_names = build_class_names(module);
     let class_meta = ClassMeta::build(module);
+    let global_names: HashSet<String> = module.globals.iter().map(|g| g.name.clone()).collect();
     let mut barrel_exports: Vec<String> = Vec::new();
+
+    // Globals → _globals.ts (at module root).
+    if !module.globals.is_empty() {
+        let mut out = String::new();
+
+        // Collect type imports for Struct-typed globals.
+        let mut type_imports: BTreeSet<String> = BTreeSet::new();
+        for global in &module.globals {
+            collect_global_type_imports(&global.ty, &registry, &mut type_imports);
+        }
+        for short_name in &type_imports {
+            if let Some(entry) = registry.classes.get(short_name) {
+                let rel = format!("./{}", entry.path_segments.join("/"));
+                let _ = writeln!(out, "import type {{ {short_name} }} from \"{rel}\";");
+            }
+        }
+        if !type_imports.is_empty() {
+            out.push('\n');
+        }
+
+        for global in &module.globals {
+            let kw = if global.mutable { "let" } else { "const" };
+            let _ = writeln!(
+                out,
+                "export {kw} {}: {};",
+                sanitize_ident(&global.name),
+                ts_type(&global.ty)
+            );
+        }
+        let path = module_dir.join("_globals.ts");
+        fs::write(&path, &out).map_err(CoreError::Io)?;
+        barrel_exports.push("_globals".to_string());
+    }
 
     for group in &class_groups {
         let class_def = &group.class_def;
@@ -412,7 +446,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, depth, &mut out);
+        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, depth, &mut out);
         emit_class(group, module, &class_names, &class_meta, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -448,13 +482,12 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             let func = &module.functions[fid];
             collect_type_refs_from_function(
                 func, "", &registry, &module.external_imports,
-                &HashMap::new(), &HashMap::new(), &mut refs,
+                &HashMap::new(), &HashMap::new(), &global_names, &mut refs,
             );
         }
         emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, "..", &mut out);
 
         emit_imports(module, &mut out);
-        emit_globals(module, &mut out);
         for &fid in &free_funcs {
             emit_function(&mut module.functions[fid], &class_names, lowering_config, &mut out)?;
         }
@@ -690,6 +723,8 @@ struct RefSets {
     ext_value_refs: BTreeSet<String>,
     /// External type-only refs.
     ext_type_refs: BTreeSet<String>,
+    /// Module-level globals referenced via scope lookups.
+    globals_used: BTreeSet<String>,
 }
 
 /// Collect type names referenced by a class group, split into value and type-only refs.
@@ -700,6 +735,7 @@ struct RefSets {
 ///
 /// **Type refs** (erased at runtime):
 /// - Struct field types, function signatures, `Op::Alloc`, `Op::Cast`, `value_types`
+#[allow(clippy::too_many_arguments)]
 fn collect_class_references(
     group: &ClassGroup,
     module: &Module,
@@ -707,6 +743,7 @@ fn collect_class_references(
     external_imports: &BTreeMap<String, ExternalImport>,
     static_method_owners: &HashMap<String, String>,
     static_field_owners: &HashMap<String, String>,
+    global_names: &HashSet<String>,
 ) -> RefSets {
     let self_name = &group.class_def.name;
     let mut refs = RefSets::default();
@@ -743,13 +780,14 @@ fn collect_class_references(
     // Scan all method bodies for type references.
     for &fid in &group.methods {
         let func = &module.functions[fid];
-        collect_type_refs_from_function(func, self_name, registry, external_imports, static_method_owners, static_field_owners, &mut refs);
+        collect_type_refs_from_function(func, self_name, registry, external_imports, static_method_owners, static_field_owners, global_names, &mut refs);
     }
 
     refs
 }
 
 /// Scan a function's instructions and signature for type references.
+#[allow(clippy::too_many_arguments)]
 fn collect_type_refs_from_function(
     func: &Function,
     self_name: &str,
@@ -757,6 +795,7 @@ fn collect_type_refs_from_function(
     external_imports: &BTreeMap<String, ExternalImport>,
     static_method_owners: &HashMap<String, String>,
     static_field_owners: &HashMap<String, String>,
+    global_names: &HashSet<String>,
     refs: &mut RefSets,
 ) {
     use reincarnate_core::ir::Constant;
@@ -846,6 +885,10 @@ fn collect_type_refs_from_function(
                             }
                         }
                     }
+                    // Module-level globals (package variables).
+                    if global_names.contains(bare) {
+                        refs.globals_used.insert(bare.to_string());
+                    }
                 }
             }
             _ => {}
@@ -909,6 +952,36 @@ fn collect_type_ref(
         Type::Union(types) => {
             for t in types {
                 collect_type_ref(t, self_name, registry, external_imports, refs, ext_refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect short names of intra-module classes referenced by a type (for globals).
+fn collect_global_type_imports(ty: &Type, registry: &ClassRegistry, refs: &mut BTreeSet<String>) {
+    match ty {
+        Type::Struct(name) | Type::Enum(name) => {
+            if let Some(entry) = registry.lookup(name) {
+                refs.insert(entry.short_name.clone());
+            }
+        }
+        Type::Array(inner) | Type::Option(inner) => {
+            collect_global_type_imports(inner, registry, refs);
+        }
+        Type::Map(k, v) => {
+            collect_global_type_imports(k, registry, refs);
+            collect_global_type_imports(v, registry, refs);
+        }
+        Type::Tuple(elems) | Type::Union(elems) => {
+            for elem in elems {
+                collect_global_type_imports(elem, registry, refs);
+            }
+        }
+        Type::Function(sig) => {
+            collect_global_type_imports(&sig.return_ty, registry, refs);
+            for p in &sig.params {
+                collect_global_type_imports(p, registry, refs);
             }
         }
         _ => {}
@@ -981,13 +1054,15 @@ fn emit_intra_imports(
     registry: &ClassRegistry,
     static_method_owners: &HashMap<String, String>,
     static_field_owners: &HashMap<String, String>,
+    global_names: &HashSet<String>,
     depth: usize,
     out: &mut String,
 ) {
-    let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners, static_field_owners);
+    let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners, static_field_owners, global_names);
     let has_intra = !refs.value_refs.is_empty() || !refs.type_refs.is_empty();
     let has_ext = !refs.ext_value_refs.is_empty() || !refs.ext_type_refs.is_empty();
-    if !has_intra && !has_ext {
+    let has_globals = !refs.globals_used.is_empty();
+    if !has_intra && !has_ext && !has_globals {
         return;
     }
 
@@ -1014,6 +1089,12 @@ fn emit_intra_imports(
             let rel = relative_import_path(source_segments, &entry.path_segments);
             let _ = writeln!(out, "import type {{ {short_name} }} from \"{rel}\";");
         }
+    }
+    // Module-level globals.
+    if has_globals {
+        let globals_path = format!("{}/_globals", "../".repeat(depth));
+        let names: Vec<_> = refs.globals_used.iter().map(|s| s.as_str()).collect();
+        let _ = writeln!(out, "import {{ {} }} from \"{globals_path}\";", names.join(", "));
     }
     out.push('\n');
 }
