@@ -831,5 +831,67 @@
         "selected": "boolean"
       }
     }
+  },
+  "module_exports": {
+    "flash/accessibility": [
+      "ISearchableText", "ISimpleTextSelection"
+    ],
+    "flash/desktop": [
+      "IFilePromise"
+    ],
+    "flash/display": [
+      "IBitmapDrawable", "IGraphicsData", "IGraphicsFill", "IGraphicsPath",
+      "IGraphicsStroke", "Graphics", "DisplayObject", "InteractiveObject",
+      "DisplayObjectContainer", "Shape", "BitmapData", "Bitmap", "Sprite",
+      "FrameLabel", "Scene", "MovieClip", "LoaderInfo", "Loader", "Stage"
+    ],
+    "flash/events": [
+      "IEventDispatcher", "EventDispatcher", "Event", "TextEvent",
+      "ErrorEvent", "MouseEvent", "KeyboardEvent", "FocusEvent",
+      "ProgressEvent", "IOErrorEvent", "SecurityErrorEvent",
+      "HTTPStatusEvent", "AsyncErrorEvent", "TimerEvent"
+    ],
+    "flash/filters": [
+      "BitmapFilter", "BlurFilter", "DropShadowFilter", "GlowFilter",
+      "ColorMatrixFilter", "BevelFilter", "GradientGlowFilter",
+      "ConvolutionFilter"
+    ],
+    "flash/geom": [
+      "Point", "Rectangle", "Matrix", "ColorTransform", "Transform"
+    ],
+    "flash/media": [
+      "SoundTransform", "SoundLoaderContext", "ID3Info", "SoundChannel",
+      "Sound", "SoundMixer", "Microphone", "Video"
+    ],
+    "flash/net": [
+      "IDynamicPropertyOutput", "IDynamicPropertyWriter",
+      "URLRequestHeader", "FileFilter", "URLRequest",
+      "URLLoaderDataFormat", "URLLoader", "FileReference", "SharedObject"
+    ],
+    "flash/security": [
+      "IURIDereferencer"
+    ],
+    "flash/system": [
+      "ApplicationDomain", "LoaderContext", "Capabilities", "Security",
+      "IMEConversionMode", "IME", "System"
+    ],
+    "flash/text": [
+      "AntiAliasType", "TextFieldType", "TextFieldAutoSize",
+      "TextFormatAlign", "TextLineMetrics", "StyleSheet", "TextFormat",
+      "TextField", "Font"
+    ],
+    "flash/text/ime": [
+      "IIMEClient"
+    ],
+    "flash/ui": [
+      "ContextMenuItem", "ContextMenu", "NativeMenu", "Keyboard", "Mouse"
+    ],
+    "flash/utils": [
+      "IDataInput", "IDataOutput", "IExternalizable", "ByteArray",
+      "Timer", "Dictionary", "Proxy"
+    ],
+    "flash/runtime": [
+      "stage", "flashTick"
+    ]
   }
 }

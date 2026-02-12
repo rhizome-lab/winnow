@@ -22,6 +22,11 @@ pub struct RuntimeConfig {
     /// Keyed by short type name (e.g. `"DisplayObject"`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub type_definitions: BTreeMap<String, ExternalTypeDef>,
+    /// Per-module export lists for import validation.
+    /// Maps module path (e.g. `"flash/display"`) to the names it exports.
+    /// Used to warn when generated imports reference names a module doesn't export.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub module_exports: BTreeMap<String, Vec<String>>,
 }
 
 /// A single system module mapping.

@@ -574,6 +574,8 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     let class_names = build_class_names(module);
     let empty_type_defs = BTreeMap::new();
     let type_defs = runtime_config.map(|c| &c.type_definitions).unwrap_or(&empty_type_defs);
+    let empty_mod_exports = BTreeMap::new();
+    let module_exports = runtime_config.map(|c| &c.module_exports).unwrap_or(&empty_mod_exports);
     let class_meta = ClassMeta::build(module, type_defs);
     let global_names: HashSet<String> = module.globals.iter().map(|g| g.name.clone()).collect();
     let mutable_global_names: HashSet<String> = module.globals.iter()
@@ -672,7 +674,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, depth, &mut out);
+        emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, module_exports, depth, &mut out);
 
         // Validate member accesses before emitting (warnings only).
         for &fid in &group.methods {
@@ -717,7 +719,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
                 &HashMap::new(), &HashMap::new(), &global_names, &mut refs,
             );
         }
-        emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, "..", &mut out);
+        emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, module_exports, "..", &mut out);
 
         // Globals imports for free functions.
         if !refs.globals_used.is_empty() {
@@ -1240,6 +1242,7 @@ fn emit_external_imports(
     ext_value_refs: &BTreeSet<String>,
     ext_type_refs: &BTreeSet<String>,
     external_imports: &BTreeMap<String, ExternalImport>,
+    module_exports: &BTreeMap<String, Vec<String>>,
     prefix: &str,
     out: &mut String,
 ) {
@@ -1247,9 +1250,11 @@ fn emit_external_imports(
         return;
     }
     // Group value refs by module_path, resolving qualified → short names.
+    // Validate each name against module_exports.
     let mut val_by_mod: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for name in ext_value_refs {
         if let Some(imp) = external_imports.get(name.as_str()) {
+            validate_module_export(&imp.short_name, &imp.module_path, module_exports);
             val_by_mod
                 .entry(&imp.module_path)
                 .or_default()
@@ -1273,6 +1278,7 @@ fn emit_external_imports(
     for name in ext_type_refs {
         if let Some(imp) = external_imports.get(name.as_str()) {
             if !val_short_names.contains(imp.short_name.as_str()) {
+                validate_module_export(&imp.short_name, &imp.module_path, module_exports);
                 type_by_mod
                     .entry(&imp.module_path)
                     .or_default()
@@ -1289,6 +1295,32 @@ fn emit_external_imports(
     }
 }
 
+/// Warn if a short name is not listed in `module_exports` for the given module path.
+fn validate_module_export(
+    short_name: &str,
+    module_path: &str,
+    module_exports: &BTreeMap<String, Vec<String>>,
+) {
+    if module_exports.is_empty() {
+        return;
+    }
+    match module_exports.get(module_path) {
+        Some(exports) => {
+            if !exports.iter().any(|e| e == short_name) {
+                eprintln!(
+                    "warning: '{short_name}' is not exported from runtime module '{module_path}'"
+                );
+            }
+        }
+        None => {
+            eprintln!(
+                "warning: runtime module '{module_path}' has no declared exports \
+                 (referenced: {short_name})"
+            );
+        }
+    }
+}
+
 /// Emit `import` / `import type` statements for intra-module class references.
 #[allow(clippy::too_many_arguments)]
 fn emit_intra_imports(
@@ -1300,6 +1332,7 @@ fn emit_intra_imports(
     static_field_owners: &HashMap<String, String>,
     global_names: &HashSet<String>,
     mutable_global_names: &HashSet<String>,
+    module_exports: &BTreeMap<String, Vec<String>>,
     depth: usize,
     out: &mut String,
 ) {
@@ -1315,7 +1348,7 @@ fn emit_intra_imports(
     if has_ext {
         let prefix = "../".repeat(depth + 1);
         let prefix = prefix.trim_end_matches('/');
-        emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, prefix, out);
+        emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, module_exports, prefix, out);
     }
 
     // Intra-module value imports.
