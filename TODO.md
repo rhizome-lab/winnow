@@ -667,6 +667,6 @@ program analysis or conservative assumptions.
 - [ ] **Sprite constant resolution** — `this.sprite_index = 34` should be
   `this.sprite_index = Sprites.spr_dice`. Requires mapping sprite indices to
   enum names at emission time (the Sprites enum already exists in data output).
-- [ ] **Duplicate variable declarations** — Some event handlers emit the same
-  `let i` multiple times in one scope. Likely a structurizer issue with loop
-  variables that get separate block-param declarations.
+- [x] **Duplicate variable declarations** — Fixed: locals map was keyed by
+  `local.index` (CodeLocals slot) but looked up by `var_ref.variable_id` (VARI
+  index). Keyed by variable name instead.
