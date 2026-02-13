@@ -22,6 +22,7 @@
   },
   "type_definitions": {
     "GMLObject": {
+      "open": true,
       "fields": {
         "x": "number",
         "y": "number",

@@ -90,6 +90,10 @@ pub struct ExternalTypeDef {
     /// Parent type name, if any (e.g. `"EventDispatcher"` for `DisplayObject`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
+    /// When true, instances may have arbitrary dynamic fields beyond those
+    /// listed in `fields`/`methods`. Suppresses "has no member" warnings.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
     /// Instance fields: field name → type notation string.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fields: BTreeMap<String, String>,

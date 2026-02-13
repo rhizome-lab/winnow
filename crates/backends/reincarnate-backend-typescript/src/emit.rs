@@ -204,6 +204,24 @@ fn collect_external_members(
     members
 }
 
+/// Check whether an external type (or any of its ancestors) is marked `open`,
+/// meaning instances may have arbitrary dynamic fields. Returns `true` if any
+/// type in the inheritance chain has `open: true`.
+fn is_open_type(start: &str, type_defs: &BTreeMap<String, ExternalTypeDef>) -> bool {
+    let mut current = Some(start);
+    while let Some(name) = current {
+        if let Some(def) = type_defs.get(name) {
+            if def.open {
+                return true;
+            }
+            current = def.extends.as_deref();
+        } else {
+            break;
+        }
+    }
+    false
+}
+
 /// Validate member accesses in a function against known type definitions.
 ///
 /// Checks `GetField` and `SetField` operations: if the object has a known
@@ -250,7 +268,9 @@ fn validate_member_accesses(
                 match short_to_qualified.get(short) {
                     Some(qn) => qn.as_str(),
                     None => {
-                        if type_defs.contains_key(short) {
+                        if type_defs.contains_key(short)
+                            && !is_open_type(short, type_defs)
+                        {
                             let ext_members = collect_external_members(short, type_defs);
                             if !ext_members.contains(bare) {
                                 eprintln!(
@@ -268,7 +288,9 @@ fn validate_member_accesses(
                 Some(qn) => qn.as_str(),
                 None => {
                     // Pure-external type — validate against type_defs.
-                    if type_defs.contains_key(short) {
+                    if type_defs.contains_key(short)
+                        && !is_open_type(short, type_defs)
+                    {
                         let ext_members = collect_external_members(short, type_defs);
                         if !ext_members.contains(bare) {
                             eprintln!(
@@ -305,8 +327,18 @@ fn validate_member_accesses(
             // Final fallback: check external type_defs (handles local interfaces
             // that also have external type definitions with field metadata).
             if type_defs.contains_key(short) {
+                if is_open_type(short, type_defs) {
+                    continue;
+                }
                 let ext_members = collect_external_members(short, type_defs);
                 if ext_members.contains(bare) {
+                    continue;
+                }
+            }
+            // Check if any ancestor in the class hierarchy is an open external type
+            // (e.g. GML objects extend GMLObject which has open: true).
+            if let Some(ancestors) = class_meta.ancestor_sets.get(qualified) {
+                if ancestors.iter().any(|a| is_open_type(a, type_defs)) {
                     continue;
                 }
             }
