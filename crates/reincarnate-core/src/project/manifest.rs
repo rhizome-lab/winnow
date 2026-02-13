@@ -35,6 +35,7 @@ pub struct TargetConfig {
     pub backend: TargetBackend,
     pub output_dir: PathBuf,
     /// Additional backend-specific options.
+    #[serde(default)]
     pub options: serde_json::Value,
 }
 

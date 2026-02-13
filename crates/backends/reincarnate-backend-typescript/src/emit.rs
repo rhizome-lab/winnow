@@ -2235,7 +2235,9 @@ fn emit_class(
     let abstract_kw = if group.class_def.is_interface { "abstract " } else { "" };
     let _ = writeln!(out, "{vis}{abstract_kw}class {class_name}{extends} {{");
     let qualified = qualified_class_name(&group.class_def);
-    let _ = writeln!(out, "  static [QN_KEY] = \"{qualified}\";");
+    if engine == EngineKind::Flash {
+        let _ = writeln!(out, "  static [QN_KEY] = \"{qualified}\";");
+    }
 
     // Static fields from ClassDef (class-level Slot/Const + promoted instance Consts).
     for (name, ty, default) in &group.class_def.static_fields {
