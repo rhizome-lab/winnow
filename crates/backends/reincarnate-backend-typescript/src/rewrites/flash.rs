@@ -43,6 +43,8 @@ pub struct FlashRewriteCtx {
     pub class_short_name: Option<String>,
     /// Instance/Free method names that need `as3Bind` wrapping when used outside callee position.
     pub bindable_methods: HashSet<String>,
+    /// Pre-compiled closure bodies (short name → JsFunction), for inlining as arrow functions.
+    pub closure_bodies: HashMap<String, JsFunction>,
 }
 
 // ---------------------------------------------------------------------------
@@ -940,10 +942,26 @@ fn rewrite_system_call(
         return Some(JsExpr::SuperCall(rewritten));
     }
 
-    // newFunction → this.methodRef
+    // newFunction → inline arrow function (or this.methodRef fallback)
     if system == "Flash.Object" && method == "newFunction" && args.len() == 1 {
         if let JsExpr::Literal(Constant::String(ref name)) = args[0] {
             let short = name.rsplit("::").next().unwrap_or(name);
+            if let Some(closure_func) = ctx.closure_bodies.get(short).cloned() {
+                let rewritten = rewrite_flash_function(closure_func, ctx);
+                // Skip first param (activation scope object).
+                let params = if rewritten.params.len() > 1 {
+                    rewritten.params[1..].to_vec()
+                } else {
+                    vec![]
+                };
+                return Some(JsExpr::ArrowFunction {
+                    params,
+                    return_ty: rewritten.return_ty,
+                    body: rewritten.body,
+                    has_rest_param: rewritten.has_rest_param,
+                });
+            }
+            // Fallback: non-compiled closure → this.$closureN
             return Some(JsExpr::Field {
                 object: Box::new(JsExpr::This),
                 field: short.to_string(),
@@ -1260,6 +1278,180 @@ fn bind_method_refs_expr(expr: &mut JsExpr, bindable: &HashSet<String>, in_calle
                     args: vec![JsExpr::This, original],
                 };
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dead activation object elimination
+// ---------------------------------------------------------------------------
+
+/// Check whether `name` appears in an expression (read or write).
+fn expr_references_var(expr: &JsExpr, name: &str) -> bool {
+    match expr {
+        JsExpr::Var(n) => n == name,
+        JsExpr::Literal(_) | JsExpr::This | JsExpr::Activation | JsExpr::SuperGet(_) => false,
+        JsExpr::Binary { lhs, rhs, .. }
+        | JsExpr::Cmp { lhs, rhs, .. }
+        | JsExpr::LogicalOr { lhs, rhs }
+        | JsExpr::LogicalAnd { lhs, rhs }
+        | JsExpr::In { key: lhs, object: rhs }
+        | JsExpr::Delete { object: lhs, key: rhs } => {
+            expr_references_var(lhs, name) || expr_references_var(rhs, name)
+        }
+        JsExpr::Unary { expr: e, .. }
+        | JsExpr::Cast { expr: e, .. }
+        | JsExpr::TypeCheck { expr: e, .. }
+        | JsExpr::Not(e)
+        | JsExpr::PostIncrement(e)
+        | JsExpr::TypeOf(e)
+        | JsExpr::GeneratorResume(e) => expr_references_var(e, name),
+        JsExpr::Field { object, .. } => expr_references_var(object, name),
+        JsExpr::Index { collection, index } => {
+            expr_references_var(collection, name) || expr_references_var(index, name)
+        }
+        JsExpr::Call { callee, args } | JsExpr::New { callee, args } => {
+            expr_references_var(callee, name) || args.iter().any(|a| expr_references_var(a, name))
+        }
+        JsExpr::Ternary { cond, then_val, else_val } => {
+            expr_references_var(cond, name)
+                || expr_references_var(then_val, name)
+                || expr_references_var(else_val, name)
+        }
+        JsExpr::ArrayInit(elems) | JsExpr::TupleInit(elems) | JsExpr::SuperCall(elems) => {
+            elems.iter().any(|e| expr_references_var(e, name))
+        }
+        JsExpr::ObjectInit(pairs) => pairs.iter().any(|(_, e)| expr_references_var(e, name)),
+        JsExpr::SuperMethodCall { args, .. }
+        | JsExpr::GeneratorCreate { args, .. }
+        | JsExpr::SystemCall { args, .. } => args.iter().any(|a| expr_references_var(a, name)),
+        JsExpr::SuperSet { value, .. } => expr_references_var(value, name),
+        JsExpr::Yield(opt) => opt.as_ref().is_some_and(|e| expr_references_var(e, name)),
+        JsExpr::ArrowFunction { body, .. } => stmts_reference_var(body, name),
+    }
+}
+
+/// Check whether any statement in a list references `name`.
+fn stmts_reference_var(stmts: &[JsStmt], name: &str) -> bool {
+    stmts.iter().any(|s| stmt_references_var(s, name))
+}
+
+/// Check whether a statement references `name`.
+fn stmt_references_var(stmt: &JsStmt, name: &str) -> bool {
+    match stmt {
+        JsStmt::VarDecl { name: n, init, .. } => {
+            n == name || init.as_ref().is_some_and(|e| expr_references_var(e, name))
+        }
+        JsStmt::Assign { target, value } | JsStmt::CompoundAssign { target, value, .. } => {
+            expr_references_var(target, name) || expr_references_var(value, name)
+        }
+        JsStmt::Expr(e) | JsStmt::Return(Some(e)) | JsStmt::Throw(e) => {
+            expr_references_var(e, name)
+        }
+        JsStmt::If { cond, then_body, else_body } => {
+            expr_references_var(cond, name)
+                || stmts_reference_var(then_body, name)
+                || stmts_reference_var(else_body, name)
+        }
+        JsStmt::While { cond, body } => {
+            expr_references_var(cond, name) || stmts_reference_var(body, name)
+        }
+        JsStmt::For { init, cond, update, body } => {
+            stmts_reference_var(init, name)
+                || expr_references_var(cond, name)
+                || stmts_reference_var(update, name)
+                || stmts_reference_var(body, name)
+        }
+        JsStmt::Loop { body } => stmts_reference_var(body, name),
+        JsStmt::ForOf { iterable, body, .. } => {
+            expr_references_var(iterable, name) || stmts_reference_var(body, name)
+        }
+        JsStmt::Dispatch { blocks, .. } => {
+            blocks.iter().any(|(_, stmts)| stmts_reference_var(stmts, name))
+        }
+        JsStmt::Return(None) | JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {
+            false
+        }
+    }
+}
+
+/// Check whether a statement is a dead field-write to `act_name` (e.g. `act.field = value`).
+fn is_dead_activation_field_write(stmt: &JsStmt, act_name: &str) -> bool {
+    matches!(
+        stmt,
+        JsStmt::Assign {
+            target: JsExpr::Field { object, .. },
+            ..
+        } if matches!(object.as_ref(), JsExpr::Var(n) if n == act_name)
+    )
+}
+
+/// Eliminate dead activation objects after closure inlining.
+///
+/// After closures are inlined as arrow functions, activation objects like:
+///   const curry$0 = ({});
+///   curry$0.func = func;
+///   curry$0.args = args;
+/// become dead code (the arrow function captures variables lexically).
+/// This pass removes the VarDecl and all field-write assigns if the activation
+/// object has no other references.
+pub fn eliminate_dead_activations(body: &mut Vec<JsStmt>) {
+    // Find activation object names: VarDecl with Activation init.
+    let act_names: Vec<String> = body
+        .iter()
+        .filter_map(|s| {
+            if let JsStmt::VarDecl {
+                name,
+                init: Some(JsExpr::Activation),
+                ..
+            } = s
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for act_name in &act_names {
+        // Check that ALL remaining references to act_name are either:
+        // 1. The VarDecl itself
+        // 2. Field-write assigns (act_name.field = value)
+        let all_dead = body.iter().all(|s| {
+            // Skip the VarDecl itself
+            if let JsStmt::VarDecl {
+                name,
+                init: Some(JsExpr::Activation),
+                ..
+            } = s
+            {
+                return name == act_name;
+            }
+            // Field-write: act_name.field = value (only check `act_name` appears as target object)
+            if is_dead_activation_field_write(s, act_name) {
+                // Check that the VALUE side doesn't reference act_name.
+                if let JsStmt::Assign { value, .. } = s {
+                    return !expr_references_var(value, act_name);
+                }
+            }
+            // Any other statement: must not reference act_name at all.
+            !stmt_references_var(s, act_name)
+        });
+
+        if all_dead {
+            body.retain(|s| {
+                // Remove the VarDecl
+                if let JsStmt::VarDecl {
+                    name,
+                    init: Some(JsExpr::Activation),
+                    ..
+                } = s
+                {
+                    return name != act_name;
+                }
+                // Remove field-write assigns
+                !is_dead_activation_field_write(s, act_name)
+            });
         }
     }
 }

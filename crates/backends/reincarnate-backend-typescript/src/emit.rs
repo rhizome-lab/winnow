@@ -11,7 +11,7 @@ use reincarnate_core::ir::{
 use reincarnate_core::pipeline::LoweringConfig;
 use reincarnate_core::project::{ExternalTypeDef, RuntimeConfig};
 
-use crate::js_ast::{JsExpr, JsStmt};
+use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 use crate::runtime::SYSTEM_NAMES;
 use crate::types::ts_type;
 
@@ -1999,6 +1999,7 @@ fn emit_function(
         const_instance_fields: HashSet::new(),
         class_short_name: None,
         bindable_methods: HashSet::new(),
+        closure_bodies: HashMap::new(),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
@@ -2218,14 +2219,20 @@ fn emit_class(
 
     // Methods — sorted: constructor first, then instance, static, getters, setters.
     // For interfaces, skip the constructor (AS3 interfaces have no constructor bodies).
+    // Closures are separated and compiled for inlining as arrow functions.
     let mut sorted_methods: Vec<FuncId> = group.methods.iter()
         .copied()
         .filter(|&fid| {
-            if group.class_def.is_interface && module.functions[fid].method_kind == MethodKind::Constructor {
+            let mk = module.functions[fid].method_kind;
+            if group.class_def.is_interface && mk == MethodKind::Constructor {
                 return false;
             }
-            true
+            mk != MethodKind::Closure
         })
+        .collect();
+    let closure_fids: Vec<FuncId> = group.methods.iter()
+        .copied()
+        .filter(|&fid| module.functions[fid].method_kind == MethodKind::Closure)
         .collect();
     sorted_methods.sort_by_key(|&fid| match module.functions[fid].method_kind {
         MethodKind::Constructor => 0,
@@ -2255,11 +2262,19 @@ fn emit_class(
         .collect();
 
     let suppress_super = extends.is_empty();
+
+    // Compile closure bodies for inlining as arrow functions.
+    let closure_bodies = compile_closures(
+        &closure_fids,
+        module,
+        lowering_config,
+    );
+
     for (i, &fid) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2281,6 +2296,43 @@ fn emit_class(
     Ok(())
 }
 
+/// Compile closure functions into JS AST form for inlining as arrow functions.
+///
+/// Closures are lowered through the same pipeline (structurize → linear → JS lower)
+/// but WITHOUT the flash rewrite pass — that happens when the closure is inlined
+/// into its parent method via the `newFunction` SystemCall rewrite.
+fn compile_closures(
+    closure_fids: &[FuncId],
+    module: &mut Module,
+    lowering_config: &LoweringConfig,
+) -> HashMap<String, JsFunction> {
+    use reincarnate_core::ir::linear;
+
+    let mut result = HashMap::new();
+    for &fid in closure_fids {
+        let func = &mut module.functions[fid];
+        let short = func
+            .name
+            .rsplit("::")
+            .next()
+            .unwrap_or(&func.name)
+            .to_string();
+
+        let shape = structurize::structurize(func);
+        let ast = linear::lower_function_linear(func, &shape, lowering_config);
+
+        // Closures: self_param_name = None — the first param is the activation
+        // scope, NOT `this`. This prevents the lowering pass from substituting
+        // it with JsExpr::This.
+        let ctx = crate::lower::LowerCtx {
+            self_param_name: None,
+        };
+        let js_func = crate::lower::lower_function(&ast, &ctx);
+        result.insert(short, js_func);
+    }
+    result
+}
+
 /// Emit a single method inside a class body.
 fn emit_class_method(
     func: &mut Function,
@@ -2298,6 +2350,7 @@ fn emit_class_method(
     late_bound: &HashSet<String>,
     short_to_qualified: &HashMap<String, String>,
     bindable_methods: &HashSet<String>,
+    closure_bodies: &HashMap<String, JsFunction>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2354,8 +2407,10 @@ fn emit_class_method(
         } else {
             bindable_methods.clone()
         },
+        closure_bodies: closure_bodies.clone(),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
+    crate::rewrites::flash::eliminate_dead_activations(&mut js_func.body);
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     rewrite_late_bound_types(&mut js_func.body, late_bound, short_to_qualified);
     // Hoist super() to top of constructor body (after rewrite produces SuperCall nodes).
