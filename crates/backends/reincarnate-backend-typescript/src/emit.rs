@@ -2344,7 +2344,11 @@ fn emit_class_method(
         static_field_owners: static_field_owners.clone(),
         const_instance_fields: const_instance_fields.clone(),
         class_short_name: Some(class_short_name.to_string()),
-        bindable_methods: bindable_methods.clone(),
+        bindable_methods: if is_cinit || func.method_kind == MethodKind::Static {
+            HashSet::new()
+        } else {
+            bindable_methods.clone()
+        },
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
