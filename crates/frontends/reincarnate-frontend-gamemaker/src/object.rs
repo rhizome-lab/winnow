@@ -43,10 +43,12 @@ pub fn translate_objects(
             ));
         }
 
+        let ns = vec!["objects".into()];
+
         let struct_index = mb.struct_count();
         mb.add_struct(StructDef {
             name: obj_name.clone(),
-            namespace: Vec::new(),
+            namespace: ns.clone(),
             fields,
             visibility: Visibility::Public,
         });
@@ -91,7 +93,7 @@ pub fn translate_objects(
 
                     match translate::translate_code_entry(bytecode, &func_name, &ctx) {
                         Ok(mut func) => {
-                            func.namespace = Vec::new();
+                            func.namespace = ns.clone();
                             func.class = Some(obj_name.clone());
                             // All event handlers are instance methods.
                             // `create` is called by the runtime after construction,
@@ -116,7 +118,7 @@ pub fn translate_objects(
 
         mb.add_class(ClassDef {
             name: obj_name.clone(),
-            namespace: Vec::new(),
+            namespace: ns,
             struct_index,
             methods: method_ids,
             super_class,
