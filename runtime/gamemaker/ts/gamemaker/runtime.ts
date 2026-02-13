@@ -131,9 +131,11 @@ export class GMLObject {
 for (let i = 0; i < 12; i++) {
   (GMLObject.prototype as any)["alarm" + i] = noop;
 }
-// Key press stubs
+// Key press / keyboard / key release stubs
 for (let i = 0; i <= 0xff; i++) {
   (GMLObject.prototype as any)["keypress" + i] = noop;
+  (GMLObject.prototype as any)["keyboard" + i] = noop;
+  (GMLObject.prototype as any)["keyrelease" + i] = noop;
 }
 // View event stubs
 for (let i = 0; i < 8; i++) {
@@ -143,6 +145,21 @@ for (let i = 0; i < 8; i++) {
 // User event stubs
 for (let i = 0; i < 16; i++) {
   (GMLObject.prototype as any)["user" + i] = noop;
+}
+// Draw variant stubs
+for (const ev of ["drawbegin", "drawend", "drawguibegin", "drawguiend", "drawpre", "drawpost", "drawresize"]) {
+  (GMLObject.prototype as any)[ev] = noop;
+}
+// Mouse button stubs
+for (const ev of [
+  "mouseleftbutton", "mouserightbutton", "mousemiddlebutton", "mousenobutton",
+  "mouseleftpressed", "mouserightpressed", "mousemiddlepressed",
+  "mouseleftreleased", "mouserightreleased", "mousemiddlereleased",
+  "globalleftbutton", "globalrightbutton", "globalmiddlebutton",
+  "globalleftpressed", "globalrightpressed", "globalmiddlepressed",
+  "globalleftreleased", "globalrightreleased", "globalmiddlereleased",
+]) {
+  (GMLObject.prototype as any)[ev] = noop;
 }
 
 // Sprites enum — populated by startGame

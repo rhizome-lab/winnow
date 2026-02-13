@@ -140,187 +140,118 @@ fn resolve_parent(obj: &ObjectEntry, obj_names: &[String]) -> Option<String> {
     obj_names.get(idx).cloned()
 }
 
-/// Produce a human-readable event handler name.
+/// Produce an event handler name that matches the runtime dispatch convention.
+///
+/// The runtime dispatches events via string-keyed method lookup:
+/// - Alarms: `"alarm" + i` → `alarm0`, `alarm1`, …
+/// - Key press: `"keypress" + keyCode` → `keypress13`, `keypress32`, …
+/// - Keyboard: `"keyboard" + keyCode` → `keyboard13`, `keyboard32`, …
+/// - Key release: `"keyrelease" + keyCode` → `keyrelease13`, …
+/// - Collision: `"collision" + objectIndex` → `collision0`, `collision5`, …
+/// - User events: `"user" + i` → `user0`, `user1`, …
+/// - Step variants: `beginstep`, `endstep` (no underscore)
+/// - Draw variants: `drawgui`, `drawbegin`, `drawend`, etc.
+/// - Mouse: `mouseenter`, `mouseleave`
+/// - Other: `roomstart`, `roomend`, `gamestart`, `gameend`, etc.
 fn make_event_name(
     event_type_idx: usize,
     subtype: u32,
-    obj_names: &[String],
+    _obj_names: &[String],
 ) -> String {
     match event_type_idx {
-        event_type::CREATE => "create".to_string(),
-        event_type::DESTROY => "destroy".to_string(),
-        event_type::ALARM => format!("alarm_{subtype}"),
+        event_type::CREATE => "create".into(),
+        event_type::DESTROY => "destroy".into(),
+        event_type::ALARM => format!("alarm{subtype}"),
         event_type::STEP => match subtype {
-            0 => "step".to_string(),
-            1 => "step_begin".to_string(),
-            2 => "step_end".to_string(),
-            _ => format!("step_{subtype}"),
+            0 => "step".into(),
+            1 => "beginstep".into(),
+            2 => "endstep".into(),
+            _ => format!("step{subtype}"),
         },
-        event_type::COLLISION => {
-            let other = obj_names
-                .get(subtype as usize)
-                .cloned()
-                .unwrap_or_else(|| format!("obj_{subtype}"));
-            format!("collision_{other}")
-        }
-        event_type::KEYBOARD => {
-            let key = key_name(subtype);
-            format!("keyboard_{key}")
-        }
-        event_type::MOUSE => {
-            let name = mouse_event_name(subtype);
-            format!("mouse_{name}")
-        }
-        event_type::OTHER => {
-            let name = other_event_name(subtype);
-            format!("other_{name}")
-        }
+        event_type::COLLISION => format!("collision{subtype}"),
+        event_type::KEYBOARD => format!("keyboard{subtype}"),
+        event_type::MOUSE => mouse_event_name(subtype),
+        event_type::OTHER => other_event_name(subtype),
         event_type::DRAW => match subtype {
-            0 => "draw".to_string(),
-            64 => "draw_gui".to_string(),
-            65 => "draw_resize".to_string(),
-            72 => "draw_begin".to_string(),
-            73 => "draw_end".to_string(),
-            74 => "draw_gui_begin".to_string(),
-            75 => "draw_gui_end".to_string(),
-            76 => "draw_pre".to_string(),
-            77 => "draw_post".to_string(),
-            _ => format!("draw_{subtype}"),
+            0 => "draw".into(),
+            64 => "drawgui".into(),
+            65 => "drawresize".into(),
+            72 => "drawbegin".into(),
+            73 => "drawend".into(),
+            74 => "drawguibegin".into(),
+            75 => "drawguiend".into(),
+            76 => "drawpre".into(),
+            77 => "drawpost".into(),
+            _ => format!("draw{subtype}"),
         },
-        event_type::KEY_PRESS => {
-            let key = key_name(subtype);
-            format!("keypress_{key}")
-        }
-        event_type::KEY_RELEASE => {
-            let key = key_name(subtype);
-            format!("keyrelease_{key}")
-        }
-        event_type::TRIGGER => format!("trigger_{subtype}"),
-        _ => format!("event_{event_type_idx}_{subtype}"),
+        event_type::KEY_PRESS => format!("keypress{subtype}"),
+        event_type::KEY_RELEASE => format!("keyrelease{subtype}"),
+        event_type::TRIGGER => format!("trigger{subtype}"),
+        _ => format!("event{event_type_idx}_{subtype}"),
     }
 }
 
-/// Map a virtual key code to a readable name.
-fn key_name(vk: u32) -> String {
-    match vk {
-        0 => "nokey".to_string(),
-        1 => "anykey".to_string(),
-        8 => "backspace".to_string(),
-        9 => "tab".to_string(),
-        13 => "enter".to_string(),
-        16 => "shift".to_string(),
-        17 => "ctrl".to_string(),
-        18 => "alt".to_string(),
-        27 => "escape".to_string(),
-        32 => "space".to_string(),
-        33 => "pageup".to_string(),
-        34 => "pagedown".to_string(),
-        35 => "end".to_string(),
-        36 => "home".to_string(),
-        37 => "left".to_string(),
-        38 => "up".to_string(),
-        39 => "right".to_string(),
-        40 => "down".to_string(),
-        45 => "insert".to_string(),
-        46 => "delete".to_string(),
-        48..=57 => format!("{}", (vk - 48)),
-        65..=90 => format!("{}", (vk as u8 as char).to_ascii_lowercase()),
-        96..=105 => format!("numpad{}", vk - 96),
-        112..=123 => format!("f{}", vk - 111),
-        _ => format!("vk_{vk}"),
-    }
-}
-
-/// Map mouse event subtypes to names.
+/// Map mouse event subtypes to runtime-compatible method names.
 fn mouse_event_name(subtype: u32) -> String {
     match subtype {
-        0 => "left_button".to_string(),
-        1 => "right_button".to_string(),
-        2 => "middle_button".to_string(),
-        3 => "no_button".to_string(),
-        4 => "left_pressed".to_string(),
-        5 => "right_pressed".to_string(),
-        6 => "middle_pressed".to_string(),
-        7 => "left_released".to_string(),
-        8 => "right_released".to_string(),
-        9 => "middle_released".to_string(),
-        10 => "mouse_enter".to_string(),
-        11 => "mouse_leave".to_string(),
-        60 => "global_left_button".to_string(),
-        61 => "global_right_button".to_string(),
-        62 => "global_middle_button".to_string(),
-        63 => "global_left_pressed".to_string(),
-        64 => "global_right_pressed".to_string(),
-        65 => "global_middle_pressed".to_string(),
-        66 => "global_left_released".to_string(),
-        67 => "global_right_released".to_string(),
-        68 => "global_middle_released".to_string(),
-        _ => format!("{subtype}"),
+        0 => "mouseleftbutton".into(),
+        1 => "mouserightbutton".into(),
+        2 => "mousemiddlebutton".into(),
+        3 => "mousenobutton".into(),
+        4 => "mouseleftpressed".into(),
+        5 => "mouserightpressed".into(),
+        6 => "mousemiddlepressed".into(),
+        7 => "mouseleftreleased".into(),
+        8 => "mouserightreleased".into(),
+        9 => "mousemiddlereleased".into(),
+        10 => "mouseenter".into(),
+        11 => "mouseleave".into(),
+        60 => "globalleftbutton".into(),
+        61 => "globalrightbutton".into(),
+        62 => "globalmiddlebutton".into(),
+        63 => "globalleftpressed".into(),
+        64 => "globalrightpressed".into(),
+        65 => "globalmiddlepressed".into(),
+        66 => "globalleftreleased".into(),
+        67 => "globalrightreleased".into(),
+        68 => "globalmiddlereleased".into(),
+        _ => format!("mouse{subtype}"),
     }
 }
 
-/// Map "Other" event subtypes to names.
+/// Map "Other" event subtypes to runtime-compatible method names.
 fn other_event_name(subtype: u32) -> String {
     match subtype {
-        0 => "outside_room".to_string(),
-        1 => "intersect_boundary".to_string(),
-        2 => "game_start".to_string(),
-        3 => "game_end".to_string(),
-        4 => "room_start".to_string(),
-        5 => "room_end".to_string(),
-        6 => "no_more_lives".to_string(),
-        7 => "animation_end".to_string(),
-        8 => "end_of_path".to_string(),
-        9 => "no_more_health".to_string(),
-        10 => "user_0".to_string(),
-        11 => "user_1".to_string(),
-        12 => "user_2".to_string(),
-        13 => "user_3".to_string(),
-        14 => "user_4".to_string(),
-        15 => "user_5".to_string(),
-        16 => "user_6".to_string(),
-        17 => "user_7".to_string(),
-        18 => "user_8".to_string(),
-        19 => "user_9".to_string(),
-        20 => "user_10".to_string(),
-        21 => "user_11".to_string(),
-        22 => "user_12".to_string(),
-        23 => "user_13".to_string(),
-        24 => "user_14".to_string(),
-        25 => "user_15".to_string(),
-        30 => "close_button".to_string(),
-        40 => "outside_view_0".to_string(),
-        41 => "outside_view_1".to_string(),
-        42 => "outside_view_2".to_string(),
-        43 => "outside_view_3".to_string(),
-        44 => "outside_view_4".to_string(),
-        45 => "outside_view_5".to_string(),
-        46 => "outside_view_6".to_string(),
-        47 => "outside_view_7".to_string(),
-        50 => "boundary_view_0".to_string(),
-        51 => "boundary_view_1".to_string(),
-        52 => "boundary_view_2".to_string(),
-        53 => "boundary_view_3".to_string(),
-        54 => "boundary_view_4".to_string(),
-        55 => "boundary_view_5".to_string(),
-        56 => "boundary_view_6".to_string(),
-        57 => "boundary_view_7".to_string(),
-        58 => "animation_update".to_string(),
-        59 => "animation_event".to_string(),
-        60 => "async_image_loaded".to_string(),
-        62 => "async_http".to_string(),
-        63 => "async_dialog".to_string(),
-        66 => "async_iap".to_string(),
-        67 => "async_cloud".to_string(),
-        68 => "async_networking".to_string(),
-        69 => "async_steam".to_string(),
-        70 => "async_social".to_string(),
-        71 => "async_push_notification".to_string(),
-        72 => "async_save_load".to_string(),
-        73 => "async_audio_recording".to_string(),
-        74 => "async_audio_playback".to_string(),
-        75 => "async_system".to_string(),
-        _ => format!("{subtype}"),
+        0 => "outsideroom".into(),
+        1 => "intersectboundary".into(),
+        2 => "gamestart".into(),
+        3 => "gameend".into(),
+        4 => "roomstart".into(),
+        5 => "roomend".into(),
+        6 => "nomorelives".into(),
+        7 => "animationend".into(),
+        8 => "endofpath".into(),
+        9 => "nomorehealth".into(),
+        10..=25 => format!("user{}", subtype - 10),
+        30 => "closebutton".into(),
+        40..=47 => format!("outsideview{}", subtype - 40),
+        50..=57 => format!("boundaryview{}", subtype - 50),
+        58 => "animationupdate".into(),
+        59 => "animationevent".into(),
+        60 => "asyncimageloaded".into(),
+        62 => "asynchttp".into(),
+        63 => "asyncdialog".into(),
+        66 => "asynciap".into(),
+        67 => "asynccloud".into(),
+        68 => "asyncnetworking".into(),
+        69 => "asyncsteam".into(),
+        70 => "asyncsocial".into(),
+        71 => "asyncpushnotification".into(),
+        72 => "asyncsaveload".into(),
+        73 => "asyncaudiorecording".into(),
+        74 => "asyncaudioplayback".into(),
+        75 => "asyncsystem".into(),
+        _ => format!("other{subtype}"),
     }
 }
 
