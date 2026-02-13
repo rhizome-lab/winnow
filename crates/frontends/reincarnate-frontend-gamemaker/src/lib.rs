@@ -1,3 +1,4 @@
+mod assets;
 mod object;
 mod translate;
 
@@ -11,7 +12,7 @@ use reincarnate_core::ir::func::Visibility;
 use reincarnate_core::ir::module::Global;
 use reincarnate_core::ir::ty::Type;
 use reincarnate_core::pipeline::{Frontend, FrontendInput, FrontendOutput};
-use reincarnate_core::project::{AssetCatalog, EngineOrigin};
+use reincarnate_core::project::EngineOrigin;
 
 use crate::translate::TranslateCtx;
 
@@ -103,11 +104,17 @@ impl Frontend for GameMakerFrontend {
             eprintln!("[gamemaker] translated {room_count} room creation scripts");
         }
 
+        // Extract assets (textures, audio).
+        let assets = assets::extract_assets(&dw);
+        if !assets.assets.is_empty() {
+            eprintln!("[gamemaker] extracted {} assets", assets.assets.len());
+        }
+
         let module = mb.build();
 
         Ok(FrontendOutput {
             modules: vec![module],
-            assets: AssetCatalog::default(),
+            assets,
         })
     }
 }
