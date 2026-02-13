@@ -1,0 +1,15 @@
+{
+  "system_modules": {
+    "GameMaker.Global": { "path": "gamemaker/global" },
+    "GameMaker.Instance": { "path": "gamemaker/instance" }
+  },
+  "scaffold": {
+    "imports": [
+      { "names": ["startGame"], "path": "gamemaker/runtime" }
+    ]
+  },
+  "class_preamble": {
+    "names": ["GMLObject", "Sprites", "Colors", "HAligns", "VAligns"],
+    "path": "gamemaker/runtime"
+  }
+}
