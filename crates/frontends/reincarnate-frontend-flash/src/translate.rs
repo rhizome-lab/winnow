@@ -564,7 +564,8 @@ fn translate_op(
         // Constants
         // ====================================================================
         Op::PushByte { value } => {
-            let v = fb.const_int(*value as i64);
+            // AVM2 pushbyte sign-extends: 0xFF is -1, not 255
+            let v = fb.const_int(*value as i8 as i64);
             stack.push(v);
         }
         Op::PushShort { value } => {
