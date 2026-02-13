@@ -75,7 +75,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate scripts.
         let (script_ok, script_err) =
-            translate_scripts(&dw, code, scpt, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &input)?;
+            translate_scripts(&dw, code, scpt, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &input, &obj_names)?;
         eprintln!("[gamemaker] translated {script_ok} scripts ({script_err} errors)");
 
         // Translate objects → ClassDefs with event handler methods.
@@ -98,7 +98,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate global init scripts (GLOB chunk).
         let glob_count = translate_global_inits(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb,
+            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &obj_names,
         );
         if glob_count > 0 {
             eprintln!("[gamemaker] translated {glob_count} global init scripts");
@@ -106,7 +106,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate room creation code.
         let room_count = translate_room_creation(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb,
+            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &obj_names,
         );
         if room_count > 0 {
             eprintln!("[gamemaker] translated {room_count} room creation scripts");
@@ -144,6 +144,7 @@ fn translate_scripts(
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
     mb: &mut ModuleBuilder,
     input: &FrontendInput,
+    obj_names: &[String],
 ) -> Result<(usize, usize), CoreError> {
     let mut translated = 0;
     let mut errors = 0;
@@ -186,6 +187,7 @@ fn translate_scripts(
             has_self: false,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
+            obj_names,
         };
 
         match translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -214,6 +216,7 @@ fn translate_global_inits(
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
     mb: &mut ModuleBuilder,
+    obj_names: &[String],
 ) -> usize {
     let glob = match dw.glob() {
         Ok(Some(g)) => g,
@@ -247,6 +250,7 @@ fn translate_global_inits(
             has_self: false,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
+            obj_names,
         };
 
         if let Ok(func) = translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -268,6 +272,7 @@ fn translate_room_creation(
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
     mb: &mut ModuleBuilder,
+    obj_names: &[String],
 ) -> usize {
     let room = match dw.room() {
         Ok(r) => r,
@@ -304,6 +309,7 @@ fn translate_room_creation(
             has_self: false,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
+            obj_names,
         };
 
         if let Ok(func) = translate::translate_code_entry(bytecode, &func_name, &ctx) {

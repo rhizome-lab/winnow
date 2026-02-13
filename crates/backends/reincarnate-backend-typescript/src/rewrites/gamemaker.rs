@@ -3,6 +3,8 @@
 //! Resolves GameMaker SystemCall nodes into native JavaScript constructs.
 //! Much simpler than Flash — only 8 SystemCall patterns to handle.
 
+use reincarnate_core::ir::value::Constant;
+
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
 /// Rewrite a function's body, resolving GameMaker SystemCalls.
@@ -32,7 +34,48 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
             rewrite_expr(target);
             rewrite_expr(value);
         }
-        JsStmt::Expr(e) => rewrite_expr(e),
+        JsStmt::Expr(e) => {
+            // Intercept setOn with named object at statement level → direct assignment.
+            if let JsExpr::SystemCall {
+                system,
+                method,
+                args,
+            } = e
+            {
+                if system == "GameMaker.Instance"
+                    && method == "setOn"
+                    && args.len() == 3
+                    && matches!(&args[0], JsExpr::Literal(Constant::String(_)))
+                    && matches!(&args[1], JsExpr::Literal(Constant::String(_)))
+                {
+                    let mut args = std::mem::take(args);
+                    let val = args.pop().unwrap();
+                    let field = args.pop().unwrap();
+                    let obj_name_expr = args.pop().unwrap();
+                    let JsExpr::Literal(Constant::String(obj_name)) = obj_name_expr else {
+                        unreachable!()
+                    };
+                    let JsExpr::Literal(Constant::String(field_name)) = field else {
+                        unreachable!()
+                    };
+                    let target = JsExpr::Field {
+                        object: Box::new(JsExpr::Index {
+                            collection: Box::new(JsExpr::Field {
+                                object: Box::new(JsExpr::Var(obj_name)),
+                                field: "instances".into(),
+                            }),
+                            index: Box::new(JsExpr::Literal(Constant::Int(0))),
+                        }),
+                        field: field_name,
+                    };
+                    let mut val = val;
+                    rewrite_expr(&mut val);
+                    *stmt = JsStmt::Assign { target, value: val };
+                    return;
+                }
+            }
+            rewrite_expr(e);
+        }
         JsStmt::Return(Some(e)) => rewrite_expr(e),
         JsStmt::Return(None) => {}
         JsStmt::If {
@@ -209,16 +252,44 @@ fn try_rewrite_system_call(
                 args: vec![name],
             })
         }
-        // GameMaker.Instance.getOn(objId, field) → getInstanceField(objId, field)
+        // GameMaker.Instance.getOn(objName, field) → ObjName.instances[0].field
+        // GameMaker.Instance.getOn(objId, field)   → getInstanceField(objId, field)
         ("GameMaker.Instance", "getOn") if args.len() == 2 => {
             let field = args.pop().unwrap();
             let obj_id = args.pop().unwrap();
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("getInstanceField".into())),
-                args: vec![obj_id, field],
-            })
+            if let JsExpr::Literal(Constant::String(ref obj_name)) = obj_id {
+                if let JsExpr::Literal(Constant::String(ref field_name)) = field {
+                    Some(JsExpr::Field {
+                        object: Box::new(JsExpr::Index {
+                            collection: Box::new(JsExpr::Field {
+                                object: Box::new(JsExpr::Var(obj_name.clone())),
+                                field: "instances".into(),
+                            }),
+                            index: Box::new(JsExpr::Literal(Constant::Int(0))),
+                        }),
+                        field: field_name.clone(),
+                    })
+                } else {
+                    Some(JsExpr::Index {
+                        collection: Box::new(JsExpr::Index {
+                            collection: Box::new(JsExpr::Field {
+                                object: Box::new(JsExpr::Var(obj_name.clone())),
+                                field: "instances".into(),
+                            }),
+                            index: Box::new(JsExpr::Literal(Constant::Int(0))),
+                        }),
+                        index: Box::new(field),
+                    })
+                }
+            } else {
+                Some(JsExpr::Call {
+                    callee: Box::new(JsExpr::Var("getInstanceField".into())),
+                    args: vec![obj_id, field],
+                })
+            }
         }
         // GameMaker.Instance.setOn(objId, field, val) → setInstanceField(objId, field, val)
+        // Named object+field case is handled at statement level (→ assignment).
         ("GameMaker.Instance", "setOn") if args.len() == 3 => {
             let val = args.pop().unwrap();
             let field = args.pop().unwrap();

@@ -34,6 +34,8 @@ pub struct TranslateCtx<'a> {
     pub has_other: bool,
     /// Number of declared arguments.
     pub arg_count: u16,
+    /// Object names indexed by object ID (for resolving numeric instance IDs).
+    pub obj_names: &'a [String],
 }
 
 /// Translate a single code entry's bytecode into an IR Function.
@@ -899,7 +901,11 @@ fn translate_push_variable(
         _ => {
             // Positive value = specific object ID.
             if instance >= 0 {
-                let obj_id = fb.const_int(instance as i64);
+                let obj_id = if let Some(name) = ctx.obj_names.get(instance as usize) {
+                    fb.const_string(name)
+                } else {
+                    fb.const_int(instance as i64)
+                };
                 let name_val = fb.const_string(&var_name);
                 let val = fb.system_call(
                     "GameMaker.Instance",
@@ -1000,7 +1006,11 @@ fn translate_pop(
             }
             _ => {
                 if *instance >= 0 {
-                    let obj_id = fb.const_int(*instance as i64);
+                    let obj_id = if let Some(name) = ctx.obj_names.get(*instance as usize) {
+                        fb.const_string(name)
+                    } else {
+                        fb.const_int(*instance as i64)
+                    };
                     let name_val = fb.const_string(&var_name);
                     fb.system_call(
                         "GameMaker.Instance",

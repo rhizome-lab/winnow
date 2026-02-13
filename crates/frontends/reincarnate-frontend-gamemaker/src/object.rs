@@ -95,6 +95,7 @@ pub fn translate_objects(
                         has_self: true,
                         has_other: is_collision,
                         arg_count: code_entry.args_count & 0x7FFF,
+                        obj_names,
                     };
 
                     match translate::translate_code_entry(bytecode, &func_name, &ctx) {
