@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::PrimaryMap;
 
-use crate::project::ExternalTypeDef;
+use crate::project::{ExternalMethodSig, ExternalTypeDef};
 
 use super::value::Constant;
 use super::func::{FuncId, Function, Visibility};
@@ -132,6 +132,11 @@ pub struct Module {
     /// Skipped during serialization to avoid bloating IR JSON output.
     #[serde(default, skip_serializing)]
     pub external_type_defs: BTreeMap<String, ExternalTypeDef>,
+    /// External function signatures from the runtime package.
+    /// Maps function name → signature for free functions (not methods on types).
+    /// Used by type inference and constraint solving to infer return types.
+    #[serde(default, skip_serializing)]
+    pub external_function_sigs: BTreeMap<String, ExternalMethodSig>,
 }
 
 impl Module {
@@ -147,6 +152,7 @@ impl Module {
             entry_point: None,
             external_imports: BTreeMap::new(),
             external_type_defs: BTreeMap::new(),
+            external_function_sigs: BTreeMap::new(),
         }
     }
 }

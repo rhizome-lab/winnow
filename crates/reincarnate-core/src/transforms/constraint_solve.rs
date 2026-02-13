@@ -203,11 +203,24 @@ impl ConstraintModuleContext {
             struct_fields.insert(s.name.clone(), fields);
         }
 
-        let func_sigs: HashMap<String, FunctionSig> = module
+        let mut func_sigs: HashMap<String, FunctionSig> = module
             .functions
             .values()
             .map(|f| (f.name.clone(), f.sig.clone()))
             .collect();
+
+        // Extend with external function signatures from runtime.
+        for (name, ext_sig) in &module.external_function_sigs {
+            func_sigs.entry(name.clone()).or_insert_with(|| FunctionSig {
+                params: ext_sig
+                    .params
+                    .iter()
+                    .map(|p| parse_type_notation(p))
+                    .collect(),
+                return_ty: parse_type_notation(&ext_sig.returns),
+                ..Default::default()
+            });
+        }
 
         let mut method_sigs = HashMap::new();
         for f in module.functions.values() {

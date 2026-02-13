@@ -22,6 +22,12 @@ pub struct RuntimeConfig {
     /// Keyed by short type name (e.g. `"DisplayObject"`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub type_definitions: BTreeMap<String, ExternalTypeDef>,
+    /// External function signatures (free functions, not methods on types).
+    /// Keyed by function name (e.g. `"irandom_range"`).
+    /// Used by transforms to infer return types for calls to runtime-provided
+    /// functions that aren't methods on any class.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub function_signatures: BTreeMap<String, ExternalMethodSig>,
     /// Per-module export lists for import validation.
     /// Maps module path (e.g. `"flash/display"`) to the names it exports.
     /// Used to warn when generated imports reference names a module doesn't export.

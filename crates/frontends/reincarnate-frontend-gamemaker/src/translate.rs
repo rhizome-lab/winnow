@@ -37,6 +37,8 @@ pub struct TranslateCtx<'a> {
     pub arg_count: u16,
     /// Object names indexed by object ID (for resolving numeric instance IDs).
     pub obj_names: &'a [String],
+    /// Class name for event handlers (used to type the self parameter).
+    pub class_name: Option<&'a str>,
 }
 
 /// Translate a single code entry's bytecode into an IR Function.
@@ -468,7 +470,11 @@ fn find_block_starts(instructions: &[Instruction]) -> BTreeSet<usize> {
 fn build_signature(ctx: &TranslateCtx) -> FunctionSig {
     let mut params = Vec::new();
     if ctx.has_self {
-        params.push(Type::Dynamic);
+        let self_ty = ctx
+            .class_name
+            .map(|name| Type::Struct(name.to_string()))
+            .unwrap_or(Type::Dynamic);
+        params.push(self_ty);
     }
     if ctx.has_other {
         params.push(Type::Dynamic);

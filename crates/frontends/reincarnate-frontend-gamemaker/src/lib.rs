@@ -188,6 +188,7 @@ fn translate_scripts(
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
             obj_names,
+            class_name: None,
         };
 
         match translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -251,6 +252,7 @@ fn translate_global_inits(
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
             obj_names,
+            class_name: None,
         };
 
         if let Ok(func) = translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -310,6 +312,7 @@ fn translate_room_creation(
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
             obj_names,
+            class_name: None,
         };
 
         if let Ok(func) = translate::translate_code_entry(bytecode, &func_name, &ctx) {

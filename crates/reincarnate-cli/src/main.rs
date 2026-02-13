@@ -195,6 +195,10 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Re
         .as_ref()
         .map(|rt| rt.config.type_definitions.clone())
         .unwrap_or_default();
+    let external_function_sigs = early_runtime
+        .as_ref()
+        .map(|rt| rt.config.function_signatures.clone())
+        .unwrap_or_default();
 
     let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
     let (pass_config, lowering_config) = Preset::resolve(preset, &skip_refs)
@@ -205,6 +209,7 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Re
     for mut module in output.modules {
         eprintln!("[emit] transforming module: {}", module.name);
         module.external_type_defs = external_type_defs.clone();
+        module.external_function_sigs = external_function_sigs.clone();
         let module = pipeline.run(module).map_err(|e| anyhow::anyhow!("{e}"))?;
         modules.push(module);
     }
