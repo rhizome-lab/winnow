@@ -270,6 +270,11 @@ export class DisplayObject extends EventDispatcher {
   constructor() {
     super();
     this._transform = new Transform(this);
+    // Document-class root: wire stage during construction (Flash behaviour).
+    if (_constructingRootStage) {
+      this._stage = _constructingRootStage;
+      _constructingRootStage = null;
+    }
   }
 
   getBounds(targetCoordinateSpace: DisplayObject): Rectangle {
@@ -1188,6 +1193,24 @@ export class Loader extends DisplayObjectContainer {
     }
     this.contentLoaderInfo.content = null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Document-class root construction
+// ---------------------------------------------------------------------------
+
+/**
+ * In Flash, the document class (root timeline) has `this.stage` available
+ * during its constructor because the player wires it up before construction.
+ * We emulate this by setting a pending stage that DisplayObject's constructor
+ * picks up for the first object created (the root), then clears it so that
+ * children created during the root's constructor don't inherit it directly.
+ */
+let _constructingRootStage: Stage | null = null;
+
+/** @internal Set by runtime before constructing the document class root. */
+export function _setConstructingRoot(s: Stage | null): void {
+  _constructingRootStage = s;
 }
 
 // ---------------------------------------------------------------------------

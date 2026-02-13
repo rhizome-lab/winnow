@@ -46,6 +46,13 @@ pub struct ScaffoldConfig {
     /// (e.g. `"stage.addChild(app);"`).
     #[serde(default)]
     pub construct_class_init: Option<String>,
+    /// Wrapper function for ConstructClass entries.
+    /// When set, emits `const app = fn(ClassName);` instead of
+    /// `const app = new ClassName();`.
+    /// The function is responsible for construction and any post-init
+    /// (e.g. adding to the display list).
+    #[serde(default)]
+    pub construct_class_fn: Option<String>,
     /// Code called each frame in the game loop (e.g. `"flashTick();"`).
     #[serde(default)]
     pub tick: Option<String>,

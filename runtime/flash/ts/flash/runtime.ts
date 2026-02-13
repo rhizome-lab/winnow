@@ -17,6 +17,7 @@ import {
   _dragOffsetX,
   _dragOffsetY,
   _setDragOffset,
+  _setConstructingRoot,
 } from "./display";
 import {
   Event,
@@ -46,6 +47,25 @@ stage.stageWidth = canvas.width;
 stage.stageHeight = canvas.height;
 // Stage's own .stage points to itself (Flash behaviour).
 stage.stage = stage;
+
+// ---------------------------------------------------------------------------
+// Document-class root construction
+// ---------------------------------------------------------------------------
+
+/**
+ * Construct the document class (root timeline MovieClip) and add it to the
+ * stage.  In Flash, the document class has `this.stage` available during its
+ * constructor — this function emulates that by setting a pending stage
+ * reference that DisplayObject's constructor picks up.
+ */
+export function constructRoot<T extends MovieClip>(cls: new () => T): T {
+  _setConstructingRoot(stage);
+  const root = new cls();
+  _setConstructingRoot(null);
+  stage.addChild(root);
+  root._executeFrameScript();
+  return root;
+}
 
 // ---------------------------------------------------------------------------
 // flashTick — called once per frame from the game loop

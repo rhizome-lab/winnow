@@ -11,9 +11,9 @@
   },
   "scaffold": {
     "imports": [
-      { "names": ["stage", "flashTick"], "path": "flash/runtime" }
+      { "names": ["stage", "flashTick", "constructRoot"], "path": "flash/runtime" }
     ],
-    "construct_class_init": "stage.addChild(app);",
+    "construct_class_fn": "constructRoot",
     "tick": "flashTick();"
   },
   "class_preamble": {
@@ -892,7 +892,7 @@
       "Timer", "Dictionary", "Proxy"
     ],
     "flash/runtime": [
-      "stage", "flashTick"
+      "stage", "flashTick", "constructRoot"
     ]
   }
 }

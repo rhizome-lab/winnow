@@ -226,7 +226,11 @@ fn metadata_entry_code(modules: &[Module], runtime_config: Option<&RuntimeConfig
     match module.entry_point.as_ref()? {
         EntryPoint::ConstructClass(fqn) => {
             let ident = resolve_class_short_name(modules, fqn);
-            let _ = writeln!(code, "const app = new {ident}();");
+            if let Some(func) = runtime_config.and_then(|c| c.scaffold.construct_class_fn.as_deref()) {
+                let _ = writeln!(code, "const app = {func}({ident});");
+            } else {
+                let _ = writeln!(code, "const app = new {ident}();");
+            }
             if let Some(init) = runtime_config.and_then(|c| c.scaffold.construct_class_init.as_deref()) {
                 let _ = writeln!(code, "{init}");
             }
