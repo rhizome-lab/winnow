@@ -1,0 +1,10 @@
+[package]
+name = "datawin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Reader/writer for GameMaker's compiled data.win format"
+
+[dependencies]
+thiserror = "2"
+bitflags = "2"
