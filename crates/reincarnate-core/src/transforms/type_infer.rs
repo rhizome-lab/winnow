@@ -624,6 +624,37 @@ impl Transform for TypeInference {
         for func in module.functions.keys().collect::<Vec<_>>() {
             changed |= infer_function(&mut module.functions[func], &ctx);
         }
+
+        // Infer return types from actual Return instructions.
+        for func in module.functions.values_mut() {
+            if func.sig.return_ty != Type::Dynamic {
+                continue;
+            }
+            let mut return_types: Vec<&Type> = Vec::new();
+            let mut has_void_return = false;
+            for inst in func.insts.values() {
+                if let Op::Return(val) = &inst.op {
+                    match val {
+                        Some(v) => return_types.push(&func.value_types[*v]),
+                        None => has_void_return = true,
+                    }
+                }
+            }
+            let inferred = if return_types.is_empty() {
+                Type::Void
+            } else {
+                infer_common_type(return_types.into_iter())
+            };
+            if has_void_return && inferred != Type::Dynamic && inferred != Type::Void {
+                // Mixed void + value returns — keep Dynamic.
+                continue;
+            }
+            if inferred != Type::Dynamic && func.sig.return_ty != inferred {
+                func.sig.return_ty = inferred;
+                changed = true;
+            }
+        }
+
         Ok(TransformResult {
             module,
             changed,
