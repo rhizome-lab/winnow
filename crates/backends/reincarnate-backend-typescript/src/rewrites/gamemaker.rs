@@ -4,6 +4,7 @@
 //! Much simpler than Flash — only 8 SystemCall patterns to handle.
 
 use reincarnate_core::ir::value::Constant;
+use reincarnate_core::ir::Type;
 
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
@@ -13,9 +14,72 @@ pub fn rewrite_gamemaker_function(mut func: JsFunction) -> JsFunction {
     func
 }
 
-fn rewrite_stmts(stmts: &mut [JsStmt]) {
+fn rewrite_stmts(stmts: &mut Vec<JsStmt>) {
     for stmt in stmts.iter_mut() {
         rewrite_stmt(stmt);
+    }
+    collapse_with_blocks(stmts);
+}
+
+/// Detect `withBegin(target) ... withEnd()` bracket patterns and collapse them
+/// into `withInstances(target, () => { ...body... })`.
+fn collapse_with_blocks(stmts: &mut Vec<JsStmt>) {
+    let mut i = 0;
+    while i < stmts.len() {
+        // Look for Expr(SystemCall("GameMaker.Instance", "withBegin", [target])).
+        let is_with_begin = matches!(
+            &stmts[i],
+            JsStmt::Expr(JsExpr::SystemCall { system, method, args })
+            if system == "GameMaker.Instance" && method == "withBegin" && args.len() == 1
+        );
+        if !is_with_begin {
+            i += 1;
+            continue;
+        }
+
+        // Find the matching withEnd at the same nesting level.
+        let end_idx = stmts[i + 1..].iter().position(|s| {
+            matches!(
+                s,
+                JsStmt::Expr(JsExpr::SystemCall { system, method, .. })
+                if system == "GameMaker.Instance" && method == "withEnd"
+            )
+        });
+        let Some(end_offset) = end_idx else {
+            i += 1;
+            continue;
+        };
+        let end_idx = i + 1 + end_offset;
+
+        // Extract the target from withBegin.
+        let JsStmt::Expr(JsExpr::SystemCall { args, .. }) = &mut stmts[i] else {
+            unreachable!()
+        };
+        let target = args.pop().unwrap();
+
+        // Drain the body statements between withBegin and withEnd.
+        let body: Vec<JsStmt> = stmts.drain(i + 1..end_idx).collect();
+
+        // Remove the withEnd statement (now at index i + 1 after drain).
+        stmts.remove(i + 1);
+
+        // Replace withBegin with withInstances(target, () => { body }).
+        stmts[i] = JsStmt::Expr(JsExpr::SystemCall {
+            system: "GameMaker.Instance".into(),
+            method: "withInstances".into(),
+            args: vec![
+                target,
+                JsExpr::ArrowFunction {
+                    params: vec![],
+                    return_ty: Type::Void,
+                    body,
+                    has_rest_param: false,
+                    cast_as: None,
+                },
+            ],
+        });
+
+        i += 1;
     }
 }
 
@@ -363,9 +427,6 @@ fn try_rewrite_system_call(
                 args: vec![target, field, val],
             })
         }
-        // GameMaker.Instance.withBegin/withEnd — complex block construct, pass through.
-        ("GameMaker.Instance", "withBegin") => None,
-        ("GameMaker.Instance", "withEnd") => None,
         _ => None,
     }
 }
