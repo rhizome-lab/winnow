@@ -14,6 +14,7 @@ path = "src/main.rs"
 reincarnate-core = { path = "../reincarnate-core" }
 reincarnate-frontend-flash = { path = "../frontends/reincarnate-frontend-flash" }
 reincarnate-backend-typescript = { path = "../backends/reincarnate-backend-typescript" }
+reincarnate-frontend-gamemaker = { path = "../frontends/reincarnate-frontend-gamemaker" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

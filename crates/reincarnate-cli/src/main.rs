@@ -76,6 +76,7 @@ fn load_manifest(path: &PathBuf) -> Result<ProjectManifest> {
 fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
     match engine {
         EngineOrigin::Flash => Some(Box::new(reincarnate_frontend_flash::FlashFrontend)),
+        EngineOrigin::GameMaker => Some(Box::new(reincarnate_frontend_gamemaker::GameMakerFrontend)),
         _ => None,
     }
 }

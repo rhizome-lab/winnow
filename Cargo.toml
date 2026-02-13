@@ -6,6 +6,7 @@ members = [
     "crates/frontends/reincarnate-frontend-flash",
     "crates/backends/reincarnate-backend-typescript",
     "crates/formats/datawin",
+    "crates/frontends/reincarnate-frontend-gamemaker",
 ]
 
 [workspace.package]
