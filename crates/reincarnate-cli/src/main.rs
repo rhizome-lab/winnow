@@ -89,6 +89,7 @@ fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
 fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend) -> Option<RuntimePackage> {
     let engine_name = match engine {
         EngineOrigin::Flash => "flash",
+        EngineOrigin::GameMaker => "gamemaker",
         _ => return None,
     };
     let lang = match backend {

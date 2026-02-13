@@ -56,6 +56,15 @@ pub struct ScaffoldConfig {
     /// Code called each frame in the game loop (e.g. `"flashTick();"`).
     #[serde(default)]
     pub tick: Option<String>,
+    /// Custom entry code replacing the standard rAF loop.
+    /// When set, this template is emitted instead of the timing/rAF loop.
+    /// Supports `{classes}` placeholder for an array of all emitted class names.
+    #[serde(default)]
+    pub entry: Option<String>,
+    /// Additional data file imports for the entry point.
+    /// These are emitted after runtime imports (e.g. data/rooms, data/sprites).
+    #[serde(default)]
+    pub data_imports: Vec<ImportGroup>,
 }
 
 /// A group of named imports from a single path.

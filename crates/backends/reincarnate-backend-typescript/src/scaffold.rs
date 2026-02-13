@@ -91,7 +91,15 @@ const PACKAGE_JSON: &str = r#"{
 /// requestAnimationFrame game loop.
 fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "import {{ timing }} from \"./runtime\";");
+
+    let has_custom_entry = runtime_config
+        .and_then(|c| c.scaffold.entry.as_deref())
+        .is_some();
+
+    // Only import timing for standard rAF loop entries.
+    if !has_custom_entry {
+        let _ = writeln!(out, "import {{ timing }} from \"./runtime\";");
+    }
     if let Some(cfg) = runtime_config {
         for group in &cfg.scaffold.imports {
             let _ = writeln!(
@@ -101,18 +109,37 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> 
                 group.path,
             );
         }
+        for group in &cfg.scaffold.data_imports {
+            let _ = writeln!(
+                out,
+                "import {{ {} }} from \"./{}\";",
+                group.names.join(", "),
+                group.path,
+            );
+        }
     }
 
     // Collect imports for all modules (same logic as before).
     let mut heuristic_entry: Option<String> = None;
+    let mut class_names: Vec<String> = Vec::new();
     for module in modules {
         emit_module_imports(module, &mut out, &mut heuristic_entry);
+        // Collect all public class names for the {classes} placeholder.
+        for class in &module.classes {
+            if class.visibility == Visibility::Public {
+                class_names.push(sanitize_ident(&class.name));
+            }
+        }
     }
 
     out.push('\n');
 
-    // Prefer metadata-based entry point over heuristic.
-    if let Some(code) = metadata_entry_code(modules, runtime_config) {
+    // If the scaffold has a custom entry template, use it.
+    if let Some(entry) = runtime_config.and_then(|c| c.scaffold.entry.as_deref()) {
+        let class_list = class_names.join(", ");
+        let _ = writeln!(out, "{}", entry.replace("{classes}", &class_list));
+    } else if let Some(code) = metadata_entry_code(modules, runtime_config) {
+        // Prefer metadata-based entry point over heuristic.
         out.push_str(&code);
     } else if let Some(func_name) = heuristic_entry {
         emit_game_loop(&mut out, &func_name, runtime_config);

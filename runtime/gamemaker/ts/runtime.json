@@ -6,7 +6,15 @@
   "scaffold": {
     "imports": [
       { "names": ["startGame"], "path": "gamemaker/runtime" }
-    ]
+    ],
+    "data_imports": [
+      { "names": ["rooms", "Rooms"], "path": "data/rooms" },
+      { "names": ["sprites"], "path": "data/sprites" },
+      { "names": ["textures"], "path": "data/textures" },
+      { "names": ["fonts"], "path": "data/fonts" },
+      { "names": ["Classes"], "path": "data/objects" }
+    ],
+    "entry": "startGame({ rooms, sprites, textures, fonts, classes: [{classes}], Classes, initialRoom: Rooms.rm_init });"
   },
   "class_preamble": {
     "names": ["GMLObject", "Sprites", "Colors", "HAligns", "VAligns"],
