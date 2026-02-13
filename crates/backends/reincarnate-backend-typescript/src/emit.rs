@@ -701,6 +701,10 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     fs::create_dir_all(&module_dir).map_err(CoreError::Io)?;
 
     let (class_groups, free_funcs) = group_by_class(module);
+    let free_func_names: HashSet<String> = free_funcs
+        .iter()
+        .map(|&fid| module.functions[fid].name.clone())
+        .collect();
     let registry = ClassRegistry::from_module(module);
     let class_names = build_class_names(module);
     let empty_type_defs = BTreeMap::new();
@@ -813,6 +817,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let func_prefix = "../".repeat(depth + 1);
         let func_prefix = func_prefix.trim_end_matches('/');
         emit_function_imports_with_prefix(&calls, &mut out, func_prefix, runtime_config);
+        emit_free_function_imports(&calls, &free_func_names, func_prefix, &mut out);
         if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
             let prefix = "../".repeat(depth + 1);
             let prefix = prefix.trim_end_matches('/');
@@ -1143,6 +1148,29 @@ fn emit_function_imports_with_prefix(
     if !by_mod.is_empty() {
         out.push('\n');
     }
+}
+
+/// Emit import statements for user-defined free functions that live in `_init.ts`.
+///
+/// Any `Op::Call` name that matches a free function in the same module gets an
+/// `import { name } from "<prefix>/_init"` line.
+fn emit_free_function_imports(
+    call_names: &BTreeSet<String>,
+    free_func_names: &HashSet<String>,
+    prefix: &str,
+    out: &mut String,
+) {
+    let needed: BTreeSet<&str> = call_names
+        .iter()
+        .filter(|n| free_func_names.contains(n.as_str()))
+        .map(|n| n.as_str())
+        .collect();
+    if needed.is_empty() {
+        return;
+    }
+    let names: Vec<&str> = needed.into_iter().collect();
+    let _ = writeln!(out, "import {{ {} }} from \"{prefix}/_init\";", names.join(", "));
+    out.push('\n');
 }
 
 // ---------------------------------------------------------------------------
