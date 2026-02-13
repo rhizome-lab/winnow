@@ -351,15 +351,15 @@ fn build_code_locals_map<'a>(
     Ok(map)
 }
 
-/// Resolve all object names from OBJT.
+/// Resolve all object names from OBJT, converting to PascalCase.
 fn resolve_object_names(
     dw: &DataWin,
     objt: &datawin::chunks::objt::Objt,
 ) -> Result<Vec<String>, CoreError> {
     let mut names = Vec::with_capacity(objt.objects.len());
     for obj in &objt.objects {
-        let name = dw.resolve_string(obj.name).unwrap_or_else(|_| "???".to_string());
-        names.push(name);
+        let raw = dw.resolve_string(obj.name).unwrap_or_else(|_| "???".to_string());
+        names.push(naming::object_name_to_pascal(&raw));
     }
     Ok(names)
 }
