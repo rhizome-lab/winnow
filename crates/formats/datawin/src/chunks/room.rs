@@ -2,11 +2,30 @@ use crate::cursor::Cursor;
 use crate::error::Result;
 use crate::string_table::StringRef;
 
+/// An object instance placed in a room.
+#[derive(Debug, Clone)]
+pub struct RoomObject {
+    /// X position in the room.
+    pub x: i32,
+    /// Y position in the room.
+    pub y: i32,
+    /// Index into the OBJT chunk.
+    pub object_id: i32,
+    /// Instance ID (unique per data.win).
+    pub instance_id: u32,
+    /// Index into CODE chunk for instance creation code, or -1.
+    pub creation_code_id: i32,
+    /// Horizontal scale.
+    pub scale_x: f32,
+    /// Vertical scale.
+    pub scale_y: f32,
+    /// Blend color.
+    pub color: u32,
+    /// Rotation in degrees.
+    pub rotation: f32,
+}
+
 /// A room entry in the ROOM chunk.
-///
-/// Rooms are complex structures with many sub-lists (backgrounds, views,
-/// objects, tiles, layers). We parse the core fields and leave sub-structures
-/// as raw pointer lists for now.
 #[derive(Debug)]
 pub struct RoomEntry {
     /// Reference to the room name string.
@@ -29,6 +48,8 @@ pub struct RoomEntry {
     pub creation_code_id: i32,
     /// Room flags.
     pub flags: u32,
+    /// Object instances placed in the room.
+    pub objects: Vec<RoomObject>,
     /// Physics world properties.
     pub physics_world: bool,
     pub physics_gravity_x: f32,
@@ -61,6 +82,42 @@ impl Room {
         Ok(Self { rooms })
     }
 
+    fn parse_room_objects(data: &[u8], offset: usize) -> Result<Vec<RoomObject>> {
+        let mut c = Cursor::new(data);
+        c.seek(offset);
+        let pointers = c.read_pointer_list()?;
+
+        let mut objects = Vec::with_capacity(pointers.len());
+        for ptr in pointers {
+            let mut oc = Cursor::new(data);
+            oc.seek(ptr as usize);
+
+            let x = oc.read_i32()?;
+            let y = oc.read_i32()?;
+            let object_id = oc.read_i32()?;
+            let instance_id = oc.read_u32()?;
+            let creation_code_id = oc.read_i32()?;
+            let scale_x = oc.read_f32()?;
+            let scale_y = oc.read_f32()?;
+            let color = oc.read_u32()?;
+            let rotation = oc.read_f32()?;
+
+            objects.push(RoomObject {
+                x,
+                y,
+                object_id,
+                instance_id,
+                creation_code_id,
+                scale_x,
+                scale_y,
+                color,
+                rotation,
+            });
+        }
+
+        Ok(objects)
+    }
+
     fn parse_room(data: &[u8], offset: usize) -> Result<RoomEntry> {
         let mut c = Cursor::new(data);
         c.seek(offset);
@@ -76,15 +133,13 @@ impl Room {
         let creation_code_id = c.read_i32()?;
         let flags = c.read_u32()?;
 
-        // Backgrounds pointer, Views pointer, Objects pointer, Tiles pointer
-        // (we skip these sub-lists for now)
+        // Sub-list pointers
         let _bg_ptr = c.read_u32()?;
         let _views_ptr = c.read_u32()?;
-        let _objs_ptr = c.read_u32()?;
+        let objs_ptr = c.read_u32()?;
         let _tiles_ptr = c.read_u32()?;
 
         let physics_world = c.read_u32()? != 0;
-        // Physics top/left/right/bottom or gravity_x/gravity_y
         let _physics_top = c.read_u32()?;
         let _physics_left = c.read_u32()?;
         let _physics_right = c.read_u32()?;
@@ -92,6 +147,9 @@ impl Room {
         let physics_gravity_x = c.read_f32()?;
         let physics_gravity_y = c.read_f32()?;
         let physics_pixels_to_meters = c.read_f32()?;
+
+        // Parse object instances sub-list.
+        let objects = Self::parse_room_objects(data, objs_ptr as usize)?;
 
         Ok(RoomEntry {
             name,
@@ -104,6 +162,7 @@ impl Room {
             draw_background_color,
             creation_code_id,
             flags,
+            objects,
             physics_world,
             physics_gravity_x,
             physics_gravity_y,
