@@ -65,13 +65,23 @@ pub fn translate_code_entry(
         param_idx += 1;
     }
 
+    // Pre-compute stack depths at each block entry.
+    let block_entry_depths = compute_block_stack_depths(&instructions, &block_starts);
+
     // Block 0 = entry block (always offset 0). Create the rest.
     let mut block_map: HashMap<usize, BlockId> = HashMap::new();
+    let mut block_params: HashMap<usize, Vec<ValueId>> = HashMap::new();
     block_map.insert(0, fb.entry_block());
     for &off in &block_starts {
         if off != 0 {
             let block = fb.create_block();
             block_map.insert(off, block);
+            let depth = block_entry_depths.get(&off).copied().unwrap_or(0);
+            if depth > 0 {
+                let types: Vec<Type> = vec![Type::Dynamic; depth];
+                let params = fb.add_block_params(block, &types);
+                block_params.insert(off, params);
+            }
         }
     }
 
@@ -89,10 +99,15 @@ pub fn translate_code_entry(
             if let Some(&block) = block_map.get(&inst.offset) {
                 // Emit fall-through branch if previous block wasn't terminated.
                 if !terminated {
-                    fb.br(block, &[]);
+                    let depth = block_entry_depths.get(&inst.offset).copied().unwrap_or(0);
+                    let args = get_branch_args(&stack, depth);
+                    fb.br(block, &args);
                 }
                 fb.switch_to_block(block);
                 stack.clear();
+                if let Some(params) = block_params.get(&inst.offset) {
+                    stack.extend(params.iter().copied());
+                }
                 terminated = false;
             }
         }
@@ -111,6 +126,7 @@ pub fn translate_code_entry(
             &locals,
             ctx,
             &mut terminated,
+            &block_entry_depths,
         )?;
     }
 
@@ -131,7 +147,7 @@ fn find_block_starts(instructions: &[Instruction]) -> BTreeSet<usize> {
         match inst.opcode {
             Opcode::B | Opcode::Bt | Opcode::Bf | Opcode::PushEnv | Opcode::PopEnv => {
                 if let Operand::Branch(offset) = inst.operand {
-                    let target = (inst.offset as i64 + 4 + offset as i64) as usize;
+                    let target = (inst.offset as i64 + offset as i64) as usize;
                     starts.insert(target);
                 }
                 // Fall-through for conditional branches.
@@ -224,19 +240,20 @@ fn build_empty_function(
     Ok(fb.build())
 }
 
-/// Resolve a branch target offset to a BlockId.
+/// Resolve a branch target offset to (target_offset, BlockId).
 fn resolve_branch_target(
     inst: &Instruction,
     offset: i32,
     block_map: &HashMap<usize, BlockId>,
-) -> Result<BlockId, String> {
-    let target = (inst.offset as i64 + 4 + offset as i64) as usize;
-    block_map.get(&target).copied().ok_or_else(|| {
+) -> Result<(usize, BlockId), String> {
+    let target = (inst.offset as i64 + offset as i64) as usize;
+    let block = block_map.get(&target).copied().ok_or_else(|| {
         format!(
             "unresolved branch target at offset {:#x} → {:#x}",
             inst.offset, target
         )
-    })
+    })?;
+    Ok((target, block))
 }
 
 /// Resolve a variable reference to its name.
@@ -274,6 +291,166 @@ fn comparison_to_cmp_kind(cmp: ComparisonKind) -> CmpKind {
     }
 }
 
+/// Compute the stack effect (pops, pushes) of an instruction.
+fn stack_effect(inst: &Instruction) -> (usize, usize) {
+    match inst.opcode {
+        Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
+            if let Operand::Variable { instance, .. } = &inst.operand {
+                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop)) {
+                    (1, 1)
+                } else {
+                    (0, 1)
+                }
+            } else {
+                (0, 1)
+            }
+        }
+        Opcode::Add | Opcode::Sub | Opcode::Mul | Opcode::Div
+        | Opcode::Rem | Opcode::Mod => (2, 1),
+        Opcode::Neg | Opcode::Not => (1, 1),
+        Opcode::And | Opcode::Or | Opcode::Xor | Opcode::Shl | Opcode::Shr => (2, 1),
+        Opcode::Cmp => (2, 1),
+        Opcode::Conv => (1, 1),
+        Opcode::Dup => (0, 1),
+        Opcode::Popz => (1, 0),
+        Opcode::Pop => {
+            if let Operand::Variable { instance, .. } = &inst.operand {
+                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop)) {
+                    (2, 0)
+                } else {
+                    (1, 0)
+                }
+            } else {
+                (1, 0)
+            }
+        }
+        Opcode::Call => {
+            if let Operand::Call { argc, .. } = inst.operand {
+                (argc as usize, 1)
+            } else {
+                (0, 1)
+            }
+        }
+        Opcode::CallV => {
+            if let Operand::Call { argc, .. } = inst.operand {
+                (argc as usize + 1, 1)
+            } else {
+                (1, 1)
+            }
+        }
+        Opcode::Ret => (1, 0),
+        Opcode::Exit => (0, 0),
+        Opcode::B => (0, 0),
+        Opcode::Bt | Opcode::Bf => (1, 0),
+        Opcode::PushEnv => (1, 0),
+        Opcode::PopEnv => (0, 0),
+        Opcode::Break => {
+            if let Operand::Break(signal) = inst.operand {
+                match signal {
+                    0xFFFF | 0xFFFC | 0xFFFB => (0, 0),
+                    0xFFFE => (2, 1),
+                    0xFFFD => (3, 0),
+                    _ => (0, 0),
+                }
+            } else {
+                (0, 0)
+            }
+        }
+    }
+}
+
+/// Pre-compute the operand stack depth at each block entry point.
+fn compute_block_stack_depths(
+    instructions: &[Instruction],
+    block_starts: &BTreeSet<usize>,
+) -> HashMap<usize, usize> {
+    let mut depths: HashMap<usize, usize> = HashMap::new();
+    depths.insert(0, 0);
+
+    let mut depth: i32 = 0;
+    let mut terminated = false;
+
+    for (i, inst) in instructions.iter().enumerate() {
+        if block_starts.contains(&inst.offset) && i > 0 {
+            if !terminated {
+                depths.entry(inst.offset).or_insert(depth as usize);
+            }
+            if let Some(&d) = depths.get(&inst.offset) {
+                depth = d as i32;
+                terminated = false;
+            } else {
+                // Unreachable block (no incoming edge recorded a depth).
+                // Don't process instructions or propagate depths from here.
+                depth = 0;
+                terminated = true;
+            }
+        }
+
+        if terminated {
+            continue;
+        }
+
+        let (pops, pushes) = stack_effect(inst);
+        depth -= pops as i32;
+        if depth < 0 {
+            depth = 0;
+        }
+
+        match inst.opcode {
+            Opcode::B => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    depths.entry(target).or_insert(depth as usize);
+                }
+                terminated = true;
+            }
+            Opcode::Bt | Opcode::Bf => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    depths.entry(target).or_insert(depth as usize);
+                    if let Some(next) = instructions.get(i + 1) {
+                        depths.entry(next.offset).or_insert(depth as usize);
+                    }
+                }
+                terminated = true;
+            }
+            Opcode::PushEnv => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    depths.entry(target).or_insert(depth as usize);
+                    if let Some(next) = instructions.get(i + 1) {
+                        depths.entry(next.offset).or_insert(depth as usize);
+                    }
+                }
+                terminated = true;
+            }
+            Opcode::PopEnv => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    depths.entry(target).or_insert(depth as usize);
+                    if let Some(next) = instructions.get(i + 1) {
+                        depths.entry(next.offset).or_insert(depth as usize);
+                    }
+                }
+                terminated = true;
+            }
+            Opcode::Ret | Opcode::Exit => {
+                terminated = true;
+            }
+            _ => {}
+        }
+
+        depth += pushes as i32;
+    }
+
+    depths
+}
+
+/// Build branch arguments from the current stack based on target block's entry depth.
+fn get_branch_args(stack: &[ValueId], target_depth: usize) -> Vec<ValueId> {
+    stack.iter().take(target_depth).copied().collect()
+}
+
 /// Translate a single instruction.
 #[allow(clippy::too_many_arguments)]
 fn translate_instruction(
@@ -286,6 +463,7 @@ fn translate_instruction(
     locals: &HashMap<u32, ValueId>,
     ctx: &TranslateCtx,
     terminated: &mut bool,
+    block_entry_depths: &HashMap<usize, usize>,
 ) -> Result<(), String> {
     match inst.opcode {
         // ============================================================
@@ -387,27 +565,32 @@ fn translate_instruction(
         // ============================================================
         Opcode::B => {
             if let Operand::Branch(offset) = inst.operand {
-                let target = resolve_branch_target(inst, offset, block_map)?;
-                fb.br(target, &[]);
+                let (target_off, target) = resolve_branch_target(inst, offset, block_map)?;
+                let args = get_branch_args(stack, block_entry_depths.get(&target_off).copied().unwrap_or(0));
+                fb.br(target, &args);
                 *terminated = true;
             }
         }
         Opcode::Bt => {
             if let Operand::Branch(offset) = inst.operand {
                 let cond = pop(stack, inst)?;
-                let then_target = resolve_branch_target(inst, offset, block_map)?;
-                let else_target = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                fb.br_if(cond, then_target, &[], else_target, &[]);
+                let (then_off, then_target) = resolve_branch_target(inst, offset, block_map)?;
+                let (else_off, else_target) = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                let then_args = get_branch_args(stack, block_entry_depths.get(&then_off).copied().unwrap_or(0));
+                let else_args = get_branch_args(stack, block_entry_depths.get(&else_off).copied().unwrap_or(0));
+                fb.br_if(cond, then_target, &then_args, else_target, &else_args);
                 *terminated = true;
             }
         }
         Opcode::Bf => {
             if let Operand::Branch(offset) = inst.operand {
                 let cond = pop(stack, inst)?;
-                let branch_target = resolve_branch_target(inst, offset, block_map)?;
-                let fall_target = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                let (branch_off, branch_target) = resolve_branch_target(inst, offset, block_map)?;
+                let (fall_off, fall_target) = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                let fall_args = get_branch_args(stack, block_entry_depths.get(&fall_off).copied().unwrap_or(0));
+                let target_args = get_branch_args(stack, block_entry_depths.get(&branch_off).copied().unwrap_or(0));
                 // Bf branches when false, so swap: then=fallthrough, else=branch
-                fb.br_if(cond, fall_target, &[], branch_target, &[]);
+                fb.br_if(cond, fall_target, &fall_args, branch_target, &target_args);
                 *terminated = true;
             }
         }
@@ -499,17 +682,16 @@ fn translate_instruction(
                     &[target_obj],
                     Type::Dynamic,
                 );
-                let body_block = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                fb.br(body_block, &[]);
+                let (body_off, body_block) = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                let args = get_branch_args(stack, block_entry_depths.get(&body_off).copied().unwrap_or(0));
+                fb.br(body_block, &args);
                 *terminated = true;
-                // The branch offset points past the with-body (to PopEnv target).
-                // We'll resolve the with-end in PopEnv.
                 let _end_offset = offset;
             }
         }
         Opcode::PopEnv => {
             if let Operand::Branch(offset) = inst.operand {
-                let sentinel = inst.offset as i64 + 4 + offset as i64;
+                let sentinel = inst.offset as i64 + offset as i64;
                 if sentinel < 0 || offset == -0x100000 * 4 {
                     // Break out of with-block (sentinel 0xF00000).
                     fb.system_call(
@@ -518,8 +700,9 @@ fn translate_instruction(
                         &[],
                         Type::Void,
                     );
-                    let fall = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                    fb.br(fall, &[]);
+                    let (fall_off, fall) = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                    let args = get_branch_args(stack, block_entry_depths.get(&fall_off).copied().unwrap_or(0));
+                    fb.br(fall, &args);
                     *terminated = true;
                 } else {
                     // Loop back to with-body header.
@@ -529,8 +712,9 @@ fn translate_instruction(
                         &[],
                         Type::Void,
                     );
-                    let loop_target = resolve_branch_target(inst, offset, block_map)?;
-                    fb.br(loop_target, &[]);
+                    let (loop_off, loop_target) = resolve_branch_target(inst, offset, block_map)?;
+                    let args = get_branch_args(stack, block_entry_depths.get(&loop_off).copied().unwrap_or(0));
+                    fb.br(loop_target, &args);
                     *terminated = true;
                 }
             }
@@ -828,22 +1012,23 @@ fn pop(stack: &mut Vec<ValueId>, inst: &Instruction) -> Result<ValueId, String> 
     })
 }
 
-/// Resolve the fall-through target (next instruction's block).
+/// Resolve the fall-through target to (target_offset, BlockId).
 fn resolve_fallthrough(
     instructions: &[Instruction],
     inst_idx: usize,
     block_map: &HashMap<usize, BlockId>,
-) -> Result<BlockId, String> {
+) -> Result<(usize, BlockId), String> {
     let next = instructions.get(inst_idx + 1).ok_or_else(|| {
         format!(
             "no fall-through instruction after index {}",
             inst_idx
         )
     })?;
-    block_map.get(&next.offset).copied().ok_or_else(|| {
+    let block = block_map.get(&next.offset).copied().ok_or_else(|| {
         format!(
             "fall-through offset {:#x} is not a block start",
             next.offset
         )
-    })
+    })?;
+    Ok((next.offset, block))
 }
