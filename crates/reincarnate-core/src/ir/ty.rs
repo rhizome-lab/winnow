@@ -45,6 +45,8 @@ pub enum Type {
     /// Dynamic / any — fallback when inference fails.
     /// Backends emit a tagged union for this.
     Dynamic,
+    /// Unknown — type-safe top type (TypeScript `unknown`).
+    Unknown,
 }
 
 /// Function signature.

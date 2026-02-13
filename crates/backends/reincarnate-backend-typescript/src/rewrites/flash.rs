@@ -439,11 +439,18 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
             let dummy = JsExpr::Literal(Constant::Null);
             let old = std::mem::replace(expr, dummy);
             if let JsExpr::Call { mut args, .. } = old {
-                let mut method_ref = args.swap_remove(1);
+                let method_ref = args.swap_remove(1);
+                // Extract method name for the type assertion before rewriting.
+                let cast_as = if let JsExpr::Field { field, .. } = &method_ref {
+                    Some(format!("{class_name}['{field}']"))
+                } else {
+                    None
+                };
+                let mut method_ref = method_ref;
                 rewrite_this_to_prototype(&mut method_ref, class_name);
                 *expr = JsExpr::ArrowFunction {
                     params: vec![("args".to_string(), Type::Array(Box::new(Type::Dynamic)))],
-                    return_ty: Type::Dynamic,
+                    return_ty: Type::Unknown,
                     body: vec![JsStmt::Return(Some(JsExpr::Call {
                         callee: Box::new(JsExpr::Field {
                             object: Box::new(method_ref),
@@ -452,6 +459,7 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
                         args: vec![JsExpr::This, JsExpr::Var("args".to_string())],
                     }))],
                     has_rest_param: true,
+                    cast_as,
                 };
             }
             return;
@@ -946,11 +954,13 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             return_ty,
             body,
             has_rest_param,
+            cast_as,
         } => JsExpr::ArrowFunction {
             params,
             return_ty,
             body: rewrite_stmts(body, ctx),
             has_rest_param,
+            cast_as,
         },
     }
 }
@@ -994,6 +1004,7 @@ fn rewrite_system_call(
                     return_ty: rewritten.return_ty,
                     body: rewritten.body,
                     has_rest_param: rewritten.has_rest_param,
+                    cast_as: None,
                 });
             }
             // Fallback: non-compiled closure → this.$closureN

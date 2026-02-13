@@ -147,6 +147,8 @@ pub enum JsExpr {
         return_ty: Type,
         body: Vec<JsStmt>,
         has_rest_param: bool,
+        /// Optional type assertion: `(arrow) as <cast_as>`.
+        cast_as: Option<String>,
     },
 
     // --- Fallback ---

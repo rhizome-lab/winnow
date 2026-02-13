@@ -77,6 +77,7 @@ fn fmt_type(ty: &Type, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             Ok(())
         }
         Type::Dynamic => write!(f, "dyn"),
+        Type::Unknown => write!(f, "unknown"),
     }
 }
 

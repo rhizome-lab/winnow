@@ -591,12 +591,16 @@ fn print_expr(expr: &JsExpr) -> String {
             return_ty,
             body,
             has_rest_param,
+            cast_as,
         } => {
             let params_str = print_params(params, *has_rest_param);
             let ret_ty = ts_type(return_ty);
             let mut out = format!("({params_str}): {ret_ty} => {{\n");
             print_stmts(body, &mut out, "  ");
             out.push('}');
+            if let Some(cast) = cast_as {
+                out = format!("({out}) as {cast}");
+            }
             out
         }
 
