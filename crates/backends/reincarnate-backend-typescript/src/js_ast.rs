@@ -141,6 +141,13 @@ pub enum JsExpr {
     },
     /// Activation object: `({})`.
     Activation,
+    /// Arrow function: `(params) => { body }`.
+    ArrowFunction {
+        params: Vec<(String, Type)>,
+        return_ty: Type,
+        body: Vec<JsStmt>,
+        has_rest_param: bool,
+    },
 
     // --- Fallback ---
     /// Unmapped system call (passthrough to runtime module).

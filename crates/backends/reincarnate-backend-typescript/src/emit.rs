@@ -1773,6 +1773,9 @@ fn rewrite_late_bound_expr(
                 rewrite_late_bound_expr(arg, late_bound, short_to_qualified);
             }
         }
+        JsExpr::ArrowFunction { body, .. } => {
+            rewrite_late_bound_types(body, late_bound, short_to_qualified);
+        }
         // Leaf nodes — nothing to recurse into.
         JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This
         | JsExpr::Activation | JsExpr::SuperGet(_) | JsExpr::Yield(None) => {}

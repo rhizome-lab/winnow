@@ -370,6 +370,50 @@ fn collect_expr_vars(expr: &JsExpr, out: &mut HashSet<String>) {
                 collect_expr_vars(e, out);
             }
         }
+        JsExpr::ArrowFunction { body, .. } => {
+            collect_stmts_vars(body, out);
+        }
+    }
+}
+
+/// Collect variable references from a list of statements.
+fn collect_stmts_vars(stmts: &[JsStmt], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            JsStmt::VarDecl { init: Some(e), .. } | JsStmt::Expr(e) | JsStmt::Return(Some(e)) | JsStmt::Throw(e) => {
+                collect_expr_vars(e, out);
+            }
+            JsStmt::Assign { target, value } | JsStmt::CompoundAssign { target, value, .. } => {
+                collect_expr_vars(target, out);
+                collect_expr_vars(value, out);
+            }
+            JsStmt::If { cond, then_body, else_body } => {
+                collect_expr_vars(cond, out);
+                collect_stmts_vars(then_body, out);
+                collect_stmts_vars(else_body, out);
+            }
+            JsStmt::While { cond, body } => {
+                collect_expr_vars(cond, out);
+                collect_stmts_vars(body, out);
+            }
+            JsStmt::For { init, cond, update, body } => {
+                collect_stmts_vars(init, out);
+                collect_expr_vars(cond, out);
+                collect_stmts_vars(update, out);
+                collect_stmts_vars(body, out);
+            }
+            JsStmt::Loop { body } => collect_stmts_vars(body, out),
+            JsStmt::ForOf { iterable, body, .. } => {
+                collect_expr_vars(iterable, out);
+                collect_stmts_vars(body, out);
+            }
+            JsStmt::Dispatch { blocks, .. } => {
+                for (_, stmts) in blocks {
+                    collect_stmts_vars(stmts, out);
+                }
+            }
+            JsStmt::VarDecl { init: None, .. } | JsStmt::Return(None) | JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {}
+        }
     }
 }
 
@@ -450,6 +494,8 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
                 rewrite_this_to_prototype(e, class_name);
             }
         }
+        // Arrow functions in super() args are extremely rare; skip recursion.
+        JsExpr::ArrowFunction { .. } => {}
         // Leaves: no recursion needed.
         JsExpr::Literal(_)
         | JsExpr::Var(_)
@@ -458,6 +504,7 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
         | JsExpr::SuperGet(_) => {}
     }
 }
+
 
 /// Check whether a statement declares or assigns any variable in `vars`.
 /// Recurses into nested bodies (if/else, loops) to find assignments.
@@ -856,6 +903,18 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             method,
             args: rewrite_exprs(args, ctx),
         },
+
+        JsExpr::ArrowFunction {
+            params,
+            return_ty,
+            body,
+            has_rest_param,
+        } => JsExpr::ArrowFunction {
+            params,
+            return_ty,
+            body: rewrite_stmts(body, ctx),
+            has_rest_param,
+        },
     }
 }
 
@@ -1179,6 +1238,9 @@ fn bind_method_refs_expr(expr: &mut JsExpr, bindable: &HashSet<String>, in_calle
             if let Some(e) = opt {
                 bind_method_refs_expr(e, bindable, false);
             }
+        }
+        JsExpr::ArrowFunction { body, .. } => {
+            bind_method_refs_stmts(body, bindable);
         }
         JsExpr::Literal(_)
         | JsExpr::Var(_)

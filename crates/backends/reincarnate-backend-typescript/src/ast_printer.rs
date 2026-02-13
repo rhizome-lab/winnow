@@ -586,6 +586,20 @@ fn print_expr(expr: &JsExpr) -> String {
 
         JsExpr::Activation => "({})".to_string(),
 
+        JsExpr::ArrowFunction {
+            params,
+            return_ty,
+            body,
+            has_rest_param,
+        } => {
+            let params_str = print_params(params, *has_rest_param);
+            let ret_ty = ts_type(return_ty);
+            let mut out = format!("({params_str}): {ret_ty} => {{\n");
+            print_stmts(body, &mut out, "  ");
+            out.push('}');
+            out
+        }
+
         // --- Fallback: unmapped system call ---
         JsExpr::SystemCall {
             system,
@@ -634,7 +648,8 @@ fn needs_parens(expr: &JsExpr) -> bool {
             | JsExpr::Unary { .. }
             | JsExpr::Not(_)
             | JsExpr::In { .. }
-            | JsExpr::SuperSet { .. } => true,
+            | JsExpr::SuperSet { .. }
+            | JsExpr::ArrowFunction { .. } => true,
         _ => false,
     }
 }
