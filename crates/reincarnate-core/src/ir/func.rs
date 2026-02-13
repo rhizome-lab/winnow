@@ -31,6 +31,7 @@ pub enum MethodKind {
     Static,
     Getter,
     Setter,
+    Closure,
 }
 
 /// A function in the IR.

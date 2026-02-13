@@ -141,6 +141,7 @@ fn fmt_method_kind(kind: MethodKind, f: &mut fmt::Formatter<'_>) -> fmt::Result 
         MethodKind::Static => write!(f, " [static]"),
         MethodKind::Getter => write!(f, " [getter]"),
         MethodKind::Setter => write!(f, " [setter]"),
+        MethodKind::Closure => write!(f, " [closure]"),
     }
 }
 

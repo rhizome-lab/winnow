@@ -153,7 +153,7 @@ pub fn translate_class(abc: &AbcFile, class_idx: usize) -> Result<ClassInfo, Str
     for mut func in inner_functions {
         func.namespace = class_ns.clone();
         func.class = Some(class_short_name.clone());
-        func.method_kind = MethodKind::Instance;
+        func.method_kind = MethodKind::Closure;
         func.visibility = Visibility::Private;
         functions.push(func);
     }

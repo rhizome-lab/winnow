@@ -372,7 +372,7 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
         loop {
             for &fid in &current.methods {
                 if let Some(f) = module.functions.get(fid) {
-                    if f.method_kind != MethodKind::Static {
+                    if !matches!(f.method_kind, MethodKind::Static | MethodKind::Closure) {
                         if let Some(short) = f.name.rsplit("::").next() {
                             names.insert(short.to_string());
                             // Getters/setters use get_/set_ prefix in their function
@@ -2103,7 +2103,7 @@ fn emit_register_class_traits(
         // Strip class prefix: "Enum::toString" → "toString"
         let short = func.name.rsplit("::").next().unwrap_or(&func.name);
         match func.method_kind {
-            MethodKind::Constructor | MethodKind::Free => {}
+            MethodKind::Constructor | MethodKind::Free | MethodKind::Closure => {}
             MethodKind::Instance => {
                 instance_traits.push(format!(
                     "{{ name: \"{short}\", kind: \"method\" }}"
@@ -2231,6 +2231,7 @@ fn emit_class(
         MethodKind::Setter => 3,
         MethodKind::Static => 4,
         MethodKind::Free => 5,
+        MethodKind::Closure => 6,
     });
 
     let empty_set = HashSet::new();
@@ -2314,6 +2315,7 @@ fn emit_class_method(
             | MethodKind::Getter
             | MethodKind::Setter
             | MethodKind::Static
+            | MethodKind::Closure
     );
 
     let shape = structurize::structurize(func);
@@ -2344,7 +2346,7 @@ fn emit_class_method(
         static_field_owners: static_field_owners.clone(),
         const_instance_fields: const_instance_fields.clone(),
         class_short_name: Some(class_short_name.to_string()),
-        bindable_methods: if is_cinit || func.method_kind == MethodKind::Static {
+        bindable_methods: if is_cinit || matches!(func.method_kind, MethodKind::Static | MethodKind::Closure) {
             HashSet::new()
         } else {
             bindable_methods.clone()
