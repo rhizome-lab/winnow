@@ -372,6 +372,24 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
                     if f.method_kind != MethodKind::Static {
                         if let Some(short) = f.name.rsplit("::").next() {
                             names.insert(short.to_string());
+                            // Getters/setters use get_/set_ prefix in their function
+                            // name, but are accessed as bare property names in AVM2
+                            // (via GetProperty/SetProperty, not explicit calls).
+                            // Add the un-prefixed property name so resolve_field can
+                            // recognise them as instance members.
+                            match f.method_kind {
+                                MethodKind::Getter => {
+                                    if let Some(prop) = short.strip_prefix("get_") {
+                                        names.insert(prop.to_string());
+                                    }
+                                }
+                                MethodKind::Setter => {
+                                    if let Some(prop) = short.strip_prefix("set_") {
+                                        names.insert(prop.to_string());
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }

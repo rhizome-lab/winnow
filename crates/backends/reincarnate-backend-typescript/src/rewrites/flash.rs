@@ -109,7 +109,10 @@ fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<
 
     Some(match resolve_scope_lookup(args, ctx) {
         ScopeResolution::Ancestor(ref class_name) => {
-            if ctx.is_cinit || ctx.instance_fields.contains(effective) {
+            if ctx.is_cinit
+                || ctx.instance_fields.contains(effective)
+                || ctx.method_names.contains(effective)
+            {
                 JsExpr::Field {
                     object: Box::new(JsExpr::This),
                     field: effective.to_string(),
@@ -142,7 +145,10 @@ fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<
                         object: Box::new(JsExpr::Var(owner.clone())),
                         field: effective.to_string(),
                     }
-                } else if ctx.has_self && ctx.instance_fields.contains(effective) {
+                } else if ctx.has_self
+                    && (ctx.instance_fields.contains(effective)
+                        || ctx.method_names.contains(effective))
+                {
                     JsExpr::Field {
                         object: Box::new(JsExpr::This),
                         field: effective.to_string(),
@@ -150,7 +156,10 @@ fn resolve_field(object: &JsExpr, field: &str, ctx: &FlashRewriteCtx) -> Option<
                 } else {
                     JsExpr::Var(effective.to_string())
                 }
-            } else if ctx.has_self && ctx.instance_fields.contains(effective) {
+            } else if ctx.has_self
+                && (ctx.instance_fields.contains(effective)
+                    || ctx.method_names.contains(effective))
+            {
                 JsExpr::Field {
                     object: Box::new(JsExpr::This),
                     field: effective.to_string(),
