@@ -1,5 +1,6 @@
 mod assets;
 mod data;
+pub mod naming;
 mod object;
 mod translate;
 
