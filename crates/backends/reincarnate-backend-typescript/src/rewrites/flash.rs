@@ -423,6 +423,28 @@ fn collect_stmts_vars(stmts: &[JsStmt], out: &mut HashSet<String>) {
 /// AVM2 allows `this` before `super()`, but ES6 does not; method references live on
 /// the prototype and are accessible without `this`.
 fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
+    // Strip as3Bind(this, X) → X.  `this` is illegal before super() in ES6,
+    // and the method reference on the prototype doesn't need binding here —
+    // it will be bound correctly when later invoked on the instance.
+    {
+        let should_strip = matches!(
+            expr,
+            JsExpr::Call { callee, args }
+            if matches!(callee.as_ref(), JsExpr::Var(n) if n == "as3Bind")
+                && args.len() == 2
+                && matches!(&args[0], JsExpr::This)
+        );
+        if should_strip {
+            let dummy = JsExpr::Literal(Constant::Null);
+            let old = std::mem::replace(expr, dummy);
+            if let JsExpr::Call { mut args, .. } = old {
+                *expr = args.swap_remove(1);
+            }
+            rewrite_this_to_prototype(expr, class_name);
+            return;
+        }
+    }
+
     match expr {
         JsExpr::Field { object, .. } if matches!(object.as_ref(), JsExpr::This) => {
             *object = Box::new(JsExpr::Field {
