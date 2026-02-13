@@ -652,15 +652,29 @@ program analysis or conservative assumptions.
 
 ### High Priority (correctness)
 
-- [ ] **Switch statement reconstruction** — GML compiles switch/case to
-  `Dup` + `Cmp` + `Bf` (branch-if-false) sequences. Currently emitted as
-  if-chains. The last case often loses its `if` guard (bare comparison
-  expression + unconditional assignment). Needs pattern detection in the
-  frontend to emit `Op::Switch` or a new shape variant.
-- [ ] **Named object singleton accessors** — `getInstanceField(3, "dice_type")`
-  should resolve the numeric object index to the object name, e.g.
-  `Stats.instances[0].dice_type`. The object names are available from the
-  Classes enum. Needs context threading from the module to the rewrite pass.
+- [x] **Switch statement reconstruction** — Done. Frontend detects
+  `Dup` + `Cmp(Eq)` + `BrIf` chains and rewrites them as `Op::Switch`.
+  Core pipeline and backend support Switch through structurize → linear → emit.
+- [x] **Named object singleton accessors** — Done. Numeric instance IDs
+  resolved to named singletons (e.g. `Stats.instances[0].dice_type`)
+  using object names from OBJT chunk.
+
+### Type Inference Results
+
+GML bytecode has zero type metadata — everything enters the IR as `Dynamic`.
+With `function_signatures` in `runtime.json` (~160 GML standard library
+functions), `type_definitions` for `GMLObject` (44 built-in fields), and
+`Struct(class_name)` self parameter typing:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| `let: any` | 1736 → 8 | 2 |
+| `(): any` return types | 205 → 10 | 7 |
+| Total `: any` | ~1950 | 9 |
+
+Remaining 7 `(): any` are scripts that return `variable_global_get()` which
+legitimately returns `*` (Dynamic). Remaining 2 `let: any` are variables
+assigned from `variable_global_get()` or untyped argument passthrough.
 
 ### Medium Priority (output quality)
 
