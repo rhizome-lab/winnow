@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use reincarnate_core::ir::Constant;
+use reincarnate_core::ir::{Constant, Type};
 
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
@@ -423,24 +423,37 @@ fn collect_stmts_vars(stmts: &[JsStmt], out: &mut HashSet<String>) {
 /// AVM2 allows `this` before `super()`, but ES6 does not; method references live on
 /// the prototype and are accessible without `this`.
 fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
-    // Strip as3Bind(this, X) → X.  `this` is illegal before super() in ES6,
-    // and the method reference on the prototype doesn't need binding here —
-    // it will be bound correctly when later invoked on the instance.
+    // Replace as3Bind(this, X) with a lazy arrow function:
+    //   (...args: any[]): any => { return X.apply(this, args); }
+    // Arrow functions capture `this` lexically but only evaluate it when called,
+    // which is after super() completes — so this is safe in super() arguments.
     {
-        let should_strip = matches!(
+        let is_as3_bind = matches!(
             expr,
             JsExpr::Call { callee, args }
             if matches!(callee.as_ref(), JsExpr::Var(n) if n == "as3Bind")
                 && args.len() == 2
                 && matches!(&args[0], JsExpr::This)
         );
-        if should_strip {
+        if is_as3_bind {
             let dummy = JsExpr::Literal(Constant::Null);
             let old = std::mem::replace(expr, dummy);
             if let JsExpr::Call { mut args, .. } = old {
-                *expr = args.swap_remove(1);
+                let mut method_ref = args.swap_remove(1);
+                rewrite_this_to_prototype(&mut method_ref, class_name);
+                *expr = JsExpr::ArrowFunction {
+                    params: vec![("args".to_string(), Type::Array(Box::new(Type::Dynamic)))],
+                    return_ty: Type::Dynamic,
+                    body: vec![JsStmt::Return(Some(JsExpr::Call {
+                        callee: Box::new(JsExpr::Field {
+                            object: Box::new(method_ref),
+                            field: "apply".to_string(),
+                        }),
+                        args: vec![JsExpr::This, JsExpr::Var("args".to_string())],
+                    }))],
+                    has_rest_param: true,
+                };
             }
-            rewrite_this_to_prototype(expr, class_name);
             return;
         }
     }
