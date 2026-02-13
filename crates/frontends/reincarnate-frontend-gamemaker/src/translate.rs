@@ -267,7 +267,8 @@ fn resolve_branch_target(
 /// The variable operand word is at `inst.offset + 4` within the code entry's bytecode.
 /// We compute the absolute file address and look it up in the pre-built reference map.
 fn resolve_variable_name(inst: &Instruction, ctx: &TranslateCtx) -> String {
-    let abs_addr = ctx.bytecode_offset + inst.offset + 4;
+    // first_address points to the instruction word; lookup by instruction address.
+    let abs_addr = ctx.bytecode_offset + inst.offset;
     if let Some(&vari_idx) = ctx.vari_ref_map.get(&abs_addr) {
         if vari_idx < ctx.variables.len() {
             return ctx.variables[vari_idx].0.clone();
@@ -645,8 +646,8 @@ fn translate_instruction(
         // ============================================================
         Opcode::Call => {
             if let Operand::Call { function_id, argc } = inst.operand {
-                // The function_id word is at inst.offset + 4 (after the instruction word).
-                let abs_addr = ctx.bytecode_offset + inst.offset + 4;
+                // first_address points to the Call instruction word.
+                let abs_addr = ctx.bytecode_offset + inst.offset;
                 let func_name = ctx.func_ref_map.get(&abs_addr)
                     .and_then(|&idx| ctx.function_names.get(&(idx as u32)))
                     .cloned()

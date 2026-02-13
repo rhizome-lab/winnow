@@ -349,11 +349,11 @@ fn build_function_names(
     Ok(names)
 }
 
-/// Walk FUNC linked lists to build: absolute_bytecode_address → func_entry_index.
+/// Walk FUNC linked lists to build: absolute_instruction_address → func_entry_index.
 ///
-/// Each FunctionEntry has a linked list of call sites. `first_address` is the
-/// absolute offset in `data` of the first reference, and each reference site's
-/// raw u32 value encodes the next site's address.
+/// `first_address` points to the Call instruction word; the function_id operand
+/// is at `first_address + 4`. The operand's lower 27 bits encode a relative
+/// offset to the next occurrence: `next_addr = addr + offset`.
 fn build_func_ref_map(
     func: &datawin::chunks::func::Func,
     data: &[u8],
@@ -366,27 +366,30 @@ fn build_func_ref_map(
         let mut addr = entry.first_address as usize;
         for _ in 0..entry.occurrences {
             map.insert(addr, i);
-            if addr + 4 > data.len() {
+            // The operand (next-pointer) is at addr + 4.
+            let operand_addr = addr + 4;
+            if operand_addr + 4 > data.len() {
                 break;
             }
             let raw = u32::from_le_bytes(
-                data[addr..addr + 4].try_into().unwrap(),
+                data[operand_addr..operand_addr + 4].try_into().unwrap(),
             );
-            // For FUNC references, the full u32 is the next address.
-            let next = raw as usize;
-            if next == 0 || next == addr {
+            // Lower 27 bits = additive offset to next occurrence.
+            let offset = (raw & 0x07FF_FFFF) as usize;
+            if offset == 0 {
                 break;
             }
-            addr = next;
+            addr += offset;
         }
     }
     map
 }
 
-/// Walk VARI linked lists to build: absolute_bytecode_address → vari_entry_index.
+/// Walk VARI linked lists to build: absolute_instruction_address → vari_entry_index.
 ///
-/// Each VariableEntry has a linked list of reference sites. The raw u32 at each
-/// site packs: lower 24 bits = next address, upper bits = ref_type.
+/// `first_address` points to the Push/Pop instruction word; the variable operand
+/// is at `first_address + 4`. The operand's lower 27 bits encode a relative
+/// offset to the next occurrence: `next_addr = addr + offset`.
 fn build_vari_ref_map(
     vari: &datawin::chunks::vari::Vari,
     data: &[u8],
@@ -399,18 +402,20 @@ fn build_vari_ref_map(
         let mut addr = entry.first_address as usize;
         for _ in 0..entry.occurrences {
             map.insert(addr, i);
-            if addr + 4 > data.len() {
+            // The operand (next-pointer) is at addr + 4.
+            let operand_addr = addr + 4;
+            if operand_addr + 4 > data.len() {
                 break;
             }
             let raw = u32::from_le_bytes(
-                data[addr..addr + 4].try_into().unwrap(),
+                data[operand_addr..operand_addr + 4].try_into().unwrap(),
             );
-            // Lower 24 bits = next address (upper bits are ref_type).
-            let next = (raw & 0x00FF_FFFF) as usize;
-            if next == 0 || next == addr {
+            // Lower 27 bits = additive offset to next occurrence.
+            let offset = (raw & 0x07FF_FFFF) as usize;
+            if offset == 0 {
                 break;
             }
-            addr = next;
+            addr += offset;
         }
     }
     map
