@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use datawin::DataWin;
 use reincarnate_core::project::{Asset, AssetCatalog, AssetKind};
 
+use crate::naming;
+
 /// Generate TypeScript data files from parsed chunks and add them to the catalog.
 pub fn generate_data_files(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: &[String]) {
     generate_textures(dw, catalog);
@@ -83,11 +85,12 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
 
     out.push_str("];\n\n");
 
-    // Sprites enum: name → index
+    // Sprites enum: PascalCase name → index
     out.push_str("export const Sprites: Record<string, number> = {\n");
     for (i, sprite) in sprt.sprites.iter().enumerate() {
-        let name = dw.resolve_string(sprite.name).unwrap_or_else(|_| format!("spr_{i}"));
-        let _ = writeln!(out, "  {name}: {i},");
+        let raw = dw.resolve_string(sprite.name).unwrap_or_else(|_| format!("spr_{i}"));
+        let key = naming::sprite_name_to_pascal(&raw);
+        let _ = writeln!(out, "  {key}: {i},");
     }
     out.push_str("};\n");
 
@@ -203,11 +206,12 @@ fn generate_rooms(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: &[String]
 
     out.push_str("];\n\n");
 
-    // Rooms enum: name → index
+    // Rooms enum: PascalCase name → index
     out.push_str("export const Rooms: Record<string, number> = {\n");
     for (i, entry) in room.rooms.iter().enumerate() {
-        let name = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("room_{i}"));
-        let _ = writeln!(out, "  {name}: {i},");
+        let raw = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("room_{i}"));
+        let key = naming::room_name_to_pascal(&raw);
+        let _ = writeln!(out, "  {key}: {i},");
     }
     out.push_str("};\n");
 
