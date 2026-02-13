@@ -115,3 +115,9 @@ export function lengthdir_y(len: number, dir: number): number { return -len * ds
 
 export function logn(n: number, val: number): number { return Math.log(val) / Math.log(n); }
 export function int64(n: number): number { return n | 0; }
+export function median(...nums: number[]): number {
+  const sorted = nums.slice().sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+export function arctan2(y: number, x: number): number { return Math.atan2(y, x); }
