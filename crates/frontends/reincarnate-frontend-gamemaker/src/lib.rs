@@ -163,6 +163,7 @@ fn translate_scripts(
         let code_entry = &code.entries[code_idx];
         let code_name = dw.resolve_string(code_entry.name).unwrap_or_default();
         let clean_name = strip_script_prefix(&script_name);
+        let func_name = naming::snake_to_camel(clean_name);
 
         let locals = code_locals_map.get(&code_name).copied();
 
@@ -176,7 +177,7 @@ fn translate_scripts(
             arg_count: code_entry.args_count & 0x7FFF,
         };
 
-        match translate::translate_code_entry(bytecode, clean_name, &ctx) {
+        match translate::translate_code_entry(bytecode, &func_name, &ctx) {
             Ok(func) => {
                 mb.add_function(func);
                 translated += 1;
@@ -218,7 +219,7 @@ fn translate_global_inits(
         let code_entry = &code.entries[code_idx];
         let code_name = dw.resolve_string(code_entry.name).unwrap_or_default();
         let clean_name = strip_script_prefix(&code_name);
-        let func_name = format!("_global_init_{clean_name}");
+        let func_name = format!("_globalInit{}", naming::snake_to_pascal(clean_name));
         let locals = code_locals_map.get(&code_name).copied();
 
         let ctx = TranslateCtx {
@@ -269,7 +270,7 @@ fn translate_room_creation(
         let code_entry = &code.entries[code_idx];
         let code_name = dw.resolve_string(code_entry.name).unwrap_or_default();
         let room_name = dw.resolve_string(room_entry.name).unwrap_or_else(|_| format!("room_{code_idx}"));
-        let func_name = format!("room_{room_name}_create");
+        let func_name = format!("room{}Create", naming::room_name_to_pascal(&room_name));
         let locals = code_locals_map.get(&code_name).copied();
 
         let ctx = TranslateCtx {
