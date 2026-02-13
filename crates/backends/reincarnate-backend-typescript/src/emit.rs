@@ -42,6 +42,10 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     let empty_type_defs = BTreeMap::new();
     let type_defs = runtime_config.map(|c| &c.type_definitions).unwrap_or(&empty_type_defs);
     let class_meta = ClassMeta::build(module, type_defs);
+    let mut known_classes: HashSet<String> = class_names.values().cloned().collect();
+    if let Some(rc) = runtime_config {
+        known_classes.extend(rc.type_definitions.keys().cloned());
+    }
 
     emit_runtime_imports(module, &mut out, runtime_config);
     if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
@@ -61,17 +65,17 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     // Single-file mode — globals are in the same scope, no ESM setter rewrite needed.
     let no_mutable_globals = HashSet::new();
     if module.classes.is_empty() {
-        emit_functions(module, &class_names, &no_mutable_globals, lowering_config, &mut out)?;
+        emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, &mut out)?;
     } else {
         // Single-file mode: no circular imports (all classes in one scope).
         let no_late_bound = HashSet::new();
         let no_short_to_qualified = HashMap::new();
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, lowering_config, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, &mut out)?;
         }
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &no_mutable_globals, lowering_config, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, &mut out)?;
         }
     }
 
@@ -664,6 +668,10 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         .iter()
         .map(|c| (c.name.clone(), qualified_class_name(c)))
         .collect();
+    let mut known_classes: HashSet<String> = class_names.values().cloned().collect();
+    if let Some(rc) = runtime_config {
+        known_classes.extend(rc.type_definitions.keys().cloned());
+    }
     let mut barrel_exports: Vec<String> = Vec::new();
 
     // Globals → _globals.ts (at module root).
@@ -773,7 +781,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             validate_member_accesses(&module.functions[fid], Some(&qualified), &class_meta, &registry, &short_to_qualified, type_defs);
         }
 
-        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, lowering_config, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, &mut out)?;
 
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -827,7 +835,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
 
         emit_imports(module, &mut out);
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &mutable_global_names, lowering_config, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, &mut out)?;
         }
         let path = module_dir.join("_init.ts");
         fs::write(&path, &out).map_err(CoreError::Io)?;
@@ -1230,6 +1238,13 @@ fn collect_type_refs_from_function(
                             if let Some(entry) = registry.lookup(owner) {
                                 refs.value_refs.insert(entry.short_name.clone());
                             }
+                        }
+                    }
+                    // Class coercion: FindPropStrict("ClassName") + CallPropLex("ClassName", 1)
+                    // resolves to asType(obj, ClassName) — need the class as a value import.
+                    if bare != self_name {
+                        if let Some(entry) = registry.lookup(bare) {
+                            refs.value_refs.insert(entry.short_name.clone());
                         }
                     }
                     // Module-level globals (package variables).
@@ -1960,12 +1975,13 @@ fn rewrite_global_assignments(body: &mut [JsStmt], mutable_globals: &HashSet<Str
 fn emit_functions(
     module: &mut Module,
     class_names: &HashMap<String, String>,
+    known_classes: &HashSet<String>,
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     for id in module.functions.keys().collect::<Vec<_>>() {
-        emit_function(&mut module.functions[id], class_names, mutable_global_names, lowering_config, out)?;
+        emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, out)?;
     }
     Ok(())
 }
@@ -1973,6 +1989,7 @@ fn emit_functions(
 fn emit_function(
     func: &mut Function,
     class_names: &HashMap<String, String>,
+    known_classes: &HashSet<String>,
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
@@ -2000,6 +2017,7 @@ fn emit_function(
         class_short_name: None,
         bindable_methods: HashSet::new(),
         closure_bodies: HashMap::new(),
+        known_classes: known_classes.clone(),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
@@ -2167,6 +2185,7 @@ fn emit_class(
     mutable_global_names: &HashSet<String>,
     late_bound: &HashSet<String>,
     short_to_qualified: &HashMap<String, String>,
+    known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2274,7 +2293,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, lowering_config, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2351,6 +2370,7 @@ fn emit_class_method(
     short_to_qualified: &HashMap<String, String>,
     bindable_methods: &HashSet<String>,
     closure_bodies: &HashMap<String, JsFunction>,
+    known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2408,6 +2428,7 @@ fn emit_class_method(
             bindable_methods.clone()
         },
         closure_bodies: closure_bodies.clone(),
+        known_classes: known_classes.clone(),
     };
     let mut js_func = crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx);
     crate::rewrites::flash::eliminate_dead_activations(&mut js_func.body);

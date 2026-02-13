@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use reincarnate_core::ir::{Constant, Type};
+use reincarnate_core::ir::{CastKind, Constant, Type};
 
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
@@ -45,6 +45,9 @@ pub struct FlashRewriteCtx {
     pub bindable_methods: HashSet<String>,
     /// Pre-compiled closure bodies (short name → JsFunction), for inlining as arrow functions.
     pub closure_bodies: HashMap<String, JsFunction>,
+    /// All known class short names (module classes + runtime type_definitions).
+    /// Used to detect class coercions: `ClassName(obj)` → `asType(obj, ClassName)`.
+    pub known_classes: HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +228,22 @@ fn resolve_scope_call(
             }
         }
     };
+
+    // Class coercion: ClassName(arg) → asType(arg, ClassName)
+    // AS3 allows `ClassName(obj)` as a type coercion (returns obj if instance, null otherwise).
+    // In JS, calling a class constructor without `new` throws — emit asType instead.
+    if rest_args.len() == 1 {
+        if let JsExpr::Var(ref name) = callee {
+            if ctx.known_classes.contains(name.as_str()) {
+                return JsExpr::Cast {
+                    expr: Box::new(rest_args.into_iter().next().unwrap()),
+                    ty: Type::Struct(name.clone()),
+                    kind: CastKind::AsType,
+                };
+            }
+        }
+    }
+
     JsExpr::Call {
         callee: Box::new(callee),
         args: rest_args,
