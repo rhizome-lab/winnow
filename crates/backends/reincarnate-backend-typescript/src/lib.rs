@@ -30,7 +30,7 @@ impl Backend for TypeScriptBackend {
 
         let runtime_config = input.runtime.as_ref().map(|p| &p.config);
         for module in &mut input.modules {
-            emit::emit_module(module, &input.output_dir, &input.lowering_config, runtime_config)?;
+            emit::emit_module(module, &input.output_dir, &input.lowering_config, runtime_config, &input.debug)?;
         }
 
         scaffold::emit_scaffold(&input.modules, &input.output_dir, runtime_config)?;

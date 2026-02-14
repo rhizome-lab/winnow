@@ -1,3 +1,33 @@
+/// Configuration for debug dumps during the pipeline.
+///
+/// When enabled, dumps IR and/or AST to stderr at key points. An optional
+/// function filter restricts output to functions whose name contains the
+/// given substring.
+#[derive(Debug, Clone, Default)]
+pub struct DebugConfig {
+    /// Dump post-transform IR to stderr before structurization.
+    pub dump_ir: bool,
+    /// Dump raw AST to stderr before AST-to-AST passes.
+    pub dump_ast: bool,
+    /// Filter dumps to functions whose name contains this substring.
+    pub function_filter: Option<String>,
+}
+
+impl DebugConfig {
+    /// A config with all dumps disabled.
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if any dump is enabled and the function name matches
+    /// the filter (or no filter is set).
+    pub fn should_dump(&self, func_name: &str) -> bool {
+        self.function_filter
+            .as_ref()
+            .is_none_or(|f| func_name.contains(f.as_str()))
+    }
+}
+
 /// Configuration for which transform passes to run.
 ///
 /// All passes are enabled by default. Disable individual passes by setting

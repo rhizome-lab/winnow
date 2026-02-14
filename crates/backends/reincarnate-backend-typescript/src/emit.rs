@@ -8,7 +8,7 @@ use reincarnate_core::ir::{
     structurize, CastKind, ClassDef, Constant, ExternalImport, FuncId, Function, MethodKind,
     Module, Op, StructDef, Type, Visibility,
 };
-use reincarnate_core::pipeline::LoweringConfig;
+use reincarnate_core::pipeline::{DebugConfig, LoweringConfig};
 use reincarnate_core::project::{ExternalTypeDef, RuntimeConfig};
 
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
@@ -41,19 +41,20 @@ pub fn emit_module(
     output_dir: &Path,
     lowering_config: &LoweringConfig,
     runtime_config: Option<&RuntimeConfig>,
+    debug: &DebugConfig,
 ) -> Result<(), CoreError> {
     if module.classes.is_empty() {
-        let out = emit_module_to_string(module, lowering_config, runtime_config)?;
+        let out = emit_module_to_string(module, lowering_config, runtime_config, debug)?;
         let path = output_dir.join(format!("{}.ts", module.name));
         fs::write(&path, &out).map_err(CoreError::Io)?;
     } else {
-        emit_module_to_dir(module, output_dir, lowering_config, runtime_config)?;
+        emit_module_to_dir(module, output_dir, lowering_config, runtime_config, debug)?;
     }
     Ok(())
 }
 
 /// Emit a module to a string (flat output — for testing or class-free modules).
-pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>) -> Result<String, CoreError> {
+pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>, debug: &DebugConfig) -> Result<String, CoreError> {
     let mut out = String::new();
     let class_names = build_class_names(module);
     let empty_type_defs = BTreeMap::new();
@@ -83,17 +84,17 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     // Single-file mode — globals are in the same scope, no ESM setter rewrite needed.
     let no_mutable_globals = HashSet::new();
     if module.classes.is_empty() {
-        emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &mut out)?;
+        emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, debug, &mut out)?;
     } else {
         // Single-file mode: no circular imports (all classes in one scope).
         let no_late_bound = HashSet::new();
         let no_short_to_qualified = HashMap::new();
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
         }
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, debug, &mut out)?;
         }
     }
 
@@ -722,7 +723,7 @@ fn relative_import_path(from: &[String], to: &[String]) -> String {
 }
 
 /// Emit a module as a directory with one `.ts` file per class in nested dirs.
-pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>) -> Result<(), CoreError> {
+pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_config: &LoweringConfig, runtime_config: Option<&RuntimeConfig>, debug: &DebugConfig) -> Result<(), CoreError> {
     let module_dir = output_dir.join(&module.name);
     fs::create_dir_all(&module_dir).map_err(CoreError::Io)?;
 
@@ -873,7 +874,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             validate_member_accesses(&module.functions[fid], Some(&qualified), &class_meta, &registry, &short_to_qualified, type_defs);
         }
 
-        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
 
         strip_unused_namespace_imports(&mut out);
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -947,7 +948,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
 
         emit_imports(module, &mut out);
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, debug, &mut out)?;
         }
         strip_unused_namespace_imports(&mut out);
         let path = module_dir.join("_init.ts");
@@ -2225,6 +2226,7 @@ fn rewrite_global_assignments(body: &mut [JsStmt], mutable_globals: &HashSet<Str
 // Functions
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn emit_functions(
     module: &mut Module,
     class_names: &HashMap<String, String>,
@@ -2232,14 +2234,16 @@ fn emit_functions(
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     for id in module.functions.keys().collect::<Vec<_>>() {
-        emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, out)?;
+        emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, debug, out)?;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function(
     func: &mut Function,
     class_names: &HashMap<String, String>,
@@ -2247,12 +2251,17 @@ fn emit_function(
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     use reincarnate_core::ir::linear;
 
+    if debug.dump_ir && debug.should_dump(&func.name) {
+        eprintln!("=== IR: {} ===\n{}\n=== end IR ===\n", func.name, func);
+    }
+
     let shape = structurize::structurize(func);
-    let ast = linear::lower_function_linear(func, &shape, lowering_config);
+    let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
     let ctx = crate::lower::LowerCtx {
         self_param_name: None,
     };
@@ -2449,6 +2458,7 @@ fn emit_class(
     known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     let class_name = sanitize_ident(&group.class_def.name);
@@ -2555,13 +2565,14 @@ fn emit_class(
         &closure_fids,
         module,
         lowering_config,
+        debug,
     );
 
     for (i, &fid) in sorted_methods.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, debug, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2595,6 +2606,7 @@ fn compile_closures(
     closure_fids: &[FuncId],
     module: &mut Module,
     lowering_config: &LoweringConfig,
+    debug: &DebugConfig,
 ) -> HashMap<String, JsFunction> {
     use reincarnate_core::ir::linear;
 
@@ -2609,7 +2621,7 @@ fn compile_closures(
             .to_string();
 
         let shape = structurize::structurize(func);
-        let ast = linear::lower_function_linear(func, &shape, lowering_config);
+        let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
 
         // Closures: self_param_name = None — the first param is the activation
         // scope, NOT `this`. This prevents the lowering pass from substituting
@@ -2644,6 +2656,7 @@ fn emit_class_method(
     known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
     #![allow(clippy::too_many_arguments)]
@@ -2666,8 +2679,12 @@ fn emit_class_method(
             | MethodKind::Closure
     );
 
+    if debug.dump_ir && debug.should_dump(&func.name) {
+        eprintln!("=== IR: {} ===\n{}\n=== end IR ===\n", func.name, func);
+    }
+
     let shape = structurize::structurize(func);
-    let ast = linear::lower_function_linear(func, &shape, lowering_config);
+    let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
 
     // Determine self_param_name for `this` substitution.
     let is_cinit = raw_name == "cinit" && matches!(func.method_kind, MethodKind::Static);
@@ -2765,7 +2782,7 @@ mod tests {
     fn build_and_emit(build: impl FnOnce(&mut ModuleBuilder)) -> String {
         let mut mb = ModuleBuilder::new("test");
         build(&mut mb);
-        emit_module_to_string(&mut mb.build(), &LoweringConfig::default(), None).unwrap()
+        emit_module_to_string(&mut mb.build(), &LoweringConfig::default(), None, &DebugConfig::none()).unwrap()
     }
 
     #[test]
@@ -3048,7 +3065,7 @@ mod tests {
 
         // Run mem2reg IR pass, then emit.
         let mut result = Mem2Reg.apply(module).unwrap();
-        let out = emit_module_to_string(&mut result.module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut result.module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         // The alloc/store/load should be eliminated; return refers to the
         // original parameter directly.
@@ -3295,7 +3312,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         // Class declaration — `extends Object` is suppressed (redundant in JS).
         assert!(
@@ -3370,7 +3387,7 @@ mod tests {
         mb.add_function(fb.build());
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(out.contains("export class Foo {"), "Should have class:\n{out}");
         assert!(
@@ -3444,7 +3461,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None).unwrap();
+        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         // Check nested file exists.
         let class_file = dir
@@ -3528,7 +3545,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None).unwrap();
+        emit_module_to_dir(&mut module, dir.path(), &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         let swamp_file = dir.path().join("frame1/classes/Scenes/Swamp.ts");
         let content = fs::read_to_string(&swamp_file).unwrap();
@@ -3577,7 +3594,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("super();"),
@@ -3667,7 +3684,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("new Widget()"),
@@ -3795,7 +3812,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("this.hp"),
@@ -3861,7 +3878,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("this.player"),
@@ -3956,7 +3973,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             !out.contains("this.power"),
@@ -4066,7 +4083,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("this.temp = "),
@@ -4307,7 +4324,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("this.isNaga()"),
@@ -4649,7 +4666,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
         assert!(
             out.contains("this.debugBuild = true"),
             "cinit should emit this.field, not bare field:\n{out}"
@@ -4693,7 +4710,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("export abstract class IEventListener {"),
@@ -4767,7 +4784,7 @@ mod tests {
         });
 
         let mut module = mb.build();
-        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None).unwrap();
+        let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
             out.contains("registerInterface(Button, IClickable)"),

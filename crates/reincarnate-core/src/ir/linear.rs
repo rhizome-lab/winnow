@@ -28,6 +28,7 @@ use super::inst::{InstId, Op};
 use super::structurize::{BlockArgAssign, Shape};
 use super::ty::Type;
 use super::value::{Constant, ValueId};
+use crate::pipeline::DebugConfig;
 
 use crate::entity::EntityRef;
 use crate::pipeline::LoweringConfig;
@@ -1056,6 +1057,7 @@ pub fn lower_function_linear(
     func: &Function,
     shape: &Shape,
     config: &LoweringConfig,
+    debug: &DebugConfig,
 ) -> AstFunction {
     let linear = linearize(func, shape);
     let rctx = resolve(func, &linear);
@@ -1067,6 +1069,14 @@ pub fn lower_function_linear(
     let decls = ctx.collect_block_param_decls();
     let mut full_body = decls;
     full_body.append(&mut body);
+
+    if debug.dump_ast && debug.should_dump(&func.name) {
+        eprintln!("=== AST (pre-passes): {} ===", func.name);
+        for stmt in &full_body {
+            eprintln!("{stmt:#?}");
+        }
+        eprintln!("=== end AST: {} ===\n", func.name);
+    }
 
     // AST-to-AST rewrite passes.
     // Cleanup first: self-assigns and stubs block ternary detection by adding
@@ -2602,7 +2612,7 @@ mod tests {
         let func = fb.build();
 
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         assert_eq!(ast.name, "add");
         assert_eq!(ast.params.len(), 2);
@@ -2632,7 +2642,7 @@ mod tests {
         let func = fb.build();
 
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Constant and sum both inlined into return.
         assert_eq!(ast.body.len(), 1);
@@ -2659,7 +2669,7 @@ mod tests {
         let func = fb.build();
 
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         assert!(ast.body.is_empty(), "Expected empty body, got: {:?}", ast.body);
     }
@@ -2689,7 +2699,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         assert!(!ast.body.is_empty());
     }
@@ -2850,7 +2860,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Should have an init assign before the loop, not just a naked while.
         // Verify the body is non-empty and has a loop.
@@ -2897,8 +2907,8 @@ mod tests {
         let mut func = fb.build();
         let shape = structurize(&mut func);
 
-        let ast1 = lower_function_linear(&func, &shape, &LoweringConfig::default());
-        let ast2 = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast1 = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
+        let ast2 = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         assert_eq!(
             format!("{:?}", ast1.body),
@@ -2928,7 +2938,7 @@ mod tests {
 
         let func = fb.build();
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // The output should not panic or produce undeclared variables.
         // It may inline the cast or produce a declaration — either is correct.
@@ -2955,7 +2965,7 @@ mod tests {
 
         let func = fb.build();
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Params should have distinct names.
         assert_eq!(ast.params.len(), 2);
@@ -2993,7 +3003,7 @@ mod tests {
 
         let func = fb.build();
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // The two "this" params should have different names.
         // param(0) keeps "this", param(1) gets "_this" or similar.
@@ -3077,7 +3087,7 @@ mod tests {
 
         let func = fb.build();
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Output should reference "hp" somewhere, not a vN identifier.
         let body_str = debug_body(&ast.body);
@@ -3120,7 +3130,7 @@ mod tests {
         let mut func = fb.build();
         let shape = structurize(&mut func);
         let config = LoweringConfig::default();
-        let ast = lower_function_linear(&func, &shape, &config);
+        let ast = lower_function_linear(&func, &shape, &config, &DebugConfig::none());
 
         // Should not panic. Output should contain a LogicalOr or similar.
         assert!(!ast.body.is_empty(), "Expected non-empty body");
@@ -3154,7 +3164,7 @@ mod tests {
         let func = fb.build();
         let shape = Shape::Block(func.entry);
         // Should not panic from double-flush.
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
         let _ = debug_body(&ast.body);
     }
 
@@ -3195,7 +3205,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // v_field's declaration must appear before the if/else, not inside it.
         // The return should reference the field value.
@@ -3230,7 +3240,7 @@ mod tests {
 
         let func = fb.build();
         let shape = Shape::Block(func.entry);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Should produce clean output with "result" name, no broken references.
         assert_eq!(ast.body.len(), 1, "Expected single return: {}", debug_body(&ast.body));
@@ -3279,7 +3289,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Find the If statement and check its condition.
         let if_stmt = ast.body.iter().find(|s| matches!(s, Stmt::If { .. }));
@@ -3324,7 +3334,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Count VarDecl statements for the phi value's name. There should be
         // at most 1 declaration (not duplicated).
@@ -3380,7 +3390,7 @@ mod tests {
 
         let mut func = fb.build();
         let shape = structurize(&mut func);
-        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default(), &DebugConfig::none());
 
         // Should produce clean output — no panic from SE flush timing.
         assert!(
@@ -3430,7 +3440,7 @@ mod tests {
         let mut func = fb.build();
         let shape = structurize(&mut func);
         let config = LoweringConfig::default();
-        let ast = lower_function_linear(&func, &shape, &config);
+        let ast = lower_function_linear(&func, &shape, &config, &DebugConfig::none());
 
         // With while_condition_hoisting enabled (default), should be While
         // with a real condition, not `While { cond: Literal(true), ... }`.

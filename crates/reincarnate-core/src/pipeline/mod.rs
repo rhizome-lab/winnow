@@ -5,7 +5,7 @@ pub mod linker;
 pub mod transform;
 
 pub use backend::{Backend, BackendInput, RuntimePackage};
-pub use config::{LoweringConfig, PassConfig, Preset};
+pub use config::{DebugConfig, LoweringConfig, PassConfig, Preset};
 pub use frontend::{Frontend, FrontendInput, FrontendOutput};
 pub use linker::{Linker, SymbolTable};
 pub use transform::{Transform, TransformPipeline, TransformResult};

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::error::CoreError;
 use crate::ir::Module;
-use super::LoweringConfig;
+use super::{DebugConfig, LoweringConfig};
 use crate::project::{AssetCatalog, RuntimeConfig};
 
 /// A resolved runtime package: source directory + parsed config.
@@ -27,6 +27,8 @@ pub struct BackendInput {
     /// When `Some`, the backend copies the runtime and uses its config for codegen.
     /// When `None`, runtime emission is skipped.
     pub runtime: Option<RuntimePackage>,
+    /// Debug dump configuration.
+    pub debug: DebugConfig,
 }
 
 /// Backend trait — emits target code from IR.

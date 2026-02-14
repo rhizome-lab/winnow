@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use reincarnate_core::ir::Module;
-use reincarnate_core::pipeline::{Backend, BackendInput, Frontend, FrontendInput, Linker, PassConfig, Preset, RuntimePackage};
+use reincarnate_core::pipeline::{Backend, BackendInput, DebugConfig, Frontend, FrontendInput, Linker, PassConfig, Preset, RuntimePackage};
 use reincarnate_core::project::{EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
@@ -49,6 +49,15 @@ enum Command {
         /// Pipeline preset: "literal" (1:1 translation) or "optimized" (default).
         #[arg(long, default_value = "optimized")]
         preset: String,
+        /// Dump post-transform IR to stderr before structurization.
+        #[arg(long)]
+        dump_ir: bool,
+        /// Dump raw AST to stderr before AST-to-AST passes.
+        #[arg(long)]
+        dump_ast: bool,
+        /// Filter IR/AST dumps to functions whose name contains this substring.
+        #[arg(long = "dump-function")]
+        dump_function: Option<String>,
     },
 }
 
@@ -169,7 +178,7 @@ fn cmd_extract(manifest_path: &PathBuf, skip_passes: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Result<()> {
+fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str, debug: &DebugConfig) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
     let frontend = find_frontend(&manifest.engine);
     let Some(frontend) = frontend else {
@@ -234,6 +243,7 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str) -> Re
             output_dir: target.output_dir.clone(),
             lowering_config: lowering_config.clone(),
             runtime: resolve_runtime(&manifest.engine, &target.backend),
+            debug: debug.clone(),
         };
         eprintln!("[emit] emitting to {}...", target.output_dir.display());
         backend
@@ -262,6 +272,16 @@ fn main() -> Result<()> {
             manifest,
             skip_passes,
             preset,
-        } => cmd_emit(manifest, skip_passes, preset),
+            dump_ir,
+            dump_ast,
+            dump_function,
+        } => {
+            let debug = DebugConfig {
+                dump_ir: *dump_ir,
+                dump_ast: *dump_ast,
+                function_filter: dump_function.clone(),
+            };
+            cmd_emit(manifest, skip_passes, preset, &debug)
+        }
     }
 }

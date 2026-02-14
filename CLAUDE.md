@@ -130,6 +130,11 @@ cargo run -p reincarnate-cli -- info --manifest ~/cc-project/reincarnate.json
 
 The `--manifest` flag defaults to `reincarnate.json` in the current directory. Use `--skip-pass` to disable specific transform passes (e.g. `--skip-pass type-inference --skip-pass constant-folding`).
 
+Debug flags (on `emit` only):
+- `--dump-ir` — dump post-transform IR to stderr before structurization
+- `--dump-ast` — dump raw AST to stderr before AST-to-AST passes
+- `--dump-function <substring>` — filter dumps to functions whose name contains the substring
+
 Test projects: `~/cc-project/` (Flash SWF → TypeScript), `~/Bounty/` (GameMaker GML → TypeScript).
 
 ## Crate Structure
