@@ -724,8 +724,11 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
         Opcode::Conv => (1, 1),
         Opcode::Dup => {
             // Dup(N) duplicates the top N+1 values on the stack.
+            // In GMS2.3+, the high byte of N is DupExtra (swap/struct flags);
+            // only the low byte is the actual count.
             if let Operand::Dup(n) = inst.operand {
-                (0, n as usize + 1)
+                let count = (n & 0xFF) as usize + 1;
+                (0, count)
             } else {
                 (0, 1)
             }
@@ -772,6 +775,7 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
                     0xFFFF | 0xFFFC | 0xFFFB => (0, 0), // chkindex, pushac, setowner
                     0xFFFE => (2, 1),                     // pushaf
                     0xFFFD => (3, 0),                     // popaf
+                    0xFFF6 => (0, 1),                     // chknullish — pushes boolean
                     0xFFF5 => (0, 1),                     // pushref — pushes function ref
                     0xFFFA | 0xFFF9 => (0, 0),            // isstaticok, setstatic — nop
                     0xFFF8 | 0xFFF7 => (0, 0),            // savearef, restorearef — nop
@@ -1041,7 +1045,7 @@ fn translate_instruction(
         }
         Opcode::Dup => {
             let count = if let Operand::Dup(n) = inst.operand {
-                n as usize + 1
+                (n & 0xFF) as usize + 1
             } else {
                 1
             };
@@ -1193,6 +1197,17 @@ fn translate_instruction(
                     0xFFF9 => {} // setstatic — set static scope, nop for decompilation
                     0xFFF8 => {} // savearef — save array ref to temp, nop for decompilation
                     0xFFF7 => {} // restorearef — restore array ref from temp, nop for decompilation
+                    0xFFF6 => {
+                        // chknullish — check if top of stack is nullish (undefined).
+                        // Pushes boolean; original value stays on stack below.
+                        // Used for ?? (nullish coalescing) and ?. (optional chaining).
+                        let val = *stack.last().ok_or_else(|| {
+                            format!("{:#x}: stack underflow on chknullish", inst.offset)
+                        })?;
+                        let null_val = fb.const_null();
+                        let is_null = fb.cmp(CmpKind::Eq, val, null_val);
+                        stack.push(is_null);
+                    }
                     0xFFF5 => {
                         // pushref — push function reference onto stack.
                         // The extra Int32 operand is part of the FUNC reference chain.
