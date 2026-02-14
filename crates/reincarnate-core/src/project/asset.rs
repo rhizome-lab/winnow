@@ -12,6 +12,7 @@ pub enum AssetKind {
     Script,
     Data,
     Shader,
+    Stylesheet,
     Other(String),
 }
 

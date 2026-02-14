@@ -3,11 +3,12 @@ mod harlowe;
 pub mod sugarcube;
 
 use std::fs;
+use std::path::PathBuf;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{EntryPoint, ModuleBuilder};
 use reincarnate_core::pipeline::{Frontend, FrontendInput, FrontendOutput};
-use reincarnate_core::project::{AssetCatalog, EngineOrigin};
+use reincarnate_core::project::{Asset, AssetCatalog, AssetKind, EngineOrigin};
 
 use sugarcube::translate;
 
@@ -60,6 +61,7 @@ impl TwineFrontend {
     ) -> Result<FrontendOutput, CoreError> {
         let mut mb = ModuleBuilder::new(&story.name);
         let mut start_func_id = None;
+        let mut assets = AssetCatalog::new();
 
         // Find start passage name
         let start_passage_name = story
@@ -70,13 +72,28 @@ impl TwineFrontend {
 
         // Translate each passage → Function
         for passage in &story.passages {
-            // Skip special tag passages (stylesheet, script, etc.)
-            if passage.tags.iter().any(|t| {
-                matches!(
-                    t.as_str(),
-                    "stylesheet" | "Twine.private" | "annotation"
-                )
-            }) {
+            // Collect stylesheet passages as assets
+            if passage.tags.iter().any(|t| t == "stylesheet") {
+                if !passage.source.trim().is_empty() {
+                    let safe_name = passage.name.replace(['/', '\\', ' '], "_");
+                    assets.add(Asset {
+                        id: format!("stylesheet:{}", passage.name),
+                        kind: AssetKind::Stylesheet,
+                        original_name: passage.name.clone(),
+                        path: PathBuf::from(format!("assets/styles/{safe_name}.css")),
+                        size: passage.source.len() as u64,
+                        data: passage.source.as_bytes().to_vec(),
+                    });
+                }
+                continue;
+            }
+
+            // Skip other special tag passages
+            if passage
+                .tags
+                .iter()
+                .any(|t| matches!(t.as_str(), "Twine.private" | "annotation"))
+            {
                 continue;
             }
 
@@ -106,6 +123,21 @@ impl TwineFrontend {
             mb.add_function(func);
         }
 
+        // Collect user stylesheets as assets
+        for (i, style) in story.user_styles.iter().enumerate() {
+            if style.trim().is_empty() {
+                continue;
+            }
+            assets.add(Asset {
+                id: format!("user_style:{i}"),
+                kind: AssetKind::Stylesheet,
+                original_name: format!("user_style_{i}"),
+                path: PathBuf::from(format!("assets/styles/user_{i}.css")),
+                size: style.len() as u64,
+                data: style.as_bytes().to_vec(),
+            });
+        }
+
         // Set entry point to the start passage
         if let Some(fid) = start_func_id {
             mb.set_entry_point(EntryPoint::CallFunction(fid));
@@ -115,7 +147,7 @@ impl TwineFrontend {
 
         Ok(FrontendOutput {
             modules: vec![module],
-            assets: AssetCatalog::new(),
+            assets,
         })
     }
 }
