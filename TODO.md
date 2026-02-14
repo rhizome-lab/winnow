@@ -197,7 +197,7 @@ output fidelity:
 
 Compared our TypeScript output against JPEXS FFDec's ActionScript decompilation
 of the same SWF. Parameter names now match. Detailed notes with specific method
-examples in the test project (`~/cc-project/comparison-notes.md`).
+examples in the test project (`~/reincarnate/flash/cc/comparison-notes.md`).
 
 ### High Priority (correctness)
 
@@ -683,7 +683,7 @@ program analysis or conservative assumptions.
 
 The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
 `scripts/main*.js`, object event handlers in `classes/`. Compare emitted
-`~/Bounty/out/` against this reference when validating output.
+`~/reincarnate/gamemaker/bounty/out/` against this reference when validating output.
 
 ### Critical
 

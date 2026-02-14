@@ -45,7 +45,7 @@ From ecosystem-wide session analysis:
 
 - **Question scope early:** Before implementing, ask whether it belongs in this crate/module
 - **Check consistency:** Look at how similar things are done elsewhere in the codebase
-- **Implement fully:** No silent arbitrary caps, incomplete pagination, or unexposed trait methods. The test projects (`~/cc-project/` for Flash, `~/Bounty/` for GML) are example inputs, not the universe — fixing only the cases they exercise is a half measure. If a class of bug exists, fix the entire class. If a pattern applies to all properties on a type, apply it to all of them, not just the ones that happen to blow up today.
+- **Implement fully:** No silent arbitrary caps, incomplete pagination, or unexposed trait methods. The test projects (`~/reincarnate/flash/cc/` for Flash, `~/reincarnate/gamemaker/bounty/` for GML) are example inputs, not the universe — fixing only the cases they exercise is a half measure. If a class of bug exists, fix the entire class. If a pattern applies to all properties on a type, apply it to all of them, not just the ones that happen to blow up today.
 - **Name for purpose:** Avoid names that describe one consumer
 - **Verify before stating:** Don't assert API behavior or codebase facts without checking
 
@@ -116,16 +116,16 @@ Run via cargo from the repo root:
 
 ```bash
 # Full pipeline: extract SWF → IR → transform → emit TypeScript
-cargo run -p reincarnate-cli -- emit --manifest ~/cc-project/reincarnate.json
+cargo run -p reincarnate-cli -- emit --manifest ~/reincarnate/flash/cc/reincarnate.json
 
 # Print human-readable IR (for debugging)
 cargo run -p reincarnate-cli -- print-ir <ir-json-file>
 
 # Extract IR only (no transforms/emit)
-cargo run -p reincarnate-cli -- extract --manifest ~/cc-project/reincarnate.json
+cargo run -p reincarnate-cli -- extract --manifest ~/reincarnate/flash/cc/reincarnate.json
 
 # Show project manifest info
-cargo run -p reincarnate-cli -- info --manifest ~/cc-project/reincarnate.json
+cargo run -p reincarnate-cli -- info --manifest ~/reincarnate/flash/cc/reincarnate.json
 ```
 
 The `--manifest` flag defaults to `reincarnate.json` in the current directory. Use `--skip-pass` to disable specific transform passes (e.g. `--skip-pass type-inference --skip-pass constant-folding`).
@@ -135,7 +135,10 @@ Debug flags (on `emit` only):
 - `--dump-ast` — dump raw AST to stderr before AST-to-AST passes
 - `--dump-function <substring>` — filter dumps to functions whose name contains the substring
 
-Test projects: `~/cc-project/` (Flash SWF → TypeScript), `~/Bounty/` (GameMaker GML → TypeScript).
+Test projects live under `~/reincarnate/<engine>/<game>/`:
+- Flash: `~/reincarnate/flash/cc/`
+- GML (GMS1): `~/reincarnate/gamemaker/bounty/`
+- GML (GMS2): `~/reincarnate/gamemaker/deadestate/`
 
 ## Crate Structure
 
