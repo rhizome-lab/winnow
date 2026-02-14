@@ -824,35 +824,14 @@ impl<'a> Structurizer<'a> {
                         // Guard: if (cond) { ...return... }
                         // Continuation: else branch flattened after.
                         let guard_body = self.structurize_region(then_target, until, loop_body);
-                        let guard = Shape::IfElse {
-                            block,
-                            cond,
-                            then_assigns: then_assigns.clone(),
-                            then_body: Box::new(guard_body),
-                            then_trailing_assigns: vec![],
-                            else_assigns: vec![],
-                            else_body: Box::new(Shape::Seq(vec![])),
-                            else_trailing_assigns: vec![],
-                        };
-                        let guard = self.try_logical_op(guard);
                         let continuation = self.structurize_region(else_target, until, loop_body);
-                        let mut parts = vec![guard];
-                        match continuation {
-                            Shape::Seq(inner) => parts.extend(inner),
-                            other => parts.push(other),
-                        }
-                        return Shape::Seq(parts);
-                    }
-
-                    if else_terminates && !then_terminates {
-                        // Invert: if (!cond) { ...return... }
-                        // Continuation: then branch flattened after.
-                        if self.try_invert_cmp(cond) {
-                            let guard_body = self.structurize_region(else_target, until, loop_body);
+                        if else_assigns.is_empty() {
+                            // No block-param assignments on the continuation
+                            // branch — safe to flatten.
                             let guard = Shape::IfElse {
                                 block,
                                 cond,
-                                then_assigns: else_assigns.clone(),
+                                then_assigns: then_assigns.clone(),
                                 then_body: Box::new(guard_body),
                                 then_trailing_assigns: vec![],
                                 else_assigns: vec![],
@@ -860,13 +839,68 @@ impl<'a> Structurizer<'a> {
                                 else_trailing_assigns: vec![],
                             };
                             let guard = self.try_logical_op(guard);
-                            let continuation = self.structurize_region(then_target, until, loop_body);
                             let mut parts = vec![guard];
                             match continuation {
                                 Shape::Seq(inner) => parts.extend(inner),
                                 other => parts.push(other),
                             }
                             return Shape::Seq(parts);
+                        } else {
+                            // Continuation has block-param assignments —
+                            // nest it inside the else branch to preserve them.
+                            let guard = Shape::IfElse {
+                                block,
+                                cond,
+                                then_assigns,
+                                then_body: Box::new(guard_body),
+                                then_trailing_assigns: vec![],
+                                else_assigns,
+                                else_body: Box::new(continuation),
+                                else_trailing_assigns: vec![],
+                            };
+                            return self.try_logical_op(guard);
+                        }
+                    }
+
+                    if else_terminates && !then_terminates {
+                        // Invert: if (!cond) { ...return... }
+                        // Continuation: then branch flattened after.
+                        if self.try_invert_cmp(cond) {
+                            let guard_body = self.structurize_region(else_target, until, loop_body);
+                            let continuation = self.structurize_region(then_target, until, loop_body);
+                            if then_assigns.is_empty() {
+                                let guard = Shape::IfElse {
+                                    block,
+                                    cond,
+                                    then_assigns: else_assigns.clone(),
+                                    then_body: Box::new(guard_body),
+                                    then_trailing_assigns: vec![],
+                                    else_assigns: vec![],
+                                    else_body: Box::new(Shape::Seq(vec![])),
+                                    else_trailing_assigns: vec![],
+                                };
+                                let guard = self.try_logical_op(guard);
+                                let mut parts = vec![guard];
+                                match continuation {
+                                    Shape::Seq(inner) => parts.extend(inner),
+                                    other => parts.push(other),
+                                }
+                                return Shape::Seq(parts);
+                            } else {
+                                // Continuation has block-param assignments —
+                                // nest it inside the else branch.
+                                let guard = Shape::IfElse {
+                                    block,
+                                    cond,
+                                    then_assigns: else_assigns,
+                                    then_body: Box::new(guard_body),
+                                    then_trailing_assigns: vec![],
+                                    else_assigns: then_assigns,
+                                    else_body: Box::new(continuation),
+                                    else_trailing_assigns: vec![],
+                                };
+                                return self.try_logical_op(guard);
+                            }
                         }
                         // If we can't invert the cmp (multi-use), fall through
                         // to the normal if/else path below.
