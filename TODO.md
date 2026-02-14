@@ -48,10 +48,17 @@ inputs that stress correctness invariants.
   - Running the same pass twice produces `changed == false` on the
     second run (idempotency)
 
-- [ ] **GML-specific regression tests** — The GML frontend produces IR
-  patterns not seen in Flash (all-Dynamic types, implicit `argument[N]`
-  parameters, cross-object instance references). These need dedicated
-  test cases that exercise the full pipeline, not just individual passes.
+- [ ] **End-to-end regression tests** — Both frontends produce IR patterns
+  that stress different parts of the pipeline. Need snapshot tests that
+  emit known functions and compare output against expected baselines.
+  - **Flash**: 15 new vN identifiers regressed in `91fe86e` (MethodCall
+    refactor). Pre-existing 5 vN (hasNext2 one-shot, split-path phi).
+    Total 20 unique vN vs the documented 0. The MethodCall change likely
+    broke name propagation or linearizer inlining for method receivers.
+  - **GML**: `get_race` body is completely wrong — comparisons become
+    bare expression statements, `argument[N]` resolves to instance
+    fields instead of function parameters. cfg-simplify + structurizer
+    interaction orphans ternary patterns.
 
 ## Future
 
