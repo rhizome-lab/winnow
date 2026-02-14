@@ -115,6 +115,17 @@ export function lengthdir_y(len: number, dir: number): number { return -len * ds
 
 export function logn(n: number, val: number): number { return Math.log(val) / Math.log(n); }
 export function int64(n: number): number { return n | 0; }
+
+// ---- Type conversion ----
+
+/** Truncate to 32-bit signed integer (GML int / AS3 int). */
+export function int(n: any): number { return n | 0; }
+/** Truncate to 32-bit unsigned integer (AS3 uint). */
+export function uint(n: any): number { return n >>> 0; }
+/** Convert to number (GML real). */
+export function real(n: any): number { return Number(n); }
+/** Convert to string (GML string). */
+export function string(n: any): string { return String(n); }
 export function median(...nums: number[]): number {
   const sorted = nums.slice().sort((a, b) => a - b);
   const mid = sorted.length >> 1;

@@ -288,6 +288,7 @@
         "degtorad", "radtodeg", "lengthdir_x", "lengthdir_y",
         "dsin", "dcos", "dtan", "darcsin", "darccos", "darctan", "darctan2",
         "logn", "int64",
+        "int", "uint", "real", "string",
         "random", "random_range", "irandom", "irandom_range", "choose",
         "randomize", "random_set_seed"
       ],

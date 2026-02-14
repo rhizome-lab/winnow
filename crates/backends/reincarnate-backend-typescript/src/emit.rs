@@ -1095,8 +1095,8 @@ fn emit_runtime_imports_with_prefix(
 // ---------------------------------------------------------------------------
 
 /// Collect all direct `Call` function names from a set of IR functions,
-/// plus any bare function names that engine-specific SystemCall rewrites
-/// will introduce (e.g. `variable_global_set` from `GameMaker.Global.set`).
+/// plus any bare function names introduced by engine-specific rewrites
+/// or backend cast printing (e.g. `int(x)` from `Coerce + Int(32)`).
 fn collect_call_names_from_funcs<'a>(
     funcs: impl Iterator<Item = &'a Function>,
     engine: EngineKind,
@@ -1112,6 +1112,13 @@ fn collect_call_names_from_funcs<'a>(
                     if let Some(name) = crate::rewrites::gamemaker::rewrite_introduced_call(system, method) {
                         used.insert(name.to_string());
                     }
+                }
+                // Coerce casts emit bare function calls: int(x), uint(x).
+                Op::Cast(_, Type::Int(32), CastKind::Coerce) => {
+                    used.insert("int".to_string());
+                }
+                Op::Cast(_, Type::UInt(32), CastKind::Coerce) => {
+                    used.insert("uint".to_string());
                 }
                 _ => {}
             }
