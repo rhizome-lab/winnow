@@ -23,6 +23,8 @@ use crate::pipeline::{PassConfig, TransformPipeline};
 
 #[cfg(test)]
 mod interaction_tests;
+#[cfg(test)]
+mod stress_tests;
 
 
 /// Build a transform pipeline based on the given pass configuration.
