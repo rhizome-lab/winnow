@@ -2116,4 +2116,356 @@ mod tests {
             if matches!(object.as_ref(), JsExpr::Var(n) if n == "MyClass")
             && field == "MAX_HP"));
     }
+
+    // --- Adversarial / edge cases ---
+
+    #[test]
+    fn scope_lookup_cinit_static_field_resolves_to_this() {
+        // In cinit context, static fields resolve to this.field, not ClassName.field.
+        // This is subtle: cinit runs as the class constructor, so `this` IS the class.
+        let mut ctx = empty_ctx();
+        ctx.is_cinit = true;
+        ctx.static_fields.insert("INSTANCE_COUNT".into());
+        let result = resolve_field(
+            &scope_lookup("global::INSTANCE_COUNT"),
+            "INSTANCE_COUNT",
+            &ctx,
+        );
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(
+            matches!(&expr, JsExpr::Field { object, field }
+                if matches!(object.as_ref(), JsExpr::This) && field == "INSTANCE_COUNT"),
+            "cinit should resolve static field to this.field, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn scope_lookup_static_field_owner_from_ancestor() {
+        // Static field owned by a different class in the hierarchy.
+        let mut ctx = empty_ctx();
+        ctx.class_short_name = Some("Child".into());
+        ctx.static_field_owners
+            .insert("MAX".into(), "Parent".into());
+        let result = resolve_field(&scope_lookup("global::MAX"), "MAX", &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(
+            matches!(&expr, JsExpr::Field { object, field }
+                if matches!(object.as_ref(), JsExpr::Var(n) if n == "Parent") && field == "MAX"),
+            "should resolve to Parent.MAX, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn scope_lookup_namespace_stripped_from_field() {
+        // Field name like "ns::myField" should strip the namespace prefix.
+        let mut ctx = empty_ctx();
+        ctx.has_self = true;
+        ctx.instance_fields.insert("myField".into());
+        let result = resolve_field(
+            &scope_lookup("global::myField"),
+            "ns::myField",
+            &ctx,
+        );
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(
+            matches!(&expr, JsExpr::Field { object, field }
+                if matches!(object.as_ref(), JsExpr::This) && field == "myField"),
+            "should strip namespace and resolve to this.myField, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn scope_call_non_ancestor_with_class_prefix_dispatches_statically() {
+        // Call to OtherClass.method — scope arg contains class name, not in ancestors.
+        let ctx = empty_ctx();
+        let rewritten = resolve_scope_call(
+            "doStuff",
+            &[JsExpr::Literal(Constant::String(
+                "classes:OtherClass::doStuff".into(),
+            ))],
+            vec![JsExpr::Literal(Constant::Int(1))],
+            &ctx,
+        );
+        // Should produce OtherClass.doStuff(1), NOT bare doStuff(1).
+        assert!(
+            matches!(&rewritten, JsExpr::Call { callee, .. }
+                if matches!(callee.as_ref(), JsExpr::Field { object, field }
+                    if matches!(object.as_ref(), JsExpr::Var(n) if n == "OtherClass")
+                    && field == "doStuff")),
+            "should dispatch to OtherClass.doStuff, got {:?}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn class_coercion_not_triggered_for_multi_arg_call() {
+        // ClassName(a, b) with 2 args should NOT be treated as coercion.
+        let mut ctx = empty_ctx();
+        ctx.known_classes.insert("Sprite".into());
+        let rewritten = resolve_scope_call(
+            "Sprite",
+            &[JsExpr::Literal(Constant::String("Sprite".into()))],
+            vec![
+                JsExpr::Var("a".into()),
+                JsExpr::Var("b".into()),
+            ],
+            &ctx,
+        );
+        // Two args → regular call, NOT a Cast.
+        assert!(
+            matches!(&rewritten, JsExpr::Call { .. }),
+            "multi-arg call should not be coercion, got {:?}",
+            rewritten
+        );
+        assert!(
+            !matches!(&rewritten, JsExpr::Cast { .. }),
+            "must not produce Cast for multi-arg"
+        );
+    }
+
+    #[test]
+    fn class_coercion_not_triggered_for_non_class_name() {
+        // regularFunc(obj) where regularFunc is NOT in known_classes.
+        let ctx = empty_ctx();
+        let rewritten = resolve_scope_call(
+            "regularFunc",
+            &[JsExpr::Literal(Constant::String("regularFunc".into()))],
+            vec![JsExpr::Var("obj".into())],
+            &ctx,
+        );
+        assert!(
+            matches!(&rewritten, JsExpr::Call { .. }),
+            "non-class single-arg call should remain a Call, got {:?}",
+            rewritten
+        );
+    }
+
+    #[test]
+    fn new_object_duplicate_keys_last_wins() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Literal(Constant::String("x".into())),
+            JsExpr::Literal(Constant::Int(1)),
+            JsExpr::Literal(Constant::String("x".into())),
+            JsExpr::Literal(Constant::Int(2)),
+        ];
+        let result = rewrite_system_call("Flash.Object", "newObject", &args, &ctx);
+        assert!(result.is_some());
+        if let Some(JsExpr::ObjectInit(pairs)) = result {
+            // Duplicate key "x" — should keep only one entry, with the last value.
+            assert_eq!(pairs.len(), 1, "duplicate key should deduplicate");
+            assert_eq!(pairs[0].0, "x");
+            assert!(
+                matches!(&pairs[0].1, JsExpr::Literal(Constant::Int(2))),
+                "last value should win, got {:?}",
+                pairs[0].1
+            );
+        } else {
+            panic!("expected ObjectInit");
+        }
+    }
+
+    #[test]
+    fn new_object_odd_arg_count_falls_through() {
+        // Odd number of args (3) — not valid key/value pairs, should NOT produce ObjectInit.
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Literal(Constant::String("a".into())),
+            JsExpr::Literal(Constant::Int(1)),
+            JsExpr::Literal(Constant::String("orphan".into())),
+        ];
+        let result = rewrite_system_call("Flash.Object", "newObject", &args, &ctx);
+        // Odd count → no rewrite (falls through to None).
+        assert!(result.is_none(), "odd arg count should not produce ObjectInit");
+    }
+
+    #[test]
+    fn construct_super_with_only_this_produces_empty_super() {
+        // constructSuper(this) with no additional args → super()
+        let ctx = empty_ctx();
+        let args = vec![JsExpr::This];
+        let result = rewrite_system_call("Flash.Class", "constructSuper", &args, &ctx);
+        assert!(result.is_some());
+        if let Some(JsExpr::SuperCall(args)) = result {
+            assert_eq!(args.len(), 0, "super() should have no args");
+        } else {
+            panic!("expected SuperCall");
+        }
+    }
+
+    #[test]
+    fn hoist_super_already_at_position_zero_is_noop() {
+        let mut body = vec![
+            JsStmt::Expr(JsExpr::SuperCall(vec![])),
+            body_stmt("a"),
+            body_stmt("b"),
+        ];
+        hoist_super_call(&mut body, None);
+        // Already at position 0 — should remain there.
+        assert!(matches!(&body[0], JsStmt::Expr(JsExpr::SuperCall(_))));
+        assert_eq!(body.len(), 3);
+    }
+
+    #[test]
+    fn hoist_super_no_super_present_is_noop() {
+        let mut body = vec![body_stmt("a"), body_stmt("b")];
+        let orig_len = body.len();
+        hoist_super_call(&mut body, None);
+        assert_eq!(body.len(), orig_len);
+    }
+
+    #[test]
+    fn hoist_super_multiple_deps_hoists_after_last() {
+        // super(x, y) depends on both x and y. y is declared after x.
+        // Should hoist to just after y's declaration.
+        let mut body = vec![
+            JsStmt::VarDecl {
+                name: "x".into(),
+                ty: Some(Type::Int(32)),
+                init: Some(JsExpr::Literal(Constant::Int(1))),
+                mutable: false,
+            },
+            body_stmt("unrelated"),
+            JsStmt::VarDecl {
+                name: "y".into(),
+                ty: Some(Type::Int(32)),
+                init: Some(JsExpr::Literal(Constant::Int(2))),
+                mutable: false,
+            },
+            body_stmt("also_unrelated"),
+            JsStmt::Expr(JsExpr::SuperCall(vec![
+                JsExpr::Var("x".into()),
+                JsExpr::Var("y".into()),
+            ])),
+        ];
+        hoist_super_call(&mut body, None);
+        // Should be at position 3 (after y's decl at position 2).
+        assert!(
+            matches!(&body[3], JsStmt::Expr(JsExpr::SuperCall(_))),
+            "super should be at index 3, got {:?}",
+            body[3]
+        );
+    }
+
+    #[test]
+    fn activation_with_self_referencing_value_kept() {
+        // act$0.x = act$0 — the value references act$0, so it's not dead.
+        let mut body = vec![
+            JsStmt::VarDecl {
+                name: "act$0".into(),
+                ty: Some(Type::Dynamic),
+                init: Some(JsExpr::Activation),
+                mutable: false,
+            },
+            JsStmt::Assign {
+                target: JsExpr::Field {
+                    object: Box::new(JsExpr::Var("act$0".into())),
+                    field: "self_ref".into(),
+                },
+                value: JsExpr::Var("act$0".into()), // value references act$0!
+            },
+        ];
+        eliminate_dead_activations(&mut body);
+        // Self-referencing value means it's NOT purely dead — should be kept.
+        assert_eq!(body.len(), 2, "self-referencing activation should be kept");
+    }
+
+    #[test]
+    fn method_bind_inside_call_arg_still_wraps() {
+        // foo(this.update) — this.update is NOT in callee position (it's an arg).
+        let bindable: HashSet<String> = ["update".to_string()].into();
+        let mut expr = JsExpr::Call {
+            callee: Box::new(JsExpr::Var("foo".into())),
+            args: vec![JsExpr::Field {
+                object: Box::new(JsExpr::This),
+                field: "update".into(),
+            }],
+        };
+        bind_method_refs_expr(&mut expr, &bindable, false);
+        // The arg this.update should be wrapped with as3Bind.
+        if let JsExpr::Call { args, .. } = &expr {
+            assert!(
+                matches!(&args[0], JsExpr::Call { callee, .. }
+                    if matches!(callee.as_ref(), JsExpr::Var(n) if n == "as3Bind")),
+                "arg should be wrapped with as3Bind, got {:?}",
+                args[0]
+            );
+        } else {
+            panic!("expected Call");
+        }
+    }
+
+    #[test]
+    fn method_bind_non_this_field_not_wrapped() {
+        // obj.update (not this.update) — should NOT be wrapped.
+        let bindable: HashSet<String> = ["update".to_string()].into();
+        let mut expr = JsExpr::Field {
+            object: Box::new(JsExpr::Var("obj".into())),
+            field: "update".into(),
+        };
+        bind_method_refs_expr(&mut expr, &bindable, false);
+        assert!(
+            matches!(&expr, JsExpr::Field { object, .. }
+                if matches!(object.as_ref(), JsExpr::Var(n) if n == "obj")),
+            "non-this field should not be wrapped, got {:?}",
+            expr
+        );
+    }
+
+    #[test]
+    fn const_field_not_promoted_without_class_name() {
+        // If class_short_name is None, const instance fields should NOT be promoted.
+        let mut ctx = empty_ctx();
+        ctx.has_self = true;
+        ctx.class_short_name = None; // no class name
+        ctx.const_instance_fields.insert("MAX_HP".into());
+
+        let expr = JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "MAX_HP".into(),
+        };
+        let result = rewrite_expr(expr, &ctx);
+        // Without class_short_name, it should remain this.MAX_HP.
+        assert!(
+            matches!(&result, JsExpr::Field { object, .. }
+                if matches!(object.as_ref(), JsExpr::This)),
+            "without class name, should stay this.MAX_HP, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn unknown_system_call_passes_through() {
+        let ctx = empty_ctx();
+        let args = vec![JsExpr::Literal(Constant::Int(1))];
+        let result = rewrite_system_call("Unknown.System", "mystery", &args, &ctx);
+        assert!(result.is_none(), "unknown system calls should return None");
+    }
+
+    #[test]
+    fn scope_lookup_class_names_mapping_takes_priority() {
+        // When a full qualified name matches class_names, it should return
+        // the mapped short name, not try other resolution paths.
+        let mut ctx = empty_ctx();
+        ctx.class_names
+            .insert("com.example::LongName".into(), "ShortName".into());
+        let result = resolve_field(
+            &scope_lookup("global::LongName"),
+            "com.example::LongName",
+            &ctx,
+        );
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(
+            matches!(&expr, JsExpr::Var(n) if n == "ShortName"),
+            "should resolve to mapped short name, got {:?}",
+            expr
+        );
+    }
 }

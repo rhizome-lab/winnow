@@ -883,6 +883,202 @@ mod tests {
         assert_eq!(stmts.len(), 2);
     }
 
+    // --- Adversarial / edge cases ---
+
+    #[test]
+    fn nested_with_blocks_outer_collapses_inner_untouched_by_collapse_alone() {
+        // collapse_with_blocks only operates on a single Vec level.
+        // Nested with-blocks require rewrite_stmts (which recurses first).
+        // This test documents that collapse_with_blocks alone collapses the
+        // outer pair but leaves the inner pair for a recursive caller.
+        let mut stmts = vec![
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![
+                    with_begin(2),
+                    JsStmt::Loop {
+                        body: vec![body_stmt("inner"), with_end(), JsStmt::Continue],
+                    },
+                    with_end(),
+                    JsStmt::Continue,
+                ],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // Outer collapses: withBegin(1) + Loop → withInstances(1, callback)
+        assert_eq!(stmts.len(), 1);
+        let outer_body = assert_with_instances(&stmts, 0, 1);
+        // Inner withBegin(2) + Loop is NOT collapsed (collapse doesn't recurse).
+        // The body is [withBegin(2), Loop{...}] (2 items, not 1).
+        assert_eq!(outer_body.len(), 2);
+    }
+
+    #[test]
+    fn nested_with_blocks_both_collapse_via_rewrite_stmts() {
+        // rewrite_stmts recurses into loop bodies before calling collapse,
+        // so nested with-blocks are handled bottom-up.
+        let mut stmts = vec![
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![
+                    with_begin(2),
+                    JsStmt::Loop {
+                        body: vec![body_stmt("inner"), with_end(), JsStmt::Continue],
+                    },
+                    with_end(),
+                    JsStmt::Continue,
+                ],
+            },
+        ];
+        rewrite_stmts(&mut stmts, &[]);
+
+        assert_eq!(stmts.len(), 1);
+        let outer_body = assert_with_instances(&stmts, 0, 1);
+        assert_eq!(outer_body.len(), 1);
+        assert_with_instances(outer_body, 0, 2);
+    }
+
+    #[test]
+    fn with_begin_as_last_statement_no_panic() {
+        // withBegin(5) at the end with nothing after it — must not panic or collapse.
+        let mut stmts = vec![body_stmt("setup"), with_begin(5)];
+        collapse_with_blocks(&mut stmts);
+
+        // Nothing to collapse — both statements remain.
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn with_end_in_middle_of_loop_body_still_collapses() {
+        // withBegin(3); loop { withEnd(); body_after; continue }
+        // withEnd is NOT at the end — body_after comes after it. Should NOT collapse
+        // because body_after is a real statement, not continue/break.
+        let mut stmts = vec![
+            with_begin(3),
+            JsStmt::Loop {
+                body: vec![with_end(), body_stmt("after_end"), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // Should NOT collapse: "after_end" is between withEnd and continue,
+        // and it's not a break/continue. The tail check should reject this.
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn loop_with_real_stmts_after_with_end_not_collapsed() {
+        // The key adversarial case: withEnd() is followed by a real statement
+        // (not just continue/break) in the loop. This means the loop isn't just
+        // a with-iteration wrapper — there's real post-with logic.
+        let mut stmts = vec![
+            with_begin(5),
+            JsStmt::Loop {
+                body: vec![
+                    body_stmt("body"),
+                    with_end(),
+                    body_stmt("cleanup"),  // not continue/break
+                ],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // Must NOT collapse — "cleanup" after withEnd means this isn't a pure with-loop.
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn empty_loop_body_with_just_with_end() {
+        // withBegin(1); loop { withEnd(); continue }
+        // Empty with-body (no statements between begin and end).
+        let mut stmts = vec![
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![with_end(), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        let body = assert_with_instances(&stmts, 0, 1);
+        assert_eq!(body.len(), 0); // empty callback body
+    }
+
+    #[test]
+    fn with_begin_followed_by_non_loop_non_end_no_collapse() {
+        // withBegin(1); foo(); bar();
+        // No withEnd anywhere — should leave everything untouched.
+        let mut stmts = vec![with_begin(1), body_stmt("foo"), body_stmt("bar")];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 3);
+    }
+
+    #[test]
+    fn with_begin_followed_by_if_containing_with_end_no_collapse() {
+        // This is the ORIGINAL BUG pattern but without a loop wrapper.
+        // withBegin(3); if (...) { withEnd(); }
+        // withEnd is inside the if-body, NOT at the outer level.
+        // The flat scan should NOT find it (it only scans the same Vec).
+        // The loop check should NOT match (it's an If, not a Loop).
+        let mut stmts = vec![
+            with_begin(3),
+            JsStmt::If {
+                cond: JsExpr::Literal(Constant::Bool(true)),
+                then_body: vec![with_end()],
+                else_body: vec![],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // Must NOT collapse — withEnd is nested inside an If, not at the same level.
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn with_end_before_with_begin_not_confused() {
+        // Reversed order: withEnd(); withBegin(1); loop { ...; withEnd(); continue }
+        // The leading withEnd should be ignored, and only the withBegin/loop pair collapses.
+        let mut stmts = vec![
+            with_end(), // stray, should be left alone
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![body_stmt("x"), with_end(), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 2); // stray withEnd + collapsed withInstances
+        // First statement is the stray withEnd (unchanged)
+        assert!(matches!(
+            &stmts[0],
+            JsStmt::Expr(JsExpr::SystemCall { method, .. }) if method == "withEnd"
+        ));
+        assert_with_instances(&stmts, 1, 1);
+    }
+
+    #[test]
+    fn flat_collapse_takes_first_with_end_not_last() {
+        // withBegin(1); a(); withEnd(); b(); withEnd();
+        // Flat pattern should match the FIRST withEnd, not the second.
+        // Body should be just [a()], not [a(), withEnd(), b()].
+        let mut stmts = vec![
+            with_begin(1),
+            body_stmt("a"),
+            with_end(),
+            body_stmt("b"),
+            with_end(),
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // First withBegin/withEnd pair collapses with body [a()].
+        // Remaining: withInstances(1, () => { a() }), b(), withEnd()
+        assert_eq!(stmts.len(), 3);
+        let body = assert_with_instances(&stmts, 0, 1);
+        assert_eq!(body.len(), 1);
+    }
+
     #[test]
     fn rewrite_introduced_calls_maps_with_begin() {
         assert_eq!(
@@ -896,6 +1092,18 @@ mod tests {
         assert_eq!(
             rewrite_introduced_calls("GameMaker.Instance", "withInstances"),
             &["withInstances"]
+        );
+    }
+
+    #[test]
+    fn rewrite_introduced_calls_unknown_returns_empty() {
+        assert_eq!(
+            rewrite_introduced_calls("GameMaker.Instance", "withEnd"),
+            &[] as &[&str]
+        );
+        assert_eq!(
+            rewrite_introduced_calls("Unknown.System", "whatever"),
+            &[] as &[&str]
         );
     }
 }
