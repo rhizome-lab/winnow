@@ -711,6 +711,21 @@ The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
 
 ### High Priority (correctness)
 
+- [x] **Break instruction Int32 extra operand (pushref)** — Fixed. The bytecode
+  decoder now handles `Break` instructions with `type1 == Int32` (0x02) by
+  reading the extra 4-byte operand. `Operand::Break` carries `{ signal, extra }`.
+  All Break signals -1 through -11 are now handled in the translator: pushref
+  resolves function names via `func_ref_map` and pushes `GlobalRef`; isstaticok
+  pushes `false`; setstatic/savearef/restorearef/chknullish handled.
+  GMS2.3+ `Dup` val16 high byte (DupExtra swap flags) is now masked.
+  Dead Estate: 3,477 → 981 errors.
+
+- [ ] **GMS2.3+ struct operations** — Remaining ~981 errors in Dead Estate are
+  from GMS2.3+ struct creation/access patterns. Manifests as "Dup(0) on stack
+  of depth 0" (206), "stack underflow on Bf" (338), "Dup(4) on stack of depth 2"
+  (40+). Likely involves Dup with DupExtra=0x88 (struct swap) and struct field
+  access bytecode patterns not yet recognized by the translator.
+
 - [x] **Branch offset encoding** — Fixed. GML bytecode branch offsets use
   23-bit signed values in bits 0-22 of the instruction word. Bit 23 is not part
   of the offset (it encodes type/flag info). The decoder was using 24-bit sign
