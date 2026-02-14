@@ -679,6 +679,12 @@ program analysis or conservative assumptions.
 
 ## GameMaker Frontend
 
+### Reference Project
+
+The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
+`scripts/main*.js`, object event handlers in `classes/`. Compare emitted
+`~/Bounty/out/` against this reference when validating output.
+
 ### Critical
 
 - [ ] **`Op::MethodCall` IR node + remove `receiver_is_first_arg`** — The shared
@@ -690,8 +696,38 @@ program analysis or conservative assumptions.
   free function calls. Then `lower_call` doesn't need the flag — it always emits
   free calls, and `Op::MethodCall` always emits `receiver.method(args)`.
 
+- [ ] **2D array write: setOn argument order swapped** — In `translate.rs`
+  line ~1493, the Pop handler for 2D array writes (ref_type=0, instance>=0)
+  builds `setOn` args as `[obj_id, name_val, index, value]` but the correct
+  order is `[obj_id, name_val, value, index]`. The value and index are swapped.
+  This causes every 2D array write to store the wrong value at the wrong index.
+  Example: `obj_stats.advantages[i] = advantage` becomes
+  `ButtonBase.instances[0].advantages[3] = int(i)` — hardcoded index, wrong
+  value. The bug cascades into `location_store_create` where all field
+  assignments via `self.inst.*` produce `ButtonBase.instances[0].* = int(self.inst)`
+  instead of the correct field values. Fix: swap `index` and `value` in the
+  non-scalar `args` vec for the Pop case. The Push (read) case is correct
+  (`getOn` already uses `[obj_id, name_val, index]`).
+
+- [ ] **`button_click` structural corruption** — The emitted `button_click`
+  function is missing entire code blocks vs the reference. The `__override_button`
+  in-check + delete + early return is gone. The `else if` for second mouse button
+  release is flattened into an unconditional call + bare assignments. The emitted
+  function ends with `self.pressed = 3` executed unconditionally. Root cause is
+  likely in the structurizer or backend — the conditional structure is being lost.
+  Needs investigation: compare the raw IR for `button_click` against the reference
+  to determine whether the frontend, structurizer, or emitter is at fault.
+
 ### High Priority (correctness)
 
+- [x] **Branch offset encoding** — Fixed. GML bytecode branch offsets use
+  23-bit signed values in bits 0-22 of the instruction word. Bit 23 is not part
+  of the offset (it encodes type/flag info). The decoder was using 24-bit sign
+  extension, causing all backward branches (loop back-edges) to resolve to
+  invalid targets. Every `for`/`while` loop in GML output was lost — the loop
+  body executed once then fell through. Fixed in `datawin/bytecode/decode.rs`.
+  `DataType` also gained a `Raw(u8)` variant to preserve unknown nibble values
+  for bytecode round-trip fidelity.
 - [x] **Switch statement reconstruction** — Done. Frontend detects
   `Dup` + `Cmp(Eq)` + `BrIf` chains and rewrites them as `Op::Switch`.
   Core pipeline and backend support Switch through structurize → linear → emit.
@@ -721,6 +757,47 @@ program analysis or conservative assumptions.
   instance type 0 (ButtonBase). In the original GML these may be genuine
   cross-object references or may need parent-chain normalization.
 
+### GML Boolean / Short-Circuit Detection
+
+Several related issues around boolean handling in GML output. GML has no
+dedicated boolean type — `true`/`false` are 1/0 at runtime. The bytecode
+preserves these as integers, losing boolean semantics.
+
+- [ ] **Short-circuit `||`/`&&` emitted as nested ternaries** — The IR
+  encodes boolean short-circuit evaluation as BrIf chains with block params
+  carrying 0/1. The structurizer emits these as `(A) ? 1 : ((B) ? (C) : 0)`
+  instead of `A || (B && C)`. Example in `advantage_add`: the condition
+  `advantages[i] === "None" || (advantages[i] === "Free" && arg !== "Free")`
+  emits as `(... === "None") ? 1 : ((... === "Free") ? (arg !== "Free") : 0)`.
+  The pattern is: BrIf with one branch passing const 1/0 to a merge block,
+  the other branch computing the actual condition. This is different from the
+  Flash LogicalOr/LogicalAnd detection (which uses `try_logical_op` on
+  IfElse shapes). The GML pattern likely needs its own detection pass or an
+  extension to the existing logical-op detection.
+
+- [ ] **Numeric booleans: `=== 1` / `=== 0` instead of boolean tests** —
+  GML compiles `if (self.active)` as `push self.active; pushi 1; cmp.eq; bf`.
+  This produces IR `cmp.eq(self.active, 1)` which emits as
+  `self.active === 1` instead of the idiomatic `self.active`. Similarly,
+  `!self.active` becomes `self.active === 0`. Fixing this requires heuristics
+  to recognize when a comparison against 0/1 is really a boolean test.
+  Approach: during type inference or as a post-pass, identify fields/variables
+  that are only ever assigned 0/1/true/false, then replace `=== 1` with bare
+  test and `=== 0` with `!`. Requires investigating all usage sites across
+  all functions to build the boolean field set — can't just pattern-match
+  locally because a variable might be assigned numeric values elsewhere.
+
+- [ ] **Enum detection (string and numeric)** — Many GML games use string
+  constants as enum values (e.g. `"None"`, `"Free"`, `"Well-Off"` for
+  advantages; `"pressed"`, `"left"`, `"right"` for mouse buttons). These
+  could be extracted into `const` objects during type inference by tracking
+  switch case values and equality comparisons. String enums are easier
+  (unique strings). Numeric enums (e.g. MouseButtons: 0=none, 1=pressed,
+  2=left, 3=right) are harder — requires cross-referencing assignment sites
+  with switch cases to infer the mapping. The reference code
+  (`~/git/bounty/scripts/main.js`) uses `Advantages.none`, `Advantages.free`,
+  `MouseButtons.pressed` etc., showing these were originally named constants.
+
 ### Type Inference Results
 
 GML bytecode has zero type metadata — everything enters the IR as `Dynamic`.
@@ -740,6 +817,16 @@ assigned from `variable_global_get()` or untyped argument passthrough.
 
 ### Medium Priority (output quality)
 
+- [ ] **While → for loop promotion** — GML `for` loops emit as `while` with
+  a separate `let i = 0` init and `i += 1` increment in the else branch.
+  Example: `let i = 0; while (i < 20) { ... } else { i += 1; continue; }`
+  should be `for (let i = 0; i < 20; i++)`. Pattern: alloc + store(0) before
+  a while-loop, increment + `br back-edge` in the else/continue path. Could
+  detect in the structurizer (recognize the init-condition-increment pattern)
+  or as an AST-level rewrite. The Flash frontend already handles this via
+  `try_for_loop` in the structurizer — GML should use the same mechanism,
+  but the init/increment may be in different blocks due to the else-continue
+  structure.
 - [ ] **Sprite constant resolution** — `this.sprite_index = 34` should be
   `this.sprite_index = Sprites.spr_dice`. Requires mapping sprite indices to
   enum names at emission time (the Sprites enum already exists in data output).
