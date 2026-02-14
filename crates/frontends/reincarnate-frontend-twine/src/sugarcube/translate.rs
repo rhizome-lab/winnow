@@ -1498,6 +1498,17 @@ pub fn translate_widget(name: &str, body: &[Node]) -> Function {
     ctx.fb.build()
 }
 
+/// Translate a user `<script>` block into an IR Function that evals the code.
+pub fn translate_user_script(index: usize, code: &str) -> Function {
+    let func_name = format!("__user_script_{index}");
+    let mut ctx = TranslateCtx::new(&func_name);
+    let code_val = ctx.fb.const_string(code);
+    ctx.fb
+        .system_call("SugarCube.Engine", "eval", &[code_val], Type::Void);
+    ctx.fb.ret(None);
+    ctx.fb.build()
+}
+
 /// Convert a passage name to a function name.
 fn passage_func_name(name: &str) -> String {
     let sanitized: String = name
