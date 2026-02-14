@@ -1,30 +1,47 @@
 /// Data type for instruction operands (4-bit field).
+///
+/// For branch instructions, the "type" nibbles are really part of the branch
+/// offset encoding and may hold values outside the known set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum DataType {
-    Double = 0x0,
-    Float = 0x1,
-    Int32 = 0x2,
-    Int64 = 0x3,
-    Bool = 0x4,
-    Variable = 0x5,
-    String = 0x6,
-    // 0x7..0xE unused
-    Int16 = 0xF,
+    Double,
+    Float,
+    Int32,
+    Int64,
+    Bool,
+    Variable,
+    String,
+    Int16,
+    /// Raw 4-bit value not matching any known type (e.g. branch offset bits).
+    Raw(u8),
 }
 
 impl DataType {
-    pub fn from_u8(v: u8) -> Option<Self> {
+    pub fn from_u8(v: u8) -> Self {
         match v {
-            0x0 => Some(Self::Double),
-            0x1 => Some(Self::Float),
-            0x2 => Some(Self::Int32),
-            0x3 => Some(Self::Int64),
-            0x4 => Some(Self::Bool),
-            0x5 => Some(Self::Variable),
-            0x6 => Some(Self::String),
-            0xF => Some(Self::Int16),
-            _ => None,
+            0x0 => Self::Double,
+            0x1 => Self::Float,
+            0x2 => Self::Int32,
+            0x3 => Self::Int64,
+            0x4 => Self::Bool,
+            0x5 => Self::Variable,
+            0x6 => Self::String,
+            0xF => Self::Int16,
+            _ => Self::Raw(v),
+        }
+    }
+
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Double => 0x0,
+            Self::Float => 0x1,
+            Self::Int32 => 0x2,
+            Self::Int64 => 0x3,
+            Self::Bool => 0x4,
+            Self::Variable => 0x5,
+            Self::String => 0x6,
+            Self::Int16 => 0xF,
+            Self::Raw(v) => v,
         }
     }
 }

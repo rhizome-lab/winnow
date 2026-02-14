@@ -93,8 +93,8 @@ pub fn decode(bytecode: &[u8]) -> Result<Vec<Instruction>> {
             message: format!("unknown opcode {:#04x} at offset {:#x}", opcode_byte, inst_offset),
         })?;
 
-        let type1 = DataType::from_u8(type1_raw).unwrap_or(DataType::Int16);
-        let type2 = DataType::from_u8(type2_raw).unwrap_or(DataType::Int16);
+        let type1 = DataType::from_u8(type1_raw);
+        let type2 = DataType::from_u8(type2_raw);
 
         let operand = decode_operand(opcode, type1, type2, val16, word, bytecode, &mut pos)?;
 
@@ -207,7 +207,8 @@ fn decode_operand(
 
         Opcode::PushI => match type1 {
             DataType::Int16 => Ok(Operand::Int16(val16 as i16)),
-            _ => Ok(Operand::Int32(read_i32(bytecode, pos)?)),
+            DataType::Int32 => Ok(Operand::Int32(read_i32(bytecode, pos)?)),
+            _ => Ok(Operand::Int16(val16 as i16)),
         },
 
         // Pop: type1 determines if we read a variable ref
@@ -220,14 +221,15 @@ fn decode_operand(
             })
         }
 
-        // Branch instructions: 24-bit signed offset in bits 23-0 of the word
+        // Branch instructions: 23-bit signed offset in bits 22-0 of the word.
+        // Bit 23 is NOT part of the offset (it encodes comparison/type info).
         Opcode::B | Opcode::Bt | Opcode::Bf | Opcode::PushEnv | Opcode::PopEnv => {
-            let raw24 = word & 0x00FF_FFFF;
-            // Sign-extend from 24 bits
-            let offset = if raw24 & 0x80_0000 != 0 {
-                (raw24 | 0xFF00_0000) as i32
+            let raw23 = word & 0x007F_FFFF;
+            // Sign-extend from 23 bits
+            let offset = if raw23 & 0x40_0000 != 0 {
+                (raw23 | 0xFF80_0000) as i32
             } else {
-                raw24 as i32
+                raw23 as i32
             };
             // Offset is in 4-byte units
             Ok(Operand::Branch(offset * 4))
@@ -288,5 +290,9 @@ fn decode_push_operand(
             })
         }
         DataType::Int16 => Ok(Operand::Int16(val16 as i16)),
+        DataType::Raw(v) => Err(Error::Parse {
+            context: "bytecode",
+            message: format!("unknown push data type {v:#x}"),
+        }),
     }
 }

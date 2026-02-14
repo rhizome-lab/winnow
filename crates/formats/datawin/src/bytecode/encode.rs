@@ -18,21 +18,26 @@ pub fn encode(instructions: &[Instruction]) -> Vec<u8> {
 
 fn encode_instruction(inst: &Instruction, out: &mut Vec<u8>) {
     let opcode = inst.opcode as u8;
-    let type1 = inst.type1 as u8;
-    let type2 = inst.type2 as u8;
+    let type1 = inst.type1.as_u8();
+    let type2 = inst.type2.as_u8();
 
     // Build the primary 32-bit word.
     // Layout: [bits 31-24: opcode] [bits 23-20: type2] [bits 19-16: type1] [bits 15-0: val16]
     //
-    // For branches: [bits 31-24: opcode] [bits 23-0: 24-bit signed offset / 4]
+    // For branches: [bits 31-24: opcode] [bit 23: type flag] [bits 22-0: 23-bit signed offset / 4]
     // For Cmp: [bits 31-24: opcode] [bits 23-20: type2] [bits 19-16: type1] [bits 15-8: cmp_kind] [bits 7-0: 0]
 
     match &inst.operand {
         Operand::Branch(byte_offset) => {
-            // Branch offset is stored as 24-bit signed value in 4-byte units
+            // Branch offset is a 23-bit signed value in 4-byte units (bits 0-22).
+            // Bit 23 is not part of the offset; it's preserved via the type fields
+            // (type2 occupies bits 20-23, so its high bit is bit 23).
             let offset_words = byte_offset / 4;
-            let raw24 = (offset_words as u32) & 0x00FF_FFFF;
-            let word = ((opcode as u32) << 24) | raw24;
+            let lower16 = (offset_words as u32) & 0x0000_FFFF;
+            let word = ((opcode as u32) << 24)
+                | ((type2 as u32) << 20)
+                | ((type1 as u32) << 16)
+                | lower16;
             out.extend_from_slice(&word.to_le_bytes());
         }
 

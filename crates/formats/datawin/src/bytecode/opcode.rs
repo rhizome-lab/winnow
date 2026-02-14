@@ -37,7 +37,7 @@ pub enum Opcode {
     Exit = 0x9D,
     Popz = 0x9E,
 
-    // Branches (24-bit signed offset in lower bits)
+    // Branches (23-bit signed offset in bits 0-22)
     B = 0xB6,
     Bt = 0xB7,
     Bf = 0xB8,
