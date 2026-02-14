@@ -60,8 +60,8 @@ fn parse_degrees_of_lewdity() {
 
     assert_eq!(panics, 0, "parser panicked on {panics} passages");
     assert!(
-        rate >= 90.0,
-        "parse success rate {rate:.1}% is below 90% threshold"
+        rate >= 99.0,
+        "parse success rate {rate:.1}% is below 99% threshold"
     );
 }
 
@@ -87,7 +87,7 @@ fn parse_repurposing_center() {
 
     assert_eq!(panics, 0, "parser panicked on {panics} passages");
     assert!(
-        rate >= 90.0,
-        "parse success rate {rate:.1}% is below 90% threshold"
+        rate >= 99.0,
+        "parse success rate {rate:.1}% is below 99% threshold"
     );
 }

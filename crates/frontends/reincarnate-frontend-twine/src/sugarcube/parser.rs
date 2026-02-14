@@ -229,11 +229,7 @@ impl<'a> Parser<'a> {
         };
 
         if name.is_empty() {
-            // Not a valid macro, treat as text
-            self.error(
-                Span::new(start, self.pos),
-                "empty macro name",
-            );
+            // Not a valid macro (e.g. `<<<`), treat `<<` as literal text
             return Some(Node {
                 kind: NodeKind::Text(self.src[start..self.pos].to_string()),
                 span: Span::new(start, self.pos),
@@ -407,6 +403,23 @@ impl<'a> Parser<'a> {
         while !self.at_end() {
             let ch = self.ch();
             match ch {
+                b'[' if self.pos + 1 < self.bytes.len()
+                    && self.bytes[self.pos + 1] == b'[' =>
+                {
+                    // [[...]] link — scan to ]] without interpreting quotes
+                    // (passage names like "Valentine's Day" contain apostrophes)
+                    self.pos += 2;
+                    while !self.at_end() {
+                        if self.pos + 1 < self.bytes.len()
+                            && self.bytes[self.pos] == b']'
+                            && self.bytes[self.pos + 1] == b']'
+                        {
+                            self.pos += 2;
+                            break;
+                        }
+                        self.advance_char();
+                    }
+                }
                 b'(' | b'[' | b'{' => {
                     depth += 1;
                     self.pos += 1;
@@ -537,14 +550,23 @@ impl<'a> Parser<'a> {
             }
 
             if self.remaining().starts_with("<</") {
-                // Closing tag — consume it
-                let close_start = self.pos;
-                if let Some(end) = self.src[self.pos..].find(">>") {
-                    self.pos += end + 2;
+                // Extract closing tag name and verify it matches
+                let close_name = self.peek_macro_name().unwrap_or_default();
+                if close_name == name {
+                    // Correct close — consume it
+                    if let Some(end) = self.src[self.pos..].find(">>") {
+                        self.pos += end + 2;
+                    } else {
+                        self.pos = self.bytes.len();
+                    }
                 } else {
-                    self.pos = self.bytes.len();
+                    // Mismatched close tag — emit error for current macro
+                    // but do NOT consume the tag so the parent can match it
+                    self.error(
+                        Span::new(start, self.pos),
+                        format!("unclosed block macro: <<{name}>>"),
+                    );
                 }
-                let _ = close_start; // consumed
                 break;
             }
 
@@ -1515,6 +1537,55 @@ mod tests {
     fn orphaned_close_doesnt_panic() {
         let ast = parse_str("text<</if>>");
         assert!(!ast.errors.is_empty());
+    }
+
+    #[test]
+    fn close_tag_name_mismatch() {
+        // <<for>> closed by <</if>> — the for should report unclosed,
+        // and the <</if>> should become an orphaned close error.
+        let ast = parse_str("<<for _i to 0; _i lt 3; _i++>>body<</if>>");
+        assert!(!ast.errors.is_empty());
+        let msgs: Vec<&str> = ast.errors.iter().map(|e| e.message.as_str()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("unclosed")),
+            "expected 'unclosed' error, got: {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn link_with_apostrophe_in_macro_args() {
+        // [[Valentine's Day|ValentinesDay]] inside a macro should not break
+        let src = r#"<<link [[Valentine's Day|ValentinesDay]]>><<set $x to 1>><</link>>"#;
+        let ast = parse_str(src);
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+        let node = &ast.body[0];
+        if let NodeKind::Macro(m) = &node.kind {
+            assert_eq!(m.name, "link");
+        } else {
+            panic!("expected Macro");
+        }
+    }
+
+    #[test]
+    fn triple_angle_bracket_as_text() {
+        // <<< should be treated as literal text, not cause errors
+        let ast = parse_str("before<<<after");
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+    }
+
+    #[test]
+    fn radiobutton_is_self_closing() {
+        // radiobutton should not consume following content as body
+        let src = r#"<<if $x>><<radiobutton "$choice" 1>> Option 1<</if>>"#;
+        let ast = parse_str(src);
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+        let node = &ast.body[0];
+        if let NodeKind::Macro(m) = &node.kind {
+            assert_eq!(m.name, "if");
+            assert_eq!(m.clauses.len(), 1);
+        } else {
+            panic!("expected if macro");
+        }
     }
 
     // ── Mixed content ───────────────────────────────────────────────

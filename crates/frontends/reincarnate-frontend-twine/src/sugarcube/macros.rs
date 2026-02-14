@@ -55,8 +55,7 @@ pub fn macro_kind(name: &str) -> Option<MacroKind> {
         "createplaylist" | "createaudiogroup" => MacroKind::Block,
         "widget" => MacroKind::Block,
         "done" => MacroKind::Block,
-        "listbox" | "radiobutton" | "checkbox" | "cycle" | "numberbox" | "textbox"
-        | "textarea" => MacroKind::Block,
+        "listbox" | "cycle" => MacroKind::Block,
 
         // ── Self-closing (no body) ────────────────────────────────
         "set" | "unset" => MacroKind::SelfClosing,
@@ -72,6 +71,9 @@ pub fn macro_kind(name: &str) -> Option<MacroKind> {
         "addclass" | "removeclass" | "toggleclass" => MacroKind::SelfClosing,
         "copy" => MacroKind::SelfClosing,
         "playlist" => MacroKind::SelfClosing,
+        "radiobutton" | "checkbox" | "textbox" | "numberbox" | "textarea"
+            => MacroKind::SelfClosing,
+        "option" | "optionsfrom" => MacroKind::SelfClosing,
 
         // ── Raw body (block with unparsed content) ────────────────
         "script" => MacroKind::Raw,
@@ -103,6 +105,14 @@ mod tests {
         assert_eq!(macro_kind("print"), Some(MacroKind::SelfClosing));
         assert_eq!(macro_kind("="), Some(MacroKind::SelfClosing));
         assert_eq!(macro_kind("goto"), Some(MacroKind::SelfClosing));
+        // Form controls — self-closing, not block
+        assert_eq!(macro_kind("radiobutton"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("checkbox"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("textbox"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("numberbox"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("textarea"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("option"), Some(MacroKind::SelfClosing));
+        assert_eq!(macro_kind("optionsfrom"), Some(MacroKind::SelfClosing));
     }
 
     #[test]
