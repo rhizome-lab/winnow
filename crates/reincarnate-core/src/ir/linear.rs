@@ -1111,6 +1111,7 @@ pub fn lower_function_linear(
 
     ast_passes::rewrite_compound_assign(&mut full_body);
     ast_passes::rewrite_post_increment(&mut full_body);
+    ast_passes::promote_while_to_for(&mut full_body);
 
     AstFunction {
         name: func.name.clone(),

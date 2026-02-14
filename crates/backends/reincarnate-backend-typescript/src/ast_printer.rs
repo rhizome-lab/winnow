@@ -261,6 +261,23 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
             body,
         } => {
             let inner = format!("{indent}  ");
+            // Try to emit as proper `for (init; cond; update)` syntax when
+            // init is a single VarDecl and update is a single statement.
+            if init.len() == 1 && update.len() == 1 {
+                if let (Some(init_str), Some(update_str)) =
+                    (print_for_init(&init[0]), print_for_update(&update[0]))
+                {
+                    let _ = writeln!(
+                        out,
+                        "{indent}for ({init_str}; {}; {update_str}) {{",
+                        print_expr(cond),
+                    );
+                    print_stmts(body, out, &inner);
+                    let _ = writeln!(out, "{indent}}}");
+                    return;
+                }
+            }
+            // Fallback: emit as `init; while (cond) { body; update; }`.
             print_stmts(init, out, indent);
             let _ = writeln!(out, "{indent}while ({}) {{", print_expr(cond));
             print_stmts(body, out, &inner);
@@ -358,6 +375,50 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
         JsStmt::Throw(expr) => {
             let _ = writeln!(out, "{indent}throw {};", print_expr(expr));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// For-loop header helpers
+// ---------------------------------------------------------------------------
+
+/// Print a single init statement for a `for` header (no trailing semicolon).
+fn print_for_init(stmt: &JsStmt) -> Option<String> {
+    match stmt {
+        JsStmt::VarDecl {
+            name,
+            ty,
+            init: Some(init),
+            mutable,
+        } => {
+            let kw = if *mutable { "let" } else { "const" };
+            let name_str = sanitize_ident(name);
+            match ty {
+                Some(ty) => Some(format!("{kw} {name_str}: {} = {}", ts_type(ty), print_expr(init))),
+                None => Some(format!("{kw} {name_str} = {}", print_expr(init))),
+            }
+        }
+        JsStmt::Assign { target, value } => {
+            Some(format!("{} = {}", print_expr(target), print_expr(value)))
+        }
+        _ => None,
+    }
+}
+
+/// Print a single update statement for a `for` header (no trailing semicolon).
+fn print_for_update(stmt: &JsStmt) -> Option<String> {
+    match stmt {
+        JsStmt::CompoundAssign { target, op, value } => Some(format!(
+            "{} {}= {}",
+            print_expr(target),
+            binop_str(*op),
+            print_expr(value),
+        )),
+        JsStmt::Assign { target, value } => {
+            Some(format!("{} = {}", print_expr(target), print_expr(value)))
+        }
+        JsStmt::Expr(expr) => Some(print_expr(expr)),
+        _ => None,
     }
 }
 

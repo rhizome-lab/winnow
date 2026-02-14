@@ -2992,6 +2992,314 @@ fn simplify_ternary_in_expr(expr: &mut Expr) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// While → For loop promotion
+// ---------------------------------------------------------------------------
+
+/// Promote `let i = init; while (cond) { body; i += step; }` to
+/// `for (let i = init; cond; i += step) { body }`.
+///
+/// Detects two increment patterns:
+/// - **Tail increment**: last statement of the while body is `i += step`
+/// - **Else-continue increment**: body is `if (x) { ... } else { i += step; continue; }`,
+///   where the else branch is just the increment + continue
+pub fn promote_while_to_for(body: &mut Vec<Stmt>) {
+    // Recurse into nested structures first.
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                promote_while_to_for(then_body);
+                promote_while_to_for(else_body);
+            }
+            Stmt::While { body: wb, .. }
+            | Stmt::Loop { body: wb }
+            | Stmt::For { body: wb, .. }
+            | Stmt::ForOf { body: wb, .. } => {
+                promote_while_to_for(wb);
+            }
+            Stmt::Switch {
+                cases,
+                default_body,
+                ..
+            } => {
+                for (_, case_body) in cases {
+                    promote_while_to_for(case_body);
+                }
+                promote_while_to_for(default_body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    promote_while_to_for(block_body);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Scan for While loops and look backwards for a matching init statement.
+    let mut i = 0;
+    while i < body.len() {
+        if !matches!(&body[i], Stmt::While { .. }) {
+            i += 1;
+            continue;
+        }
+
+        // Extract condition variable from the While's cond.
+        let while_cond_var = if let Stmt::While { cond, .. } = &body[i] {
+            extract_cmp_var(cond)
+        } else {
+            None
+        };
+
+        let Some(var_name) = while_cond_var else {
+            i += 1;
+            continue;
+        };
+
+        // Look backwards for a matching init (VarDecl or Assign to var_name).
+        // Skip over statements that don't reference var_name.
+        let mut init_idx = None;
+        if i > 0 {
+            for j in (0..i).rev() {
+                let is_init = match &body[j] {
+                    Stmt::VarDecl {
+                        name,
+                        init: Some(_),
+                        mutable: true,
+                        ..
+                    } => name == &var_name,
+                    Stmt::Assign {
+                        target: Expr::Var(name),
+                        ..
+                    } => name == &var_name,
+                    _ => false,
+                };
+                if is_init {
+                    init_idx = Some(j);
+                    break;
+                }
+                // Stop searching if an intervening statement references var_name.
+                if stmt_references(&body[j], &var_name) {
+                    break;
+                }
+            }
+        }
+
+        let Some(init_j) = init_idx else {
+            i += 1;
+            continue;
+        };
+
+        // Try to promote the pair.
+        // Move the init statement to be adjacent to the while, then promote.
+        let mut init_stmt = body.remove(init_j);
+        // After removal, the while is now at i-1.
+        let while_idx = i - 1;
+        if let Some(promoted) = try_promote_while(&var_name, &mut init_stmt, &mut body[while_idx])
+        {
+            body[while_idx] = promoted;
+            // Don't increment — recheck from the same position.
+            i = while_idx;
+            continue;
+        } else {
+            // Put the init back where it was.
+            body.insert(init_j, init_stmt);
+        }
+        i += 1;
+    }
+}
+
+/// Extract the variable name from a comparison expression like `i < N` or `i >= N`.
+fn extract_cmp_var(expr: &Expr) -> Option<String> {
+    if let Expr::Cmp { lhs, rhs, .. } = expr {
+        if let Expr::Var(name) = lhs.as_ref() {
+            return Some(name.clone());
+        }
+        if let Expr::Var(name) = rhs.as_ref() {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
+/// Check if a statement references the named variable (reads or writes).
+fn stmt_references(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::VarDecl {
+            name: decl_name,
+            init,
+            ..
+        } => {
+            decl_name == name
+                || init
+                    .as_ref()
+                    .is_some_and(|e| expr_references(e, name))
+        }
+        Stmt::Assign { target, value } => {
+            expr_references(target, name) || expr_references(value, name)
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            expr_references(target, name) || expr_references(value, name)
+        }
+        Stmt::Expr(e) => expr_references(e, name),
+        _ => true, // Conservatively assume anything else references the var.
+    }
+}
+
+/// Check if `cond` references the named variable.
+fn expr_references(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(n) => n == name,
+        Expr::Literal(_) | Expr::GlobalRef(_) => false,
+        Expr::Binary { lhs, rhs, .. }
+        | Expr::Cmp { lhs, rhs, .. }
+        | Expr::LogicalOr { lhs, rhs }
+        | Expr::LogicalAnd { lhs, rhs } => {
+            expr_references(lhs, name) || expr_references(rhs, name)
+        }
+        Expr::Unary { expr: inner, .. }
+        | Expr::Cast { expr: inner, .. }
+        | Expr::TypeCheck { expr: inner, .. }
+        | Expr::Not(inner)
+        | Expr::CoroutineResume(inner)
+        | Expr::PostIncrement(inner) => expr_references(inner, name),
+        Expr::Field { object, .. } => expr_references(object, name),
+        Expr::Index { collection, index } => {
+            expr_references(collection, name) || expr_references(index, name)
+        }
+        Expr::Call { args, .. }
+        | Expr::CoroutineCreate { args, .. }
+        | Expr::SystemCall { args, .. } => args.iter().any(|a| expr_references(a, name)),
+        Expr::CallIndirect { callee, args } => {
+            expr_references(callee, name) || args.iter().any(|a| expr_references(a, name))
+        }
+        Expr::MethodCall {
+            receiver, args, ..
+        } => expr_references(receiver, name) || args.iter().any(|a| expr_references(a, name)),
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            expr_references(cond, name)
+                || expr_references(then_val, name)
+                || expr_references(else_val, name)
+        }
+        Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
+            elems.iter().any(|e| expr_references(e, name))
+        }
+        Expr::StructInit { fields, .. } => {
+            fields.iter().any(|(_, v)| expr_references(v, name))
+        }
+        Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_references(e, name)),
+    }
+}
+
+/// Check if a statement is an increment/update of the named variable.
+/// Returns true for `name += expr`, `name -= expr`, `name = name + expr`, etc.
+fn is_var_update(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::CompoundAssign { target, .. } => matches!(target, Expr::Var(n) if n == name),
+        Stmt::Assign { target, value } => {
+            matches!(target, Expr::Var(n) if n == name)
+                && matches!(
+                    value,
+                    Expr::Binary { lhs, .. } if matches!(lhs.as_ref(), Expr::Var(n) if n == name)
+                )
+        }
+        _ => false,
+    }
+}
+
+/// Try to promote a `VarDecl/Assign; While` pair into a `For` loop.
+fn try_promote_while(var_name: &str, init_stmt: &mut Stmt, while_stmt: &mut Stmt) -> Option<Stmt> {
+    let Stmt::While { cond, body } = while_stmt else {
+        return None;
+    };
+
+    // Condition must reference the loop variable.
+    if !expr_references(cond, var_name) {
+        return None;
+    }
+
+    // Extract the init statement (works for both VarDecl and Assign).
+    let extract_init = |init_stmt: &mut Stmt| -> Stmt {
+        std::mem::replace(init_stmt, Stmt::Expr(Expr::Literal(Constant::Null)))
+    };
+
+    // Pattern 1: last statement of body is `var_name += step` (tail increment).
+    if body.len() >= 2 && is_var_update(body.last().unwrap(), var_name) {
+        let update_stmt = body.pop().unwrap();
+        let init = extract_init(init_stmt);
+        let cond = std::mem::replace(cond, Expr::Literal(Constant::Null));
+        let body = std::mem::take(body);
+        return Some(Stmt::For {
+            init: vec![init],
+            cond,
+            update: vec![update_stmt],
+            body,
+        });
+    }
+
+    // Pattern 2: body is a single `if (x) { ... } else { ...; var_name += step; continue; }`
+    if body.len() == 1 {
+        if let Stmt::If { else_body, .. } = &body[0] {
+            // Else branch must end with `[..., increment, continue]`
+            if else_body.len() >= 2
+                && matches!(else_body.last(), Some(Stmt::Continue))
+                && is_var_update(&else_body[else_body.len() - 2], var_name)
+            {
+                // Extract the if statement mutably.
+                let Stmt::If {
+                    cond: if_cond,
+                    then_body: if_then,
+                    else_body: if_else,
+                } = std::mem::replace(
+                    &mut body[0],
+                    Stmt::Expr(Expr::Literal(Constant::Null)),
+                )
+                else {
+                    unreachable!()
+                };
+
+                let mut if_else = if_else;
+                if_else.pop(); // Remove Continue.
+                let update_stmt = if_else.pop().unwrap(); // Remove increment.
+
+                // If else body still has stmts, keep the if/else; otherwise remove else.
+                let new_body = if if_else.is_empty() {
+                    vec![Stmt::If {
+                        cond: if_cond,
+                        then_body: if_then,
+                        else_body: vec![],
+                    }]
+                } else {
+                    vec![Stmt::If {
+                        cond: if_cond,
+                        then_body: if_then,
+                        else_body: if_else,
+                    }]
+                };
+
+                let init = extract_init(init_stmt);
+                let loop_cond = std::mem::replace(cond, Expr::Literal(Constant::Null));
+                return Some(Stmt::For {
+                    init: vec![init],
+                    cond: loop_cond,
+                    update: vec![update_stmt],
+                    body: new_body,
+                });
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
