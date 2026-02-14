@@ -1554,8 +1554,8 @@ mod tests {
 
     #[test]
     fn link_with_apostrophe_in_macro_args() {
-        // [[Valentine's Day|ValentinesDay]] inside a macro should not break
-        let src = r#"<<link [[Valentine's Day|ValentinesDay]]>><<set $x to 1>><</link>>"#;
+        // Apostrophe in passage name inside [[...]] must not be treated as string delimiter
+        let src = r#"<<link [[Bob's House|BobsHouse]]>><<set $x to 1>><</link>>"#;
         let ast = parse_str(src);
         assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
         let node = &ast.body[0];
