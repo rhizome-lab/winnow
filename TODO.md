@@ -696,27 +696,21 @@ The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
   free function calls. Then `lower_call` doesn't need the flag — it always emits
   free calls, and `Op::MethodCall` always emits `receiver.method(args)`.
 
-- [ ] **2D array write: setOn argument order swapped** — In `translate.rs`
-  line ~1493, the Pop handler for 2D array writes (ref_type=0, instance>=0)
-  builds `setOn` args as `[obj_id, name_val, index, value]` but the correct
-  order is `[obj_id, name_val, value, index]`. The value and index are swapped.
-  This causes every 2D array write to store the wrong value at the wrong index.
-  Example: `obj_stats.advantages[i] = advantage` becomes
-  `ButtonBase.instances[0].advantages[3] = int(i)` — hardcoded index, wrong
-  value. The bug cascades into `location_store_create` where all field
-  assignments via `self.inst.*` produce `ButtonBase.instances[0].* = int(self.inst)`
-  instead of the correct field values. Fix: swap `index` and `value` in the
-  non-scalar `args` vec for the Pop case. The Push (read) case is correct
-  (`getOn` already uses `[obj_id, name_val, index]`).
+- [x] **2D array write: stack pop order** — Fixed. The GML bytecode stack
+  layout for 2D array Pop instructions is `[value, dim2, dim1]` with dim1 on
+  top. The translator was popping `value` first (getting dim1), then `index`
+  (getting dim2), then `_dim1` (getting the actual value). This caused array
+  writes like `advantages[i] = argument0` to emit as `advantages[3] = int(i)`.
+  Fixed by restructuring the Pop handler to check `is_2d_array_access` before
+  the first pop, then popping all three in correct order (dim1, dim2, value).
 
-- [ ] **`button_click` structural corruption** — The emitted `button_click`
-  function is missing entire code blocks vs the reference. The `__override_button`
-  in-check + delete + early return is gone. The `else if` for second mouse button
-  release is flattened into an unconditional call + bare assignments. The emitted
-  function ends with `self.pressed = 3` executed unconditionally. Root cause is
-  likely in the structurizer or backend — the conditional structure is being lost.
-  Needs investigation: compare the raw IR for `button_click` against the reference
-  to determine whether the frontend, structurizer, or emitter is at fault.
+- [x] **`button_click` structural corruption** — Fixed. The post-dominator
+  computation didn't recognize empty blocks (no instructions, no successors)
+  as function exits. GML frontends produce empty implicit-return blocks that
+  were invisible in the reverse CFG, corrupting the post-dominator tree. This
+  caused block6's else branch (the `released(2)` check) to be identified as
+  the merge point rather than a branch target, flattening the entire else-if
+  structure. Fixed in `structurize.rs` `compute_post_dominators`.
 
 ### High Priority (correctness)
 
