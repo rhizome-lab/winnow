@@ -303,8 +303,16 @@ fn compute_post_dominators(func: &Function, cfg: &Cfg) -> HashMap<BlockId, Block
         .blocks
         .iter()
         .filter_map(|(id, block)| {
+            // Explicit return instruction.
             if let Some(&last) = block.insts.last() {
                 if matches!(func.insts[last].op, Op::Return(_)) {
+                    return Some(id);
+                }
+            }
+            // Empty block with no successors = implicit return (GML fall-through).
+            if block.insts.is_empty() {
+                let has_succs = cfg.succs.get(&id).is_some_and(|s| !s.is_empty());
+                if !has_succs {
                     return Some(id);
                 }
             }
@@ -796,7 +804,6 @@ impl<'a> Structurizer<'a> {
 
                 // Find merge point via post-dominator.
                 let mut merge = self.find_merge(block, then_target, else_target, until);
-
                 // If post-dominator didn't give us a merge, try BFS intersection
                 // of blocks reachable from both targets. Without a merge point,
                 // both branches would independently traverse shared downstream
