@@ -1,6 +1,6 @@
 pub mod extract;
 mod harlowe;
-mod sugarcube;
+pub mod sugarcube;
 
 use std::fs;
 
@@ -29,12 +29,21 @@ impl Frontend for TwineFrontend {
 
         match story.format.as_str() {
             "SugarCube" => {
-                // TODO: SugarCube passage parsing → IR
+                // Parse all passages, collect diagnostics
+                let mut total_errors = 0;
+                for passage in &story.passages {
+                    let ast = sugarcube::parse_passage(&passage.source);
+                    total_errors += ast.errors.len();
+                }
+
+                // TODO: SugarCube passage ASTs → IR modules
                 Err(CoreError::Parse {
                     file: input.source,
                     message: format!(
-                        "SugarCube parser not yet implemented (story has {} passages)",
-                        story.passages.len()
+                        "SugarCube IR lowering not yet implemented \
+                         (parsed {} passages, {} errors)",
+                        story.passages.len(),
+                        total_errors,
                     ),
                 })
             }
