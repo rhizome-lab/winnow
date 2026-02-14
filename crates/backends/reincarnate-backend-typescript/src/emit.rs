@@ -97,6 +97,7 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
         }
     }
 
+    strip_unused_namespace_imports(&mut out);
     Ok(out)
 }
 
@@ -874,6 +875,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
 
         emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, &mut out)?;
 
+        strip_unused_namespace_imports(&mut out);
         let path = file_dir.join(format!("{short_name}.ts"));
         fs::write(&path, &out).map_err(CoreError::Io)?;
 
@@ -947,6 +949,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         for &fid in &free_funcs {
             emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &mut out)?;
         }
+        strip_unused_namespace_imports(&mut out);
         let path = module_dir.join("_init.ts");
         fs::write(&path, &out).map_err(CoreError::Io)?;
         barrel_exports.push("_init".to_string());
@@ -1137,6 +1140,48 @@ fn emit_runtime_imports_with_prefix(
     }
     if !generic.is_empty() || !by_mod.is_empty() {
         out.push('\n');
+    }
+}
+
+/// Remove `import * as NAME from "...";` lines where `NAME.` never appears
+/// in the rest of the output.  Engine-specific rewrite passes (e.g. GameMaker)
+/// can eliminate all usages of a namespace import after the import collector
+/// has already added it; this post-pass cleans them up.
+fn strip_unused_namespace_imports(out: &mut String) {
+    // Collect (line_start, line_end, alias) for every namespace import.
+    let mut removals: Vec<(usize, usize)> = Vec::new();
+    for (start, line) in out
+        .match_indices("import * as ")
+        .collect::<Vec<_>>()
+    {
+        // `line` is always the literal "import * as " prefix.
+        let _ = line;
+        let after_prefix = start + "import * as ".len();
+        let rest = &out[after_prefix..];
+        // Extract the alias (up to the next space or ' from').
+        let alias_end = rest
+            .find([' ', '\n'])
+            .unwrap_or(rest.len());
+        let alias = &rest[..alias_end];
+        if alias.is_empty() {
+            continue;
+        }
+        // Find the end of this line (including the newline).
+        let line_end = out[start..]
+            .find('\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(out.len());
+
+        // Check whether `ALIAS.` appears anywhere AFTER this import line.
+        let needle = format!("{alias}.");
+        if !out[line_end..].contains(&needle) {
+            removals.push((start, line_end));
+        }
+    }
+
+    // Remove in reverse order to preserve byte offsets.
+    for &(start, end) in removals.iter().rev() {
+        out.drain(start..end);
     }
 }
 
