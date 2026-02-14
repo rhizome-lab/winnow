@@ -311,20 +311,23 @@ fn linearize_into(
             cases,
             default_assigns,
             default_body,
+            default_trailing_assigns,
         } => {
             emit_block_insts(func, *block, out);
 
             let mut case_stmts = Vec::with_capacity(cases.len());
-            for (constant, assigns, body) in cases {
+            for case in cases {
                 let mut stmts = Vec::new();
-                emit_arg_assigns(assigns, &mut stmts);
-                linearize_into(func, body, &mut stmts, false);
-                case_stmts.push((constant.clone(), stmts));
+                emit_arg_assigns(&case.entry_assigns, &mut stmts);
+                linearize_into(func, &case.body, &mut stmts, false);
+                emit_arg_assigns(&case.trailing_assigns, &mut stmts);
+                case_stmts.push((case.value.clone(), stmts));
             }
 
             let mut default_stmts = Vec::new();
             emit_arg_assigns(default_assigns, &mut default_stmts);
             linearize_into(func, default_body, &mut default_stmts, false);
+            emit_arg_assigns(default_trailing_assigns, &mut default_stmts);
 
             out.push(LinearStmt::Switch {
                 value: *value,

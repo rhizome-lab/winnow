@@ -25,6 +25,15 @@ pub struct BlockArgAssign {
     pub src: ValueId,
 }
 
+/// A single case arm in a switch statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub value: Constant,
+    pub entry_assigns: Vec<BlockArgAssign>,
+    pub body: Box<Shape>,
+    pub trailing_assigns: Vec<BlockArgAssign>,
+}
+
 /// A structured control-flow shape recovered from the block-based CFG.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
@@ -92,9 +101,10 @@ pub enum Shape {
     Switch {
         block: BlockId,
         value: ValueId,
-        cases: Vec<(Constant, Vec<BlockArgAssign>, Box<Shape>)>,
+        cases: Vec<SwitchCase>,
         default_assigns: Vec<BlockArgAssign>,
         default_body: Box<Shape>,
+        default_trailing_assigns: Vec<BlockArgAssign>,
     },
     /// Fallback dispatch for irreducible CFG subgraphs.
     Dispatch {
@@ -942,15 +952,23 @@ impl<'a> Structurizer<'a> {
 
                 let mut case_shapes = Vec::with_capacity(cases.len());
                 for (constant, target, args) in cases {
-                    let assigns = self.branch_assigns(*target, args);
+                    let entry_assigns = self.branch_assigns(*target, args);
                     let body = self.structurize_region(*target, merge, loop_body);
-                    case_shapes.push((constant.clone(), assigns, Box::new(body)));
+                    let trailing_assigns = merge.map_or(vec![], |m| self.trailing_merge_assigns(&body, m));
+                    case_shapes.push(SwitchCase {
+                        value: constant.clone(),
+                        entry_assigns,
+                        body: Box::new(body),
+                        trailing_assigns,
+                    });
                 }
 
                 let default_assigns =
                     self.branch_assigns(default.0, &default.1);
                 let default_body =
                     self.structurize_region(default.0, merge, loop_body);
+                let default_trailing_assigns =
+                    merge.map_or(vec![], |m| self.trailing_merge_assigns(&default_body, m));
 
                 let switch_shape = Shape::Switch {
                     block,
@@ -958,6 +976,7 @@ impl<'a> Structurizer<'a> {
                     cases: case_shapes,
                     default_assigns,
                     default_body: Box::new(default_body),
+                    default_trailing_assigns,
                 };
 
                 if let Some(m) = merge {
