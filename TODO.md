@@ -739,11 +739,15 @@ The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
      after terminal instructions.
   4. **Stack effect fixes** — `setowner` (Break -5) pops 1 value (was no-op);
      `CallV` pops argc+2 (function ref + instance + args, was argc+1).
-- [ ] **GMS2.3+ remaining 81 errors** — 30 Bf underflows, 21 Sub underflows,
-  11 Cmp underflows, 10 Popz underflows, 5 misc. 76 of 81 are in anonymous
-  functions. Likely caused by: (a) last-entry-in-blob length still over-counting
-  for some entries, (b) unhandled GMS2.3+ bytecode patterns (try-catch, etc.),
-  (c) Haxe-compiled code with non-standard patterns.
+- [x] **GMS2.3+ remaining 81 errors** — Fixed. Root cause: in shared bytecode
+  blobs, the decoded byte range extended past the child function's Ret/Exit
+  into sibling functions' code. Sibling branches created spurious block starts
+  that reset the terminated flag, causing the translator to process unrelated
+  bytecode with an empty stack. Fix: `filter_reachable()` walks control flow
+  from instruction 0, stopping at Ret/Exit, and only passes reachable
+  instructions downstream. Also fixed Bt/Bf handlers to gracefully handle
+  conditional branches at the end of a function where targets are past the
+  bytecode end (implicit return). Dead Estate: 2,167 → 0 errors.
 
 - [x] **Branch offset encoding** — Fixed. GML bytecode branch offsets use
   23-bit signed values in bits 0-22 of the instruction word. Bit 23 is not part
