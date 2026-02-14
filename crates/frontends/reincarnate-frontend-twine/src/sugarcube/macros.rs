@@ -91,34 +91,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_block_macros() {
-        assert_eq!(macro_kind("if"), Some(MacroKind::Block));
-        assert_eq!(macro_kind("for"), Some(MacroKind::Block));
-        assert_eq!(macro_kind("link"), Some(MacroKind::Block));
-        assert_eq!(macro_kind("widget"), Some(MacroKind::Block));
-        assert_eq!(macro_kind("silently"), Some(MacroKind::Block));
-    }
+    fn all_known_macros_classified() {
+        let block = &[
+            "if", "switch", "for", "link", "linkappend", "linkprepend",
+            "linkreplace", "button", "replace", "append", "prepend",
+            "repeat", "timed", "type", "nobr", "silently", "capture",
+            "createplaylist", "createaudiogroup", "widget", "done",
+            "listbox", "cycle",
+        ];
+        let self_closing = &[
+            "set", "unset", "run", "print", "=", "-", "include", "goto",
+            "back", "return", "break", "continue", "stop", "audio",
+            "masteraudio", "cacheaudio", "waitforaudio", "removeaudiogroup",
+            "removeplaylist", "addclass", "removeclass", "toggleclass",
+            "copy", "remove", "playlist", "radiobutton", "checkbox",
+            "textbox", "numberbox", "textarea", "option", "optionsfrom",
+        ];
+        let raw = &["script"];
 
-    #[test]
-    fn known_self_closing() {
-        assert_eq!(macro_kind("set"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("run"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("print"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("="), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("goto"), Some(MacroKind::SelfClosing));
-        // Form controls — self-closing, not block
-        assert_eq!(macro_kind("radiobutton"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("checkbox"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("textbox"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("numberbox"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("textarea"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("option"), Some(MacroKind::SelfClosing));
-        assert_eq!(macro_kind("optionsfrom"), Some(MacroKind::SelfClosing));
-    }
-
-    #[test]
-    fn known_raw() {
-        assert_eq!(macro_kind("script"), Some(MacroKind::Raw));
+        for &name in block {
+            assert_eq!(macro_kind(name), Some(MacroKind::Block), "{name} should be Block");
+        }
+        for &name in self_closing {
+            assert_eq!(macro_kind(name), Some(MacroKind::SelfClosing), "{name} should be SelfClosing");
+        }
+        for &name in raw {
+            assert_eq!(macro_kind(name), Some(MacroKind::Raw), "{name} should be Raw");
+        }
     }
 
     #[test]
