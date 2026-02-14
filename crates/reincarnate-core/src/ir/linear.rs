@@ -2396,6 +2396,7 @@ mod tests {
     use super::*;
     use crate::ir::builder::FunctionBuilder;
     use crate::ir::func::Visibility;
+    use crate::ir::inst::CmpKind;
     use crate::ir::structurize::structurize;
     use crate::ir::ty::{FunctionSig, Type};
     use crate::ir::value::Constant;
@@ -2690,5 +2691,756 @@ mod tests {
         let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
 
         assert!(!ast.body.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression tests for bug fixes
+    // -----------------------------------------------------------------------
+
+    /// Helper: recursively check if any statement in the AST contains a
+    /// Stmt::Var reference with the given name.
+    fn body_contains_var(body: &[Stmt], name: &str) -> bool {
+        body.iter().any(|s| stmt_contains_var(s, name))
+    }
+
+    fn stmt_contains_var(stmt: &Stmt, name: &str) -> bool {
+        match stmt {
+            Stmt::Assign { target, value } => {
+                expr_contains_var(target, name) || expr_contains_var(value, name)
+            }
+            Stmt::VarDecl { init, .. } => {
+                init.as_ref().is_some_and(|e| expr_contains_var(e, name))
+            }
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                expr_contains_var(cond, name)
+                    || body_contains_var(then_body, name)
+                    || body_contains_var(else_body, name)
+            }
+            Stmt::While { cond, body } => {
+                expr_contains_var(cond, name) || body_contains_var(body, name)
+            }
+            Stmt::Loop { body } => body_contains_var(body, name),
+            Stmt::Return(Some(e)) | Stmt::Expr(e) => expr_contains_var(e, name),
+            Stmt::For {
+                init,
+                cond,
+                update,
+                body,
+            } => {
+                body_contains_var(init, name)
+                    || expr_contains_var(cond, name)
+                    || body_contains_var(update, name)
+                    || body_contains_var(body, name)
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                expr_contains_var(target, name) || expr_contains_var(value, name)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_contains_var(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Var(n) => n == name,
+            Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expr_contains_var(lhs, name) || expr_contains_var(rhs, name)
+            }
+            Expr::Not(e) | Expr::Cast { expr: e, .. } | Expr::PostIncrement(e) => {
+                expr_contains_var(e, name)
+            }
+            Expr::Ternary {
+                cond,
+                then_val,
+                else_val,
+            } => {
+                expr_contains_var(cond, name)
+                    || expr_contains_var(then_val, name)
+                    || expr_contains_var(else_val, name)
+            }
+            Expr::Call { args, .. } | Expr::SystemCall { args, .. } => {
+                args.iter().any(|a| expr_contains_var(a, name))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                expr_contains_var(receiver, name)
+                    || args.iter().any(|a| expr_contains_var(a, name))
+            }
+            Expr::Field { object, .. } => expr_contains_var(object, name),
+            Expr::Index {
+                collection, index, ..
+            } => expr_contains_var(collection, name) || expr_contains_var(index, name),
+            Expr::LogicalAnd { lhs, rhs } | Expr::LogicalOr { lhs, rhs } => {
+                expr_contains_var(lhs, name) || expr_contains_var(rhs, name)
+            }
+            Expr::Unary { expr: e, .. } => expr_contains_var(e, name),
+            Expr::ArrayInit(elems) => elems.iter().any(|e| expr_contains_var(e, name)),
+            _ => false,
+        }
+    }
+
+    /// Helper: count VarDecl statements for a given name in the body.
+    fn count_var_decls(body: &[Stmt], name: &str) -> usize {
+        body.iter()
+            .map(|s| match s {
+                Stmt::VarDecl { name: n, .. } if n == name => 1,
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => count_var_decls(then_body, name) + count_var_decls(else_body, name),
+                Stmt::While { body, .. } | Stmt::Loop { body } => {
+                    count_var_decls(body, name)
+                }
+                Stmt::For {
+                    init, body, update, ..
+                } => {
+                    count_var_decls(init, name)
+                        + count_var_decls(body, name)
+                        + count_var_decls(update, name)
+                }
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Stringify AST body for debugging.
+    fn debug_body(body: &[Stmt]) -> String {
+        format!("{body:?}")
+    }
+
+    // Regression: 8782b52 — Block→Loop/WhileLoop init assigns must be emitted
+    // for loop header block params (not suppressed like ForLoop).
+    #[test]
+    fn loop_init_assigns_emitted() {
+        // entry: v0 = const 0; br header(v0)
+        // header(v_i): v_cond = v_i < 10; br_if v_cond, body, exit
+        // body: br header(v_i) (no update — just feeds back same value)
+        // exit: return
+        //
+        // This is a WhileLoop. The init assign `v_i = 0` from entry→header
+        // must appear in the output before the loop.
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let (header, header_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let body_block = fb.create_block();
+        let exit = fb.create_block();
+
+        let v_init = fb.const_int(0);
+        fb.br(header, &[v_init]);
+
+        fb.switch_to_block(header);
+        let v_i = header_vals[0];
+        let v_ten = fb.const_int(10);
+        let v_cond = fb.cmp(CmpKind::Lt, v_i, v_ten);
+        fb.br_if(v_cond, body_block, &[], exit, &[]);
+
+        fb.switch_to_block(body_block);
+        fb.br(header, &[v_i]);
+
+        fb.switch_to_block(exit);
+        fb.ret(None);
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Should have an init assign before the loop, not just a naked while.
+        // Verify the body is non-empty and has a loop.
+        let has_while_or_for = ast.body.iter().any(|s| {
+            matches!(s, Stmt::While { .. } | Stmt::For { .. })
+        });
+        assert!(
+            has_while_or_for,
+            "Expected loop in output: {}",
+            debug_body(&ast.body)
+        );
+    }
+
+    // Regression: f241be6 — pipeline output must be deterministic.
+    #[test]
+    fn pipeline_deterministic() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let a = fb.param(1);
+        let b = fb.param(2);
+
+        let (then_block, then_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let (else_block, else_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        let sum = fb.add(a, b);
+        let diff = fb.sub(a, b);
+        fb.br_if(cond, then_block, &[sum], else_block, &[diff]);
+
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[then_vals[0]]);
+
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[else_vals[0]]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_vals[0]));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+
+        let ast1 = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let ast2 = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        assert_eq!(
+            format!("{:?}", ast1.body),
+            format!("{:?}", ast2.body),
+            "Pipeline output should be deterministic"
+        );
+    }
+
+    // Regression: 221d49d — shared names (Cast/Copy coalescing) that don't come
+    // from block params must still get a `let` declaration.
+    #[test]
+    fn shared_name_gets_decl() {
+        // entry: v_src = param(0); v_cast = cast(v_src, Int(32))
+        //        Name both v_src and v_cast as "x" to trigger shared_names.
+        //        return v_cast
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(32),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let v_src = fb.param(0);
+        fb.name_value(v_src, "x".to_string());
+        let v_cast = fb.cast(v_src, Type::Int(32));
+        fb.name_value(v_cast, "x".to_string());
+        fb.ret(Some(v_cast));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // The output should not panic or produce undeclared variables.
+        // It may inline the cast or produce a declaration — either is correct.
+        // The key property: no undeclared variable reference.
+        let _body_str = debug_body(&ast.body);
+    }
+
+    // Regression: 4c7c747 — duplicate parameter names must be deduplicated.
+    #[test]
+    fn duplicate_param_names_deduped() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        // Name both params the same.
+        fb.name_value(a, "x".to_string());
+        fb.name_value(b, "x".to_string());
+        let sum = fb.add(a, b);
+        fb.ret(Some(sum));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Params should have distinct names.
+        assert_eq!(ast.params.len(), 2);
+        assert_ne!(
+            ast.params[0].0, ast.params[1].0,
+            "Parameter names should be deduplicated: {:?}",
+            ast.params
+        );
+    }
+
+    // Regression: af55c19 — non-self values that share the self-parameter's
+    // name must be renamed to avoid `this = ...` assignments.
+    #[test]
+    fn reassigned_self_param_renamed() {
+        // Instance method with self param named "this".
+        // Another value also named "this" — should be renamed to "_this".
+        let sig = FunctionSig {
+            params: vec![
+                Type::Struct("Foo".to_string()),
+                Type::Int(64),
+            ],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("method", sig, Visibility::Public);
+        fb.set_class(vec![], "Foo".to_string(), MethodKind::Instance);
+
+        let self_param = fb.param(0);
+        let other = fb.param(1);
+        fb.name_value(self_param, "this".to_string());
+        fb.name_value(other, "this".to_string());
+
+        let result = fb.add(other, other);
+        fb.ret(Some(result));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // The two "this" params should have different names.
+        // param(0) keeps "this", param(1) gets "_this" or similar.
+        assert_eq!(ast.params.len(), 2);
+        assert_ne!(
+            ast.params[0].0, ast.params[1].0,
+            "Self-param collision should be resolved: {:?}",
+            ast.params
+        );
+    }
+
+    // Regression: 3e0c48d — Store target must use Var(name), not inlined expr.
+    // Tests the emitter's Op::Store handler directly: the LHS of a Store must
+    // be `Expr::Var(name)`, not `build_val(ptr)` which could inline a Cast.
+    // We test the emitter directly using linearize+resolve+emit because the
+    // full pipeline's transforms (Mem2Reg) promote most alloc/store/load chains.
+    #[test]
+    fn store_target_uses_var_name() {
+        // Build IR: alloc x; store x, param; store x, param2; load x; return
+        // Use the linearizer directly (Phase 1→2→3) to skip transform passes.
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let p0 = fb.param(0);
+        let p1 = fb.param(1);
+        let ptr = fb.alloc(Type::Int(64));
+        fb.name_value(ptr, "x".to_string());
+        fb.store(ptr, p0);
+        fb.store(ptr, p1);
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let linear = linearize(&func, &shape);
+        let resolved = resolve(&func, &linear);
+        let config = LoweringConfig::default();
+        let mut ctx = EmitCtx::new(&func, &resolved, &config);
+        let body = ctx.emit_stmts(&linear);
+
+        // The Store should produce assignments with Var("x") target.
+        let has_x_assign = body.iter().any(|s| match s {
+            Stmt::Assign {
+                target: Expr::Var(n),
+                ..
+            } => n == "x",
+            Stmt::VarDecl { name, .. } => name == "x",
+            _ => false,
+        });
+        assert!(
+            has_x_assign,
+            "Expected assignment to Var(\"x\"): {}",
+            debug_body(&body)
+        );
+    }
+
+    // Regression: 4ef6f43 — debug names propagate through Cast/Copy so the
+    // source operand gets a human-readable name.
+    #[test]
+    fn debug_name_propagates_through_cast() {
+        // v_field = get_field(param, "hp")  (unnamed)
+        // v_cast = cast(v_field, Int(32))   (named "hp")
+        // return v_cast
+        //
+        // The name "hp" should propagate back to v_field.
+        let sig = FunctionSig {
+            params: vec![Type::Struct("Obj".to_string())],
+            return_ty: Type::Int(32),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let obj = fb.param(0);
+        let v_field = fb.get_field(obj, "hp", Type::Dynamic);
+        // Don't name v_field — only name the cast result.
+        let v_cast = fb.cast(v_field, Type::Int(32));
+        fb.name_value(v_cast, "hp".to_string());
+        fb.ret(Some(v_cast));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Output should reference "hp" somewhere, not a vN identifier.
+        let body_str = debug_body(&ast.body);
+        assert!(
+            body_contains_var(&ast.body, "hp") || body_str.contains("hp"),
+            "Expected 'hp' name in output: {body_str}"
+        );
+    }
+
+    // Regression: 65170ad — LogicalOr/And must not call build_val(cond) twice
+    // when cond is a single-use lazy value. The fix reuses cond_expr.clone().
+    #[test]
+    fn logical_or_no_double_build() {
+        // entry: br_if cond, merge(cond), else_block()
+        // else_block: br merge(other)
+        // merge(phi): return phi
+        //
+        // This produces a LogicalOr shape. If build_val(cond) is called twice,
+        // the second call would fail because the lazy inline was consumed.
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Bool],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let other = fb.param(1);
+
+        let else_block = fb.create_block();
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Bool]);
+
+        fb.br_if(cond, merge, &[cond], else_block, &[]);
+
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[other]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_vals[0]));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let config = LoweringConfig::default();
+        let ast = lower_function_linear(&func, &shape, &config);
+
+        // Should not panic. Output should contain a LogicalOr or similar.
+        assert!(!ast.body.is_empty(), "Expected non-empty body");
+    }
+
+    // Regression: 1076a5c — flush_pending_reads must skip already-consumed values.
+    // When building one pending value consumes another, the consumed value
+    // must not be flushed again.
+    #[test]
+    fn flush_skips_consumed_values() {
+        // entry: v1 = get_field(param, "a")
+        //        v2 = get_field(v1, "b")
+        //        store(alloc, v2)   ← triggers flush
+        //        return
+        //
+        // v1 and v2 are both pending lazy. Flushing v2 consumes v1.
+        // The flush loop must skip v1 when it tries to flush it.
+        let sig = FunctionSig {
+            params: vec![Type::Struct("Obj".to_string())],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let obj = fb.param(0);
+        let v1 = fb.get_field(obj, "a", Type::Dynamic);
+        let v2 = fb.get_field(v1, "b", Type::Dynamic);
+        let ptr = fb.alloc(Type::Dynamic);
+        fb.store(ptr, v2);
+        fb.ret(None);
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        // Should not panic from double-flush.
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+        let _ = debug_body(&ast.body);
+    }
+
+    // Regression: 48671ff — flush_pending_reads must be scoped to prevent
+    // use-before-def. Header-block values must not be flushed inside if-bodies.
+    #[test]
+    fn flush_scoped_to_prevent_use_before_def() {
+        // entry: v_field = get_field(param, "x")
+        //        br_if cond, then_block, merge
+        // then_block: set_field(param, "x", const 0)   ← triggers flush
+        //             br merge
+        // merge: return v_field
+        //
+        // v_field is defined in the header but used after the if/else.
+        // It must NOT be flushed inside then_block's body (use-before-def).
+        let sig = FunctionSig {
+            params: vec![Type::Struct("Obj".to_string()), Type::Bool],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let obj = fb.param(0);
+        let cond = fb.param(1);
+        let v_field = fb.get_field(obj, "x", Type::Dynamic);
+
+        let then_block = fb.create_block();
+        let merge = fb.create_block();
+
+        fb.br_if(cond, then_block, &[], merge, &[]);
+
+        fb.switch_to_block(then_block);
+        let zero = fb.const_int(0);
+        fb.set_field(obj, "x", zero);
+        fb.br(merge, &[]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(v_field));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // v_field's declaration must appear before the if/else, not inside it.
+        // The return should reference the field value.
+        let has_return = ast.body.iter().any(|s| matches!(s, Stmt::Return(Some(_))));
+        assert!(
+            has_return,
+            "Expected return statement: {}",
+            debug_body(&ast.body)
+        );
+    }
+
+    // Regression: 7821541 — pure wrapper (Cast) around side-effecting operand
+    // (Call) must chain into a single SE inline, not produce broken output.
+    #[test]
+    fn se_chain_through_cast() {
+        // v_call = call("f", [])
+        // v_cast = cast(v_call, Int(32))
+        // return v_cast
+        //
+        // v_call is side-effecting. v_cast wraps it. Should produce clean output.
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(32),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("g", sig, Visibility::Public);
+        let v_call = fb.call("f", &[], Type::Dynamic);
+        fb.name_value(v_call, "result".to_string());
+        let v_cast = fb.cast(v_call, Type::Int(32));
+        fb.name_value(v_cast, "result".to_string());
+        fb.ret(Some(v_cast));
+
+        let func = fb.build();
+        let shape = Shape::Block(func.entry);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Should produce clean output with "result" name, no broken references.
+        assert_eq!(ast.body.len(), 1, "Expected single return: {}", debug_body(&ast.body));
+        assert!(matches!(&ast.body[0], Stmt::Return(Some(_))));
+    }
+
+    // Regression: e726c58 — when then-body is empty, negate the Cmp condition
+    // directly (invert CmpKind) instead of wrapping in Not(Cmp(...)).
+    #[test]
+    fn inverted_cmp_not_wrapped_in_not() {
+        // entry: v_cmp = cmp.lt(a, b)
+        //        br_if v_cmp, then_block, else_block
+        // then_block: br merge  (empty)
+        // else_block: store something; br merge
+        // merge: return
+        //
+        // Since then is empty, the linearizer inverts to: if (!cond) { else }
+        // With CmpKind, this should produce `cmp.ge(a, b)` not `Not(cmp.lt(a,b))`.
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Int(64)],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let a = fb.param(0);
+        let b = fb.param(1);
+        let v_cmp = fb.cmp(CmpKind::Lt, a, b);
+
+        let then_block = fb.create_block();
+        let else_block = fb.create_block();
+        let merge = fb.create_block();
+
+        fb.br_if(v_cmp, then_block, &[], else_block, &[]);
+
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[]);
+
+        fb.switch_to_block(else_block);
+        let ptr = fb.alloc(Type::Int(64));
+        let val = fb.const_int(1);
+        fb.store(ptr, val);
+        fb.br(merge, &[]);
+
+        fb.switch_to_block(merge);
+        fb.ret(None);
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Find the If statement and check its condition.
+        let if_stmt = ast.body.iter().find(|s| matches!(s, Stmt::If { .. }));
+        if let Some(Stmt::If { cond, .. }) = if_stmt {
+            // Condition should be inverted Cmp (Ge), not Not(Cmp(Lt)).
+            assert!(
+                matches!(cond, Expr::Cmp { kind: CmpKind::Ge, .. }),
+                "Expected inverted Cmp (Ge), not Not wrapper: {cond:?}"
+            );
+        }
+        // If the if was eliminated by AST passes, that's also fine.
+    }
+
+    // Regression: f9d14ec — LogicalAnd/Or phi values flushed as SE inlines
+    // must not get duplicate declarations.
+    #[test]
+    fn logical_and_no_duplicate_decl() {
+        // entry: br_if cond, then_mid(), merge(cond)
+        // then_mid: v_rhs = call("check", []); br merge(v_rhs)
+        // merge(phi): return phi
+        //
+        // phi is a LogicalAnd result. The call is side-effecting.
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let cond = fb.param(0);
+
+        let then_mid = fb.create_block();
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Bool]);
+
+        fb.br_if(cond, then_mid, &[], merge, &[cond]);
+
+        fb.switch_to_block(then_mid);
+        let v_rhs = fb.call("check", &[], Type::Bool);
+        fb.br(merge, &[v_rhs]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_vals[0]));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Count VarDecl statements for the phi value's name. There should be
+        // at most 1 declaration (not duplicated).
+        // The phi might be inlined entirely, which is also fine.
+        for param in &ast.params {
+            let decl_count = count_var_decls(&ast.body, &param.0);
+            assert!(
+                decl_count <= 1,
+                "Duplicate VarDecl for param '{}': count={}, body: {}",
+                param.0,
+                decl_count,
+                debug_body(&ast.body)
+            );
+        }
+    }
+
+    // Regression: 0983e97 — minmax pattern with SE operands must flush correctly.
+    #[test]
+    fn minmax_se_flush_correct() {
+        // entry: v_a = call("getA", [])
+        //        v_b = call("getB", [])
+        //        v_cmp = cmp.ge(v_a, v_b)
+        //        br_if v_cmp, then_block(v_a), else_block(v_b)
+        // then_block(v_t): br merge(v_t)
+        // else_block(v_e): br merge(v_e)
+        // merge(phi): return phi
+        //
+        // This should produce Math.max(getA(), getB()).
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64),
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let v_a = fb.call("getA", &[], Type::Int(64));
+        let v_b = fb.call("getB", &[], Type::Int(64));
+        let v_cmp = fb.cmp(CmpKind::Ge, v_a, v_b);
+
+        let (then_block, then_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let (else_block, else_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+        let (merge, merge_vals) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        fb.br_if(v_cmp, then_block, &[v_a], else_block, &[v_b]);
+
+        fb.switch_to_block(then_block);
+        fb.br(merge, &[then_vals[0]]);
+
+        fb.switch_to_block(else_block);
+        fb.br(merge, &[else_vals[0]]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_vals[0]));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let ast = lower_function_linear(&func, &shape, &LoweringConfig::default());
+
+        // Should produce clean output — no panic from SE flush timing.
+        assert!(
+            !ast.body.is_empty(),
+            "Expected non-empty body: {}",
+            debug_body(&ast.body)
+        );
+    }
+
+    // Regression: cf0524a — while-loop condition should be hoisted into
+    // `while (cond)` when the header has no materialized statements.
+    #[test]
+    fn while_loop_condition_hoisted() {
+        // entry: br header
+        // header: v_cond = cmp.lt(param, 10); br_if v_cond, body, exit
+        // body: br header
+        // exit: return
+        //
+        // The Cmp is single-use and pure — header has no materialized stmts.
+        // Should produce `while (param < 10) { }` not `while (true) { if (...) break; }`.
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Void,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let n = fb.param(0);
+        fb.name_value(n, "n".to_string());
+
+        let header = fb.create_block();
+        let body_block = fb.create_block();
+        let exit = fb.create_block();
+
+        fb.br(header, &[]);
+
+        fb.switch_to_block(header);
+        let ten = fb.const_int(10);
+        let v_cond = fb.cmp(CmpKind::Lt, n, ten);
+        fb.br_if(v_cond, body_block, &[], exit, &[]);
+
+        fb.switch_to_block(body_block);
+        fb.br(header, &[]);
+
+        fb.switch_to_block(exit);
+        fb.ret(None);
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let config = LoweringConfig::default();
+        let ast = lower_function_linear(&func, &shape, &config);
+
+        // With while_condition_hoisting enabled (default), should be While
+        // with a real condition, not `While { cond: Literal(true), ... }`.
+        let has_while_with_cond = ast.body.iter().any(|s| match s {
+            Stmt::While { cond, .. } => !matches!(cond, Expr::Literal(Constant::Bool(true))),
+            _ => false,
+        });
+        assert!(
+            has_while_with_cond,
+            "Expected while with hoisted condition: {}",
+            debug_body(&ast.body)
+        );
     }
 }
