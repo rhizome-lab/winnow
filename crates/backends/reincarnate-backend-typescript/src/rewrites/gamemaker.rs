@@ -16,8 +16,7 @@ use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 /// the rewrite pass runs.
 pub fn rewrite_introduced_call(system: &str, method: &str) -> Option<&'static str> {
     match (system, method) {
-        ("GameMaker.Global", "set") => Some("variable_global_set"),
-        ("GameMaker.Global", "get") => Some("variable_global_get"),
+        ("GameMaker.Global", "set") | ("GameMaker.Global", "get") => Some("global"),
         _ => None,
     }
 }
@@ -113,6 +112,35 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
             rewrite_expr(value);
         }
         JsStmt::Expr(e) => {
+            // Intercept global set with constant key → global.field = val
+            if let JsExpr::SystemCall {
+                system,
+                method,
+                args,
+            } = e
+            {
+                if system == "GameMaker.Global"
+                    && method == "set"
+                    && args.len() == 2
+                    && matches!(&args[0], JsExpr::Literal(Constant::String(_)))
+                {
+                    let mut args = std::mem::take(args);
+                    let mut val = args.pop().unwrap();
+                    let name_expr = args.pop().unwrap();
+                    let JsExpr::Literal(Constant::String(field_name)) = name_expr else {
+                        unreachable!()
+                    };
+                    rewrite_expr(&mut val);
+                    *stmt = JsStmt::Assign {
+                        target: JsExpr::Field {
+                            object: Box::new(JsExpr::Var("global".into())),
+                            field: field_name,
+                        },
+                        value: val,
+                    };
+                    return;
+                }
+            }
             // Intercept setOn with named object at statement level → direct assignment.
             if let JsExpr::SystemCall {
                 system,
@@ -325,6 +353,8 @@ fn try_rewrite_system_call(
 ) -> Option<JsExpr> {
     match (system, method) {
         // GameMaker.Global.set(name, val) → variable_global_set(name, val)
+        // Constant-key sets are intercepted at statement level (→ global.name = val).
+        // This handles the expression-position fallback and dynamic keys.
         ("GameMaker.Global", "set") if args.len() == 2 => {
             let val = args.pop().unwrap();
             let name = args.pop().unwrap();
@@ -333,13 +363,21 @@ fn try_rewrite_system_call(
                 args: vec![name, val],
             })
         }
-        // GameMaker.Global.get(name) → variable_global_get(name)
+        // GameMaker.Global.get(name) → global.name (constant key)
+        // or variable_global_get(name) (dynamic key fallback)
         ("GameMaker.Global", "get") if args.len() == 1 => {
             let name = args.pop().unwrap();
-            Some(JsExpr::Call {
-                callee: Box::new(JsExpr::Var("variable_global_get".into())),
-                args: vec![name],
-            })
+            if let JsExpr::Literal(Constant::String(field_name)) = name {
+                Some(JsExpr::Field {
+                    object: Box::new(JsExpr::Var("global".into())),
+                    field: field_name,
+                })
+            } else {
+                Some(JsExpr::Call {
+                    callee: Box::new(JsExpr::Var("variable_global_get".into())),
+                    args: vec![name],
+                })
+            }
         }
         // GameMaker.Instance.getOn(objName, field) → ObjName.instances[0].field
         // GameMaker.Instance.getOn(objId, field)   → getInstanceField(objId, field)
