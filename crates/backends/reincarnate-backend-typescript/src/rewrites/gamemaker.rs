@@ -703,3 +703,199 @@ pub(crate) fn collect_gamemaker_instance_refs(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reincarnate_core::ir::value::Constant;
+
+    fn gm_instance_call(method: &str, args: Vec<JsExpr>) -> JsExpr {
+        JsExpr::SystemCall {
+            system: "GameMaker.Instance".into(),
+            method: method.into(),
+            args,
+        }
+    }
+
+    fn with_begin(target: i64) -> JsStmt {
+        JsStmt::Expr(gm_instance_call(
+            "withBegin",
+            vec![JsExpr::Literal(Constant::Int(target))],
+        ))
+    }
+
+    fn with_end() -> JsStmt {
+        JsStmt::Expr(gm_instance_call("withEnd", vec![]))
+    }
+
+    fn body_stmt(name: &str) -> JsStmt {
+        JsStmt::Expr(JsExpr::Call {
+            callee: Box::new(JsExpr::Var(name.into())),
+            args: vec![],
+        })
+    }
+
+    /// Assert that `stmts[idx]` is `withInstances(expected_target, () => { ... })`
+    /// and return a reference to the callback body.
+    fn assert_with_instances(stmts: &[JsStmt], idx: usize, expected_target: i64) -> &Vec<JsStmt> {
+        let JsStmt::Expr(JsExpr::Call { callee, args }) = &stmts[idx] else {
+            panic!("expected Call at index {idx}, got {:?}", stmts[idx]);
+        };
+        let JsExpr::Var(name) = callee.as_ref() else {
+            panic!("expected Var callee, got {:?}", callee);
+        };
+        assert_eq!(name, "withInstances");
+        assert_eq!(args.len(), 2);
+        let JsExpr::Literal(Constant::Int(target)) = &args[0] else {
+            panic!("expected Int literal target, got {:?}", args[0]);
+        };
+        assert_eq!(*target, expected_target);
+        let JsExpr::ArrowFunction { body, .. } = &args[1] else {
+            panic!("expected ArrowFunction, got {:?}", args[1]);
+        };
+        body
+    }
+
+    #[test]
+    fn collapse_flat_pattern() {
+        let mut stmts = vec![with_begin(5), body_stmt("foo"), body_stmt("bar"), with_end()];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        let body = assert_with_instances(&stmts, 0, 5);
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn collapse_loop_wrapped_pattern() {
+        let mut stmts = vec![
+            with_begin(3),
+            JsStmt::Loop {
+                body: vec![body_stmt("foo"), with_end(), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        let body = assert_with_instances(&stmts, 0, 3);
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn collapse_loop_wrapped_no_trailing_continue() {
+        let mut stmts = vec![
+            with_begin(7),
+            JsStmt::Loop {
+                body: vec![body_stmt("foo"), with_end()],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        let body = assert_with_instances(&stmts, 0, 7);
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn collapse_while_wrapped_pattern() {
+        let mut stmts = vec![
+            with_begin(10),
+            JsStmt::While {
+                cond: JsExpr::Literal(Constant::Bool(true)),
+                body: vec![body_stmt("foo"), with_end(), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        assert_with_instances(&stmts, 0, 10);
+    }
+
+    #[test]
+    fn collapse_preserves_surrounding_stmts() {
+        let mut stmts = vec![
+            body_stmt("before"),
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![body_stmt("foo"), with_end(), JsStmt::Continue],
+            },
+            body_stmt("after"),
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(&stmts[0], JsStmt::Expr(JsExpr::Call { .. })));
+        assert_with_instances(&stmts, 1, 1);
+        assert!(matches!(&stmts[2], JsStmt::Expr(JsExpr::Call { .. })));
+    }
+
+    #[test]
+    fn collapse_multiple_consecutive() {
+        let mut stmts = vec![
+            with_begin(1),
+            JsStmt::Loop {
+                body: vec![body_stmt("a"), with_end(), JsStmt::Continue],
+            },
+            with_begin(2),
+            JsStmt::Loop {
+                body: vec![body_stmt("b"), with_end(), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 2);
+        assert_with_instances(&stmts, 0, 1);
+        assert_with_instances(&stmts, 1, 2);
+    }
+
+    #[test]
+    fn collapse_loop_with_multi_stmt_body() {
+        let mut stmts = vec![
+            with_begin(16),
+            JsStmt::Loop {
+                body: vec![
+                    body_stmt("a"),
+                    body_stmt("b"),
+                    body_stmt("c"),
+                    with_end(),
+                    JsStmt::Continue,
+                ],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        assert_eq!(stmts.len(), 1);
+        let body = assert_with_instances(&stmts, 0, 16);
+        assert_eq!(body.len(), 3);
+    }
+
+    #[test]
+    fn no_collapse_when_loop_has_no_with_end() {
+        let mut stmts = vec![
+            with_begin(5),
+            JsStmt::Loop {
+                body: vec![body_stmt("foo"), JsStmt::Continue],
+            },
+        ];
+        collapse_with_blocks(&mut stmts);
+
+        // Nothing collapsed — both statements remain.
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn rewrite_introduced_calls_maps_with_begin() {
+        assert_eq!(
+            rewrite_introduced_calls("GameMaker.Instance", "withBegin"),
+            &["withInstances"]
+        );
+    }
+
+    #[test]
+    fn rewrite_introduced_calls_maps_with_instances() {
+        assert_eq!(
+            rewrite_introduced_calls("GameMaker.Instance", "withInstances"),
+            &["withInstances"]
+        );
+    }
+}
