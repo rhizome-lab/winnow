@@ -707,6 +707,12 @@ program analysis or conservative assumptions.
   a parent, bytecode may use the parent's object index as instance type for
   inherited field accesses. Currently these produce cross-object `getOn/setOn`
   instead of self-access. Need to walk the parent chain in TranslateCtx.
+- [ ] **Stale namespace imports** — Files like Stats.ts emit
+  `import * as GameMaker_Instance from ...` even though all SystemCalls
+  in the file are rewritten to direct function calls. The import collector
+  adds namespace imports for all SystemCall system names before checking
+  whether the rewrite pass consumed them. Need to collect imports from
+  the post-rewrite AST only, or prune unused namespace imports.
 - [ ] **Empty switch cases in roomstart** — Switch/case bodies contain
   string assignments in the bytecode but they're being lost during
   decompilation (all cases emit as empty `break`). Investigate whether

@@ -218,6 +218,30 @@ fn try_fold(op: &Op, consts: &HashMap<ValueId, Constant>) -> Option<Constant> {
         // Copy propagation
         Op::Copy(a) => consts.get(a).cloned(),
 
+        // Pure type-conversion function calls: int(x), uint(x), real(x), string(x)
+        Op::Call { func, args } if args.len() == 1 => {
+            let c = consts.get(&args[0])?;
+            match (func.as_str(), c) {
+                ("int", Constant::Int(x)) => Some(Constant::Int(*x)),
+                ("int", Constant::UInt(x)) => Some(Constant::Int(*x as i64)),
+                ("int", Constant::Float(x)) => Some(Constant::Int(*x as i64)),
+                ("uint", Constant::Int(x)) => Some(Constant::UInt(*x as u64)),
+                ("uint", Constant::UInt(x)) => Some(Constant::UInt(*x)),
+                ("uint", Constant::Float(x)) => Some(Constant::UInt(*x as u64)),
+                ("real", Constant::Int(x)) => Some(Constant::Float(*x as f64)),
+                ("real", Constant::UInt(x)) => Some(Constant::Float(*x as f64)),
+                ("real", Constant::Float(x)) => Some(Constant::Float(*x)),
+                ("string", Constant::Int(x)) => Some(Constant::String(x.to_string())),
+                ("string", Constant::UInt(x)) => Some(Constant::String(x.to_string())),
+                ("string", Constant::Float(x)) => Some(Constant::String(x.to_string())),
+                ("string", Constant::String(_)) => Some(c.clone()),
+                ("string", Constant::Bool(b)) => {
+                    Some(Constant::String(if *b { "1" } else { "0" }.into()))
+                }
+                _ => None,
+            }
+        }
+
         _ => None,
     }
 }

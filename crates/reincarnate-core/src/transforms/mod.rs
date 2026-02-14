@@ -48,6 +48,12 @@ pub fn default_pipeline(config: &PassConfig) -> TransformPipeline {
     if config.mem2reg {
         pipeline.add(Box::new(Mem2Reg));
     }
+    // Second constant-folding pass: Mem2Reg promotes alloc/store/load to SSA,
+    // exposing new constant operands (e.g. coerce(const, i32) that was
+    // previously coerce(load(alloc), i32)).
+    if config.constant_folding && config.mem2reg {
+        pipeline.add(Box::new(ConstantFolding));
+    }
     if config.bool_literal_return {
         pipeline.add(Box::new(BoolLiteralReturn));
     }
