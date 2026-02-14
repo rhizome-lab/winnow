@@ -616,11 +616,17 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
         }
 
         // Block parameter refinement: check incoming branch arguments.
+        // Skip Dynamic args so back-edges (which depend on the param's own type)
+        // don't poison the join and prevent convergence in loops.
         let incoming = collect_branch_args(func);
         for (block_id, block) in func.blocks.iter() {
             for (i, param) in block.params.iter().enumerate() {
                 if let Some(args) = incoming.get(&(block_id, i)) {
-                    let common = infer_common_type(args.iter().map(|v| &func.value_types[*v]));
+                    let common = infer_common_type(
+                        args.iter()
+                            .map(|v| &func.value_types[*v])
+                            .filter(|ty| **ty != Type::Dynamic),
+                    );
                     if let Some(refined) = refine(&func.value_types[param.value], &common) {
                         func.value_types[param.value] = refined;
                         changed = true;
@@ -1583,12 +1589,7 @@ mod tests {
     // ---- Adversarial tests ----
 
     /// Circular block params: loop where block param feeds back to itself.
-    // BUG: TypeInference has an internal fixpoint loop but infer_common_type
-    // short-circuits to Dynamic when ANY incoming arg is Dynamic. Back-edge args
-    // depend on the header param's type (chicken-and-egg), so circular block
-    // params never converge. Fix: skip Dynamic args during block-param join.
     #[test]
-    #[ignore]
     fn circular_block_params() {
         let sig = FunctionSig {
             params: vec![Type::Bool],
