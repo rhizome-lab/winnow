@@ -1338,4 +1338,85 @@ mod tests {
             "different targets should preserve BrIf"
         );
     }
+
+    // ---- Edge case tests ----
+
+    /// Empty block chain: A→B→C→D (B,C empty) collapses to A→D.
+    #[test]
+    fn empty_block_chain_collapses() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let b = fb.create_block();
+        let c = fb.create_block();
+        let d = fb.create_block();
+
+        fb.br(b, &[]);
+        fb.switch_to_block(b);
+        fb.br(c, &[]);
+        fb.switch_to_block(c);
+        fb.br(d, &[]);
+        fb.switch_to_block(d);
+        fb.ret(None);
+
+        let func = apply_cfg_simplify(fb.build());
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(
+            matches!(func.insts[last_inst].op, Op::Return(_)),
+            "chain should collapse so entry ends with Return"
+        );
+    }
+
+    /// Unreachable block is not merged into reachable blocks.
+    #[test]
+    fn unreachable_block_ignored() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let dead = fb.create_block();
+        fb.ret(None);
+
+        fb.switch_to_block(dead);
+        let v = fb.const_int(42);
+        fb.ret(Some(v));
+
+        let func = apply_cfg_simplify(fb.build());
+        assert!(func.blocks[dead].insts.is_empty(), "unreachable block should be cleared");
+    }
+
+    /// Diamond with block params flowing through merge point.
+    #[test]
+    fn block_params_through_diamond() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let then_b = fb.create_block();
+        let else_b = fb.create_block();
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+
+        let a = fb.const_int(10);
+        let b = fb.const_int(20);
+        fb.br_if(cond, then_b, &[], else_b, &[]);
+
+        fb.switch_to_block(then_b);
+        fb.br(merge, &[a]);
+
+        fb.switch_to_block(else_b);
+        fb.br(merge, &[b]);
+
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+        // After simplification with same-target collapse, we should still get the
+        // correct return (via Select).
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        assert!(matches!(func.insts[last_inst].op, Op::Return(Some(_))));
+    }
 }

@@ -113,6 +113,56 @@ mod tests {
         );
     }
 
+    // ---- Edge case tests ----
+
+    /// Coerce vs AsType — both kinds tested when redundant.
+    #[test]
+    fn coerce_redundant_rewritten() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let p = fb.param(0);
+        let coerced = fb.coerce(p, Type::Int(64));
+        fb.ret(Some(coerced));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = RedundantCastElimination.apply(module).unwrap();
+        assert!(result.changed, "same-type coerce should be eliminated");
+        let func = &result.module.functions[FuncId::new(0)];
+        assert!(matches!(
+            func.insts.values().find(|i| i.result == Some(coerced)).unwrap().op,
+            Op::Copy(_)
+        ));
+    }
+
+    /// Chain of same-type casts: Cast(Cast(x, Int), Int) → both become Copy.
+    #[test]
+    fn chain_of_casts() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let p = fb.param(0);
+        let c1 = fb.cast(p, Type::Int(64));
+        let c2 = fb.cast(c1, Type::Int(64));
+        fb.ret(Some(c2));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = RedundantCastElimination.apply(module).unwrap();
+        assert!(result.changed);
+        let func = &result.module.functions[FuncId::new(0)];
+        // Both casts should be Copy.
+        let c1_inst = func.insts.values().find(|i| i.result == Some(c1)).unwrap();
+        assert!(matches!(c1_inst.op, Op::Copy(_)));
+        let c2_inst = func.insts.values().find(|i| i.result == Some(c2)).unwrap();
+        assert!(matches!(c2_inst.op, Op::Copy(_)));
+    }
+
     /// Non-redundant cast (Int → Bool) is left unchanged.
     #[test]
     fn non_redundant_cast_unchanged() {

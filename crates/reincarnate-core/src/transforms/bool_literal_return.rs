@@ -483,6 +483,56 @@ mod tests {
         assert!(!result.changed);
     }
 
+    // ---- Edge case tests ----
+
+    /// Returns 0 and 2 → not bool, unchanged.
+    #[test]
+    fn returns_two_not_bool() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Public);
+        let cond = fb.param(0);
+        let then_b = fb.create_block();
+        let else_b = fb.create_block();
+        fb.br_if(cond, then_b, &[], else_b, &[]);
+
+        fb.switch_to_block(then_b);
+        let zero = fb.const_int(0);
+        fb.ret(Some(zero));
+
+        fb.switch_to_block(else_b);
+        let two = fb.const_int(2);
+        fb.ret(Some(two));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = BoolLiteralReturn.apply(module).unwrap();
+        assert!(!result.changed, "0 and 2 should not be converted to Bool");
+    }
+
+    /// Function already returning Bool → no change.
+    #[test]
+    fn already_bool_return_no_change() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Public);
+        let v = fb.const_bool(false);
+        fb.ret(Some(v));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = BoolLiteralReturn.apply(module).unwrap();
+        assert!(!result.changed);
+    }
+
     #[test]
     fn mixed_returns_unchanged() {
         let sig = FunctionSig {

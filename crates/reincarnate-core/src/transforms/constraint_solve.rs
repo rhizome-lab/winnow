@@ -1156,6 +1156,55 @@ mod tests {
         );
     }
 
+    // ---- Edge case tests ----
+
+    /// No type variables (all concrete) → unchanged.
+    #[test]
+    fn no_type_vars_noop() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let p = fb.param(0);
+        let c = fb.const_int(42);
+        let sum = fb.add(p, c);
+        fb.ret(Some(sum));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = ConstraintSolve.apply(module).unwrap();
+        assert!(!result.changed);
+    }
+
+    /// Conflicting constraints (Int vs String) → stays Dynamic.
+    #[test]
+    fn conflicting_constraints_fallback() {
+        let callee_int = FunctionSig {
+            params: vec![Type::Int(32)],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb1 = FunctionBuilder::new("want_int", callee_int, Visibility::Private);
+        fb1.ret(None);
+        let callee1 = fb1.build();
+
+        let caller_sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::String, ..Default::default() };
+        let mut fb2 = FunctionBuilder::new("caller", caller_sig, Visibility::Private);
+        let p = fb2.param(0);
+        fb2.call("want_int", &[p], Type::Void);
+        fb2.ret(Some(p)); // return type is String
+        let caller = fb2.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(callee1);
+        mb.add_function(caller);
+        let module = mb.build();
+        let result = ConstraintSolve.apply(module).unwrap();
+        let func = &result.module.functions[FuncId::new(1)];
+        assert_eq!(func.value_types[p], Type::Dynamic, "conflicting constraints → Dynamic");
+    }
+
     #[test]
     fn set_field_constrains_value() {
         // SetField on a known struct constrains the value to the field type.

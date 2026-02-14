@@ -1263,6 +1263,54 @@ mod tests {
         assert!(module.structs.is_empty());
     }
 
+    // ---- Edge case tests ----
+
+    /// No coroutine → no-op, changed == false.
+    #[test]
+    fn no_coroutine_noop() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("normal", sig, Visibility::Private);
+        let p = fb.param(0);
+        fb.ret(Some(p));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let (_, changed) = apply_lowering(module);
+        assert!(!changed);
+    }
+
+    /// Yield as first instruction in entry block.
+    #[test]
+    fn yield_in_entry_block() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("gen", sig, Visibility::Public);
+        let val = fb.const_int(99);
+        let _r = fb.yield_(Some(val), Type::Dynamic);
+        fb.ret(None);
+        let mut func = fb.build();
+        func.coroutine = Some(CoroutineInfo {
+            yield_ty: Type::Int(64),
+            return_ty: Type::Void,
+        });
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+        let (module, changed) = apply_lowering(module);
+        assert!(changed);
+        // Function should still have a valid switch dispatch.
+        let func = &module.functions[FuncId::new(0)];
+        let entry = func.entry;
+        let has_switch = func.blocks[entry].insts.iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Switch { .. }));
+        assert!(has_switch, "entry should have state dispatch");
+    }
+
     /// Cross-yield liveness: value defined before yield, used after → saved to struct field.
     #[test]
     fn cross_yield_liveness() {

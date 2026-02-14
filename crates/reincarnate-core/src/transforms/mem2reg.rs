@@ -784,20 +784,23 @@ mod tests {
     /// handles cleanup). We compact between runs to test semantic idempotency.
     #[test]
     fn idempotent_after_transform() {
+        // Test with alloc/store/load — the full promotion path.
         let sig = FunctionSig {
             params: vec![Type::Int(64)],
             return_ty: Type::Int(64), ..Default::default() };
         let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
         let p = fb.param(0);
-        let c = fb.copy(p);
-        fb.ret(Some(c));
+        let ptr = fb.alloc(Type::Int(64));
+        fb.store(ptr, p);
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
 
         let mut mb = ModuleBuilder::new("test");
         mb.add_function(fb.build());
         let module = mb.build();
         let r1 = Mem2Reg.apply(module).unwrap();
         assert!(r1.changed);
-        // Compact to remove dead instructions left by Copy elimination.
+        // Compact to remove dead instructions left by promotion.
         let mut module = r1.module;
         for func in module.functions.values_mut() {
             func.compact_insts();
@@ -822,5 +825,92 @@ mod tests {
         let module = mb.build();
         let result = Mem2Reg.apply(module).unwrap();
         assert!(!result.changed, "no alloc/copy to eliminate → unchanged");
+    }
+
+    // ---- Edge case tests ----
+
+    /// Alloc with only a load (no store) — load remains (undef).
+    #[test]
+    fn alloc_no_store_load_remains() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let ptr = fb.alloc(Type::Int(64));
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
+
+        let func = apply_mem2reg(fb.build());
+        // Single-store promotion requires exactly 1 store — 0 stores means
+        // neither sub-pass handles it. Load should remain or get a null init.
+        let entry = func.entry;
+        let has_return = func.blocks[entry].insts.iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Return(Some(_))));
+        assert!(has_return, "function should still return a value");
+    }
+
+    /// Multiple stores in the same block — last store wins.
+    #[test]
+    fn alloc_multiple_stores_same_block_last_wins() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let ptr = fb.alloc(Type::Int(64));
+        let a = fb.const_int(10);
+        fb.store(ptr, a);
+        let b = fb.const_int(20);
+        fb.store(ptr, b);
+        let c = fb.const_int(30);
+        fb.store(ptr, c);
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
+
+        let func = apply_mem2reg(fb.build());
+        let entry = func.entry;
+        let ret = func.blocks[entry].insts.iter()
+            .find(|&&id| matches!(func.insts[id].op, Op::Return(_)))
+            .unwrap();
+        if let Op::Return(Some(v)) = &func.insts[*ret].op {
+            assert_eq!(*v, c, "should return last stored value");
+        }
+    }
+
+    /// Store in loop — phi placement for back-edge.
+    #[test]
+    fn alloc_store_in_loop_phi() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let ptr = fb.alloc(Type::Int(64));
+        let init = fb.const_int(0);
+        fb.store(ptr, init);
+
+        let header = fb.create_block();
+        let body = fb.create_block();
+        let exit = fb.create_block();
+
+        fb.br(header, &[]);
+
+        fb.switch_to_block(header);
+        fb.br_if(cond, body, &[], exit, &[]);
+
+        fb.switch_to_block(body);
+        let one = fb.const_int(1);
+        fb.store(ptr, one);
+        fb.br(header, &[]);
+
+        fb.switch_to_block(exit);
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
+
+        let func = apply_mem2reg(fb.build());
+        // Header should have a phi param from the back-edge.
+        assert!(
+            !func.blocks[header].params.is_empty(),
+            "header should have phi params from loop back-edge"
+        );
     }
 }

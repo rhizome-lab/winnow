@@ -624,4 +624,58 @@ mod tests {
         assert_eq!(block_inst_count(&func, dead_block), 0);
         assert!(func.blocks[dead_block].params.is_empty());
     }
+
+    // ---- Edge case tests ----
+
+    /// Void function: only `ret None` survives.
+    #[test]
+    fn void_function_minimal() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let _dead = fb.const_int(99); // unused
+        fb.ret(None);
+
+        let func = apply_dce(fb.build());
+        let entry = func.entry;
+        assert_eq!(block_inst_count(&func, entry), 1);
+        assert!(matches!(func.insts[func.blocks[entry].insts[0]].op, Op::Return(None)));
+    }
+
+    /// Store with unused ptr is not eliminated (side effect).
+    #[test]
+    fn store_kept_as_side_effect() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64)],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let p = fb.param(0);
+        let ptr = fb.alloc(Type::Int(64));
+        fb.store(ptr, p);
+        fb.ret(None);
+
+        let func = apply_dce(fb.build());
+        let entry = func.entry;
+        let has_store = func.blocks[entry].insts.iter()
+            .any(|&id| matches!(func.insts[id].op, Op::Store { .. }));
+        assert!(has_store, "Store should be preserved as a side effect");
+    }
+
+    /// SystemCall result unused — call preserved due to side effects.
+    #[test]
+    fn system_call_kept() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let _result = fb.system_call("Engine", "init", &[], Type::Void);
+        fb.ret(None);
+
+        let func = apply_dce(fb.build());
+        let entry = func.entry;
+        let has_syscall = func.blocks[entry].insts.iter()
+            .any(|&id| matches!(func.insts[id].op, Op::SystemCall { .. }));
+        assert!(has_syscall, "SystemCall should be kept as side effect");
+    }
 }

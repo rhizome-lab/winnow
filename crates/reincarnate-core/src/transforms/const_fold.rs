@@ -498,4 +498,69 @@ mod tests {
         let func = apply_fold(fb.build());
         assert!(matches!(&find_inst_for(&func, result).op, Op::Const(Constant::Int(15))));
     }
+
+    // ---- Edge case tests ----
+
+    /// Void function with no arithmetic — nothing to fold.
+    #[test]
+    fn void_function_no_fold() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        fb.ret(None);
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = ConstantFolding.apply(module).unwrap();
+        assert!(!result.changed);
+    }
+
+    /// Constants in different blocks all fold.
+    #[test]
+    fn fold_in_multi_block() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let then_block = fb.create_block();
+        let else_block = fb.create_block();
+        fb.br_if(cond, then_block, &[], else_block, &[]);
+
+        fb.switch_to_block(then_block);
+        let a = fb.const_int(2);
+        let b = fb.const_int(3);
+        let sum = fb.add(a, b);
+        fb.ret(Some(sum));
+
+        fb.switch_to_block(else_block);
+        let c = fb.const_int(10);
+        let d = fb.const_int(20);
+        let product = fb.mul(c, d);
+        fb.ret(Some(product));
+
+        let func = apply_fold(fb.build());
+        assert!(matches!(&find_inst_for(&func, sum).op, Op::Const(Constant::Int(5))));
+        assert!(matches!(&find_inst_for(&func, product).op, Op::Const(Constant::Int(200))));
+    }
+
+    /// Chained fold: `(1+2) * 3` folds to `9` in one pass via fixpoint.
+    #[test]
+    fn chained_fold() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let a = fb.const_int(1);
+        let b = fb.const_int(2);
+        let sum = fb.add(a, b);
+        let c = fb.const_int(3);
+        let product = fb.mul(sum, c);
+        fb.ret(Some(product));
+
+        let func = apply_fold(fb.build());
+        assert!(matches!(&find_inst_for(&func, product).op, Op::Const(Constant::Int(9))));
+    }
 }

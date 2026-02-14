@@ -1538,6 +1538,48 @@ mod tests {
         }
     }
 
+    // ---- Edge case tests ----
+
+    /// Void function — no types to refine.
+    #[test]
+    fn void_function_noop() {
+        let sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        fb.ret(None);
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+        let result = TypeInference.apply(module).unwrap();
+        assert!(!result.changed);
+    }
+
+    /// Dynamic + Int(64) in Add — forward-only inference keeps result Dynamic.
+    /// (Backward constraint flow is ConstraintSolve's job.)
+    #[test]
+    fn dynamic_operand_stays_dynamic_in_add() {
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Dynamic, ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let p = fb.param(0);
+        let c = fb.const_int(1);
+        let sum = fb.add(p, c);
+        fb.ret(Some(sum));
+        let mut func = fb.build();
+        func.value_types[sum] = Type::Dynamic;
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+        let result = TypeInference.apply(module).unwrap();
+        let func = &result.module.functions[FuncId::new(0)];
+        // TypeInference only does forward flow: Dynamic + Int → Dynamic.
+        assert_eq!(func.value_types[sum], Type::Dynamic);
+    }
+
     /// Cross-function global type inference: a set in one function types a get in another.
     #[test]
     fn global_type_inferred_from_write_site() {
