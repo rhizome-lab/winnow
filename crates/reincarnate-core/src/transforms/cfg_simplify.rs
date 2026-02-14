@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::CoreError;
-use crate::ir::{BlockId, Function, Inst, Module, Op, Type, ValueId};
+use crate::ir::{BlockId, Function, Inst, InstId, Module, Op, Type, ValueId};
 use crate::pipeline::{Transform, TransformResult};
 
 use super::util::{branch_targets, substitute_values_in_op};
@@ -490,6 +490,16 @@ fn eliminate_trivial_params(func: &mut Function) -> bool {
     // Collect removals: (block, param indices to remove in reverse order).
     let mut removals: Vec<(BlockId, Vec<usize>)> = Vec::new();
 
+    // Precompute: target → [inst_ids that branch to it]
+    let mut incoming_edges: HashMap<BlockId, Vec<InstId>> = HashMap::new();
+    for &src_block in &reachable {
+        for &inst_id in &func.blocks[src_block].insts {
+            for target in branch_targets(&func.insts[inst_id].op) {
+                incoming_edges.entry(target).or_default().push(inst_id);
+            }
+        }
+    }
+
     for block_id in func.blocks.keys().collect::<Vec<_>>() {
         if block_id == func.entry {
             continue;
@@ -502,13 +512,10 @@ fn eliminate_trivial_params(func: &mut Function) -> bool {
             continue;
         }
 
-        // Collect all incoming arg lists for this block from all instructions.
+        // Collect all incoming arg lists for this block using precomputed edge map.
         let mut incoming: Vec<&Vec<ValueId>> = Vec::new();
-        for src_block in func.blocks.keys().collect::<Vec<_>>() {
-            if !reachable.contains(&src_block) {
-                continue;
-            }
-            for &inst_id in &func.blocks[src_block].insts {
+        if let Some(edge_insts) = incoming_edges.get(&block_id) {
+            for &inst_id in edge_insts {
                 incoming.extend(collect_all_branch_args(&func.insts[inst_id].op, block_id));
             }
         }

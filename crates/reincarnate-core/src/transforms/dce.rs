@@ -262,16 +262,23 @@ fn eliminate_dead_block_params(func: &mut Function, reachable: &HashSet<BlockId>
             }
         }
 
+        // Precompute: target → [inst_ids that branch to it]
+        let mut edges_to: HashMap<BlockId, Vec<InstId>> = HashMap::new();
+        for &block_id in reachable {
+            for &inst_id in &func.blocks[block_id].insts {
+                for (tgt, _) in branch_target_args(&func.insts[inst_id].op) {
+                    edges_to.entry(tgt).or_default().push(inst_id);
+                }
+            }
+        }
+
         // Propagate: for each live block param, find all branch args that feed
         // it and mark those values as live too.
         while let Some(live_val) = worklist.pop_front() {
             if let Some(&(target_block, param_idx)) = param_to_block.get(&live_val) {
-                // Find all branches to target_block and mark arg at param_idx live.
-                for &block_id in reachable {
-                    for &inst_id in &func.blocks[block_id].insts {
-                        for (tgt, args) in
-                            branch_target_args(&func.insts[inst_id].op)
-                        {
+                if let Some(edge_insts) = edges_to.get(&target_block) {
+                    for &inst_id in edge_insts {
+                        for (tgt, args) in branch_target_args(&func.insts[inst_id].op) {
                             if tgt == target_block {
                                 if let Some(&arg_val) = args.get(param_idx) {
                                     if used_values.insert(arg_val) {
