@@ -1031,6 +1031,13 @@ fn try_forward_substitute_one(body: &mut Vec<Stmt>) -> bool {
             continue;
         }
 
+        // Don't substitute if the variable is reassigned in the remaining body.
+        // Loop-carried variables (e.g., repeat counters) have 1 read + 1 write
+        // per iteration — substituting the init value makes the loop infinite.
+        if var_is_reassigned(&body[i + 1..], &name) {
+            continue;
+        }
+
         // Adjacent check: the single use (read) must be at position i+1.
         // Use count_var_refs_in_stmt (reads only) — not stmt_references_var
         // which also counts writes. If the adjacent stmt only *writes* the var
@@ -4533,6 +4540,62 @@ mod tests {
             }
             other => panic!("Expected If, got: {other:?}"),
         }
+    }
+
+    // Regression: forward_substitute consumed the init assignment of a
+    // loop-carried variable (e.g., `count = 3` before a `while(true)` loop),
+    // inlining the literal `3` into the loop body. Since the counter is
+    // reassigned each iteration (`count = count - 1`), the substituted
+    // literal never decrements and the loop runs forever.
+    #[test]
+    fn forward_sub_no_consume_loop_carried_var() {
+        // let count; count = 3; while (true) { ... count = count - 1; if (!count) break; }
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "count".to_string(),
+                ty: None,
+                init: None,
+                mutable: true,
+            },
+            assign(var("count"), int(3)),
+            Stmt::Loop {
+                body: vec![
+                    Stmt::Expr(Expr::Call {
+                        func: "doWork".to_string(),
+                        args: vec![],
+                    }),
+                    assign(
+                        var("count"),
+                        Expr::Binary {
+                            op: BinOp::Sub,
+                            lhs: Box::new(var("count")),
+                            rhs: Box::new(int(1)),
+                        },
+                    ),
+                    Stmt::If {
+                        cond: Expr::Call {
+                            func: "isDone".to_string(),
+                            args: vec![var("count")],
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: vec![],
+                    },
+                ],
+            },
+        ];
+
+        forward_substitute(&mut body);
+
+        // The `count = 3` assignment must NOT be consumed — the loop body
+        // reassigns count, so inlining `3` would make the loop infinite.
+        let has_count_assign = body.iter().any(|s| {
+            matches!(s, Stmt::Assign { target, value }
+                if *target == var("count") && *value == int(3))
+        });
+        assert!(
+            has_count_assign,
+            "Init assign `count = 3` was incorrectly consumed by forward_substitute: {body:?}"
+        );
     }
 
     // Regression: forward_substitute used stmt_references_var (which counts

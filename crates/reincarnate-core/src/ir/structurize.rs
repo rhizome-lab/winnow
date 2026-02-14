@@ -1446,13 +1446,26 @@ impl<'a> Structurizer<'a> {
             if !loop_body.contains(&pred) {
                 continue; // Skip non-loop predecessors.
             }
-            if pred == header {
-                continue; // Skip self-loops at header level.
-            }
-            if let Some(Op::Br { target, args }) = self.terminator(pred) {
-                if *target == header {
+            match self.terminator(pred) {
+                Some(Op::Br { target, args }) if *target == header && pred != header => {
                     return Some(self.branch_assigns(header, args));
                 }
+                // BrIf self-loop: header branches back to itself via one arm.
+                Some(Op::BrIf {
+                    then_target,
+                    then_args,
+                    else_target,
+                    else_args,
+                    ..
+                }) if pred == header => {
+                    if *then_target == header {
+                        return Some(self.branch_assigns(header, then_args));
+                    }
+                    if *else_target == header {
+                        return Some(self.branch_assigns(header, else_args));
+                    }
+                }
+                _ => {}
             }
         }
         None

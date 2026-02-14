@@ -775,13 +775,16 @@ preserves these as integers, losing boolean semantics.
   lost. Now when the continuation has assigns, it's nested inside the
   else body instead of flattened as a sibling.
 
-- [ ] **General loop block-param counter uses initial value** — In `repeat(N)`
-  loops emitted as `while (true) { ... }`, the loop counter decrement
-  `v10 - 1` renders as `v100 - 1` (using the initial entry value instead
-  of the mutable loop variable). The IR is correct (`sub v10, v120` where
-  v10 is a block param), but the emitter resolves v10 to v100 somewhere
-  in the build_val → name_coalescing → forward_substitute pipeline. The
-  root cause is not yet identified. Affects all `repeat` loops with counters.
+- [x] **General loop block-param counter uses initial value** — Fixed. Two
+  bugs combined: (1) `find_back_edge_assigns` in structurize.rs only matched
+  `Op::Br` back-edges and skipped header self-loops (`pred == header`). For
+  BrIf self-loops (header branches back to itself via one arm), the block
+  param update was completely lost — the WhileLoop/ForLoop had no update
+  assigns, so the counter was never decremented. Fixed by extending
+  `find_back_edge_assigns` to handle BrIf where one arm targets the header.
+  (2) `try_forward_substitute_one` in ast_passes.rs lacked a
+  `var_is_reassigned` guard — the same guard `fold_single_use_consts`
+  already had. Added to prevent inlining loop-carried variable inits.
 
 - [x] **Short-circuit `||`/`&&` emitted as nested ternaries** — Fixed. The IR
   encodes boolean short-circuit evaluation as BrIf chains with block params
