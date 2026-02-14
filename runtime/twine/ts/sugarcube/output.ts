@@ -61,3 +61,13 @@ export function repeat_start(...args: any[]): void {
 export function repeat_end(): void {
   console.log("[repeat_end]");
 }
+
+/** Start a type block (<<type>>). */
+export function type_start(...args: any[]): void {
+  console.log("[type_start]", ...args);
+}
+
+/** End a type block. */
+export function type_end(): void {
+  console.log("[type_end]");
+}

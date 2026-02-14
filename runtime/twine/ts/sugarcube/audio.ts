@@ -28,3 +28,19 @@ export function removeaudio(...args: any[]): void {
 export function waitforaudio(...args: any[]): void {
   console.log("[audio:waitforaudio]", ...args);
 }
+
+export function createaudiogroup(...args: any[]): void {
+  console.log("[audio:createaudiogroup]", ...args);
+}
+
+export function createplaylist(...args: any[]): void {
+  console.log("[audio:createplaylist]", ...args);
+}
+
+export function removeaudiogroup(...args: any[]): void {
+  console.log("[audio:removeaudiogroup]", ...args);
+}
+
+export function removeplaylist(...args: any[]): void {
+  console.log("[audio:removeplaylist]", ...args);
+}
