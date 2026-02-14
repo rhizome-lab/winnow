@@ -345,6 +345,12 @@
         "room_restart", "game_restart"
       ],
       "path": "gamemaker/runtime"
+    },
+    {
+      "names": [
+        "variable_global_exists", "variable_global_get", "variable_global_set"
+      ],
+      "path": "gamemaker/global"
     }
   ]
 }

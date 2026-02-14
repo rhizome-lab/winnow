@@ -64,7 +64,8 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
         known_classes.extend(rc.type_definitions.keys().cloned());
     }
 
-    emit_runtime_imports(module, &mut out, runtime_config);
+    let engine = detect_engine(runtime_config);
+    emit_runtime_imports(module, &mut out, runtime_config, engine);
     if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
         let _ = writeln!(
             out,
@@ -81,7 +82,6 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
 
     // Single-file mode — globals are in the same scope, no ESM setter rewrite needed.
     let no_mutable_globals = HashSet::new();
-    let engine = detect_engine(runtime_config);
     if module.classes.is_empty() {
         emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &mut out)?;
     } else {
@@ -813,7 +813,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let class_funcs = || group.methods.iter().map(|&fid| &module.functions[fid]);
         let systems = collect_system_names_from_funcs(class_funcs());
         emit_runtime_imports_for(systems, &mut out, depth, runtime_config);
-        let calls = collect_call_names_from_funcs(class_funcs());
+        let calls = collect_call_names_from_funcs(class_funcs(), engine);
         let func_prefix = "../".repeat(depth + 1);
         let func_prefix = func_prefix.trim_end_matches('/');
         emit_function_imports_with_prefix(&calls, &mut out, func_prefix, runtime_config);
@@ -856,7 +856,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let free_fn_iter = || free_funcs.iter().map(|&fid| &module.functions[fid]);
         let systems = collect_system_names_from_funcs(free_fn_iter());
         emit_runtime_imports_for(systems, &mut out, 0, runtime_config);
-        let calls = collect_call_names_from_funcs(free_fn_iter());
+        let calls = collect_call_names_from_funcs(free_fn_iter(), engine);
         emit_function_imports_with_prefix(&calls, &mut out, "..", runtime_config);
         if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
             let prefix = "../";
@@ -1016,11 +1016,11 @@ fn collect_system_names_from_funcs<'a>(
 }
 
 /// Emit runtime imports for flat modules (files directly in `output_dir`).
-fn emit_runtime_imports(module: &Module, out: &mut String, runtime_config: Option<&RuntimeConfig>) {
+fn emit_runtime_imports(module: &Module, out: &mut String, runtime_config: Option<&RuntimeConfig>, engine: EngineKind) {
     let all_funcs = || module.functions.iter().map(|(_id, f)| f);
     let systems = collect_system_names_from_funcs(all_funcs());
     emit_runtime_imports_with_prefix(systems, out, ".", runtime_config);
-    let calls = collect_call_names_from_funcs(all_funcs());
+    let calls = collect_call_names_from_funcs(all_funcs(), engine);
     emit_function_imports_with_prefix(&calls, out, ".", runtime_config);
 }
 
@@ -1094,15 +1094,26 @@ fn emit_runtime_imports_with_prefix(
 // Function-level imports (runtime stdlib free functions)
 // ---------------------------------------------------------------------------
 
-/// Collect all direct `Call` function names from a set of IR functions.
+/// Collect all direct `Call` function names from a set of IR functions,
+/// plus any bare function names that engine-specific SystemCall rewrites
+/// will introduce (e.g. `variable_global_set` from `GameMaker.Global.set`).
 fn collect_call_names_from_funcs<'a>(
     funcs: impl Iterator<Item = &'a Function>,
+    engine: EngineKind,
 ) -> BTreeSet<String> {
     let mut used = BTreeSet::new();
     for func in funcs {
         for (_inst_id, inst) in func.insts.iter() {
-            if let Op::Call { func: name, .. } = &inst.op {
-                used.insert(name.clone());
+            match &inst.op {
+                Op::Call { func: name, .. } => {
+                    used.insert(name.clone());
+                }
+                Op::SystemCall { system, method, .. } if engine == EngineKind::GameMaker => {
+                    if let Some(name) = crate::rewrites::gamemaker::rewrite_introduced_call(system, method) {
+                        used.insert(name.to_string());
+                    }
+                }
+                _ => {}
             }
         }
     }

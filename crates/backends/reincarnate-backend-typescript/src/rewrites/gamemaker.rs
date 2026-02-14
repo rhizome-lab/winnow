@@ -11,6 +11,17 @@ use reincarnate_core::ir::{ExternalImport, Type, ValueId};
 use crate::emit::{ClassRegistry, RefSets};
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
+/// Returns the bare function name that a SystemCall rewrite will introduce,
+/// if any.  Used by import generation to emit the correct imports before
+/// the rewrite pass runs.
+pub fn rewrite_introduced_call(system: &str, method: &str) -> Option<&'static str> {
+    match (system, method) {
+        ("GameMaker.Global", "set") => Some("variable_global_set"),
+        ("GameMaker.Global", "get") => Some("variable_global_get"),
+        _ => None,
+    }
+}
+
 /// Rewrite a function's body, resolving GameMaker SystemCalls.
 pub fn rewrite_gamemaker_function(mut func: JsFunction) -> JsFunction {
     rewrite_stmts(&mut func.body);
