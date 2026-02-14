@@ -113,6 +113,11 @@ impl FunctionBuilder {
         self.func.blocks[self.func.entry].params[index].value
     }
 
+    /// Number of parameters in the entry block.
+    pub fn param_count(&self) -> usize {
+        self.func.blocks[self.func.entry].params.len()
+    }
+
     /// Set class metadata on the function being built.
     pub fn set_class(&mut self, ns: Vec<String>, class: String, kind: MethodKind) {
         self.func.namespace = ns;

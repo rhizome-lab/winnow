@@ -777,7 +777,8 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
                     0xFFFD => (3, 0),                     // popaf
                     0xFFF6 => (0, 1),                     // chknullish — pushes boolean
                     0xFFF5 => (0, 1),                     // pushref — pushes function ref
-                    0xFFFA | 0xFFF9 => (0, 0),            // isstaticok, setstatic — nop
+                    0xFFFA => (0, 1),                     // isstaticok — pushes boolean
+                    0xFFF9 => (0, 0),                     // setstatic — nop
                     0xFFF8 | 0xFFF7 => (0, 0),            // savearef, restorearef — nop
                     _ => (0, 0),
                 }
@@ -1193,7 +1194,12 @@ fn translate_instruction(
                         // For decompilation, treat as a nop (value already on stack).
                     }
                     0xFFFB => {} // setowner — nop for decompilation
-                    0xFFFA => {} // isstaticok — static init guard, nop for decompilation
+                    0xFFFA => {
+                        // isstaticok — static init guard. Pushes true if statics
+                        // are already initialized; used with Bt to skip init code.
+                        // For decompilation we push false so the init code is emitted.
+                        stack.push(fb.const_bool(false));
+                    }
                     0xFFF9 => {} // setstatic — set static scope, nop for decompilation
                     0xFFF8 => {} // savearef — save array ref to temp, nop for decompilation
                     0xFFF7 => {} // restorearef — restore array ref from temp, nop for decompilation
@@ -1488,8 +1494,21 @@ fn translate_push_variable(
             let arg_idx = var_ref.variable_id;
             let param_offset = if ctx.has_self { 1 } else { 0 }
                 + if ctx.has_other { 1 } else { 0 };
-            let param = fb.param(param_offset + arg_idx as usize);
-            stack.push(param);
+            let idx = param_offset + arg_idx as usize;
+            if idx < fb.param_count() {
+                let param = fb.param(idx);
+                stack.push(param);
+            } else {
+                // Out-of-range argument access — emit as dynamic lookup.
+                let name_val = fb.const_string(format!("argument{arg_idx}"));
+                let val = fb.system_call(
+                    "GameMaker.Argument",
+                    "get",
+                    &[name_val],
+                    Type::Dynamic,
+                );
+                stack.push(val);
+            }
         }
         _ => {
             // Positive value = specific object ID.
