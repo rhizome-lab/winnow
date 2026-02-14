@@ -124,10 +124,37 @@ fn fold_cmp(kind: CmpKind, a: &Constant, b: &Constant) -> Option<Constant> {
 /// Try to fold a cast from a constant to a target type.
 fn fold_cast(c: &Constant, ty: &Type) -> Option<Constant> {
     match (c, ty) {
+        // Same-family: truncate/widen within the stored representation.
+        (Constant::Int(x), Type::Int(bits)) => {
+            let bits = *bits as u32;
+            if bits >= 64 {
+                Some(Constant::Int(*x))
+            } else {
+                // Truncate and sign-extend from bit (bits-1).
+                let mask = (1i64 << bits) - 1;
+                let truncated = *x & mask;
+                let sign_bit = 1i64 << (bits - 1);
+                if truncated & sign_bit != 0 {
+                    Some(Constant::Int(truncated | !mask))
+                } else {
+                    Some(Constant::Int(truncated))
+                }
+            }
+        }
+        (Constant::UInt(x), Type::UInt(bits)) => {
+            let bits = *bits as u32;
+            if bits >= 64 {
+                Some(Constant::UInt(*x))
+            } else {
+                Some(Constant::UInt(*x & ((1u64 << bits) - 1)))
+            }
+        }
+        (Constant::Float(_), Type::Float(_)) => Some(c.clone()),
+        // Cross-family conversions.
         (Constant::Int(x), Type::Float(_)) => Some(Constant::Float(*x as f64)),
         (Constant::Int(x), Type::UInt(_)) => Some(Constant::UInt(*x as u64)),
         (Constant::UInt(x), Type::Float(_)) => Some(Constant::Float(*x as f64)),
-        (Constant::UInt(x), Type::Int(_)) => Some(Constant::UInt(*x)),
+        (Constant::UInt(x), Type::Int(_)) => Some(Constant::Int(*x as i64)),
         (Constant::Float(x), Type::Int(_)) => Some(Constant::Int(*x as i64)),
         (Constant::Float(x), Type::UInt(_)) => Some(Constant::UInt(*x as u64)),
         _ => None,
