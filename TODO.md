@@ -720,11 +720,30 @@ The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
   GMS2.3+ `Dup` val16 high byte (DupExtra swap flags) is now masked.
   Dead Estate: 3,477 → 981 errors.
 
-- [ ] **GMS2.3+ struct operations** — Remaining ~981 errors in Dead Estate are
-  from GMS2.3+ struct creation/access patterns. Manifests as "Dup(0) on stack
-  of depth 0" (206), "stack underflow on Bf" (338), "Dup(4) on stack of depth 2"
-  (40+). Likely involves Dup with DupExtra=0x88 (struct swap) and struct field
-  access bytecode patterns not yet recognized by the translator.
+- [x] **GMS2.3+ struct operations** — Fixed. Dead Estate errors reduced from
+  2,167 → 81 (96% reduction) across four fix areas:
+  1. **Child function bytecode lengths** — CODE chunk entries in shared bytecode
+     blobs had `length = blob_length - offset_in_blob`, which gave all remaining
+     bytes instead of just the child's bytes. Fixed with three-pass gap-based
+     computation: group entries by blob address, sort by offset, compute each
+     entry's length as the gap to the next entry's offset.
+  2. **GML type-aware Dup** — The GML VM uses variable-size stack slots
+     (Variable=16B/4 units, Double/Int64=8B/2 units, Int32/Int16/Bool/String=4B/1
+     unit). `Dup(N)` duplicates `(N+1)*type_size` bytes, not `N+1` items. Added
+     `gml_sizes: HashMap<ValueId, u8>` to track per-value GML type sizes and
+     compute correct item counts. Also handles Dup Swap mode (DupExtra!=0,
+     size>0) which reorders without duplicating.
+  3. **Spurious block creation after Ret/Exit** — `find_block_starts` created
+     block starts after every Ret/Exit, making trailing sibling bytecode in
+     shared blobs appear as reachable blocks. Fixed by not creating block starts
+     after terminal instructions.
+  4. **Stack effect fixes** — `setowner` (Break -5) pops 1 value (was no-op);
+     `CallV` pops argc+2 (function ref + instance + args, was argc+1).
+- [ ] **GMS2.3+ remaining 81 errors** — 30 Bf underflows, 21 Sub underflows,
+  11 Cmp underflows, 10 Popz underflows, 5 misc. 76 of 81 are in anonymous
+  functions. Likely caused by: (a) last-entry-in-blob length still over-counting
+  for some entries, (b) unhandled GMS2.3+ bytecode patterns (try-catch, etc.),
+  (c) Haxe-compiled code with non-standard patterns.
 
 - [x] **Branch offset encoding** — Fixed. GML bytecode branch offsets use
   23-bit signed values in bits 0-22 of the instruction word. Bit 23 is not part
