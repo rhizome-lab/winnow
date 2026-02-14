@@ -1257,17 +1257,24 @@ fn translate_push_variable(
                 stack.push(val);
             }
         } else {
-            // 2D array field access on a specific object
+            // 2D array field access on a specific object.
+            // dim2 == -1 is a sentinel meaning scalar (non-array) access.
             let obj_id = if let Some(name) = ctx.obj_names.get(instance as usize) {
                 fb.const_string(name)
             } else {
                 fb.const_int(instance as i64)
             };
             let name_val = fb.const_string(&var_name);
+            let is_scalar = matches!(fb.try_get_const(index), Some(Constant::Int(-1)));
+            let args: Vec<ValueId> = if is_scalar {
+                vec![obj_id, name_val]
+            } else {
+                vec![obj_id, name_val, index]
+            };
             let val = fb.system_call(
                 "GameMaker.Instance",
                 "getOn",
-                &[obj_id, name_val, index],
+                &args,
                 Type::Dynamic,
             );
             stack.push(val);
@@ -1471,17 +1478,24 @@ fn translate_pop(
                     );
                 }
             } else {
-                // 2D array field store on a specific object
+                // 2D array field store on a specific object.
+                // dim2 == -1 is a sentinel meaning scalar (non-array) access.
                 let obj_id = if let Some(name) = ctx.obj_names.get(*instance as usize) {
                     fb.const_string(name)
                 } else {
                     fb.const_int(*instance as i64)
                 };
                 let name_val = fb.const_string(&var_name);
+                let is_scalar = matches!(fb.try_get_const(index), Some(Constant::Int(-1)));
+                let args: Vec<ValueId> = if is_scalar {
+                    vec![obj_id, name_val, value]
+                } else {
+                    vec![obj_id, name_val, index, value]
+                };
                 fb.system_call(
                     "GameMaker.Instance",
                     "setOn",
-                    &[obj_id, name_val, index, value],
+                    &args,
                     Type::Void,
                 );
             }
