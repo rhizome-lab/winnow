@@ -20,11 +20,15 @@ use crate::types::ts_type;
 pub(crate) enum EngineKind {
     Flash,
     GameMaker,
+    Twine,
 }
 
 /// Detect engine from runtime config system_modules keys.
 fn detect_engine(runtime_config: Option<&RuntimeConfig>) -> EngineKind {
     if let Some(cfg) = runtime_config {
+        if cfg.system_modules.keys().any(|k| k.starts_with("SugarCube.")) {
+            return EngineKind::Twine;
+        }
         if cfg.system_modules.keys().any(|k| k.starts_with("GameMaker.")) {
             return EngineKind::GameMaker;
         }
@@ -1220,6 +1224,11 @@ fn collect_call_names_from_funcs<'a>(
                         used.insert((*name).to_string());
                     }
                 }
+                Op::SystemCall { system, method, .. } if engine == EngineKind::Twine => {
+                    for name in crate::rewrites::twine::rewrite_introduced_calls(system, method) {
+                        used.insert((*name).to_string());
+                    }
+                }
                 // Coerce casts emit bare function calls: int(x), uint(x).
                 Op::Cast(_, Type::Int(32), CastKind::Coerce) => {
                     used.insert("int".to_string());
@@ -2300,6 +2309,7 @@ fn emit_function(
             };
             crate::rewrites::flash::rewrite_flash_function(js_func, &rewrite_ctx)
         }
+        EngineKind::Twine => crate::rewrites::twine::rewrite_twine_function(js_func),
     };
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     crate::ast_passes::recover_switch_statements(&mut js_func.body);
@@ -2739,6 +2749,7 @@ fn emit_class_method(
             crate::rewrites::flash::eliminate_dead_activations(&mut jf.body);
             jf
         }
+        EngineKind::Twine => crate::rewrites::twine::rewrite_twine_function(js_func),
     };
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     rewrite_late_bound_types(&mut js_func.body, late_bound, short_to_qualified);
