@@ -1709,3 +1709,411 @@ pub(crate) fn collect_flash_scope_refs(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal `FlashRewriteCtx` with all fields empty.
+    fn empty_ctx() -> FlashRewriteCtx {
+        FlashRewriteCtx {
+            class_names: HashMap::new(),
+            ancestors: HashSet::new(),
+            method_names: HashSet::new(),
+            instance_fields: HashSet::new(),
+            has_self: false,
+            suppress_super: false,
+            is_cinit: false,
+            static_fields: HashSet::new(),
+            static_method_owners: HashMap::new(),
+            static_field_owners: HashMap::new(),
+            const_instance_fields: HashSet::new(),
+            class_short_name: None,
+            bindable_methods: HashSet::new(),
+            closure_bodies: HashMap::new(),
+            known_classes: HashSet::new(),
+        }
+    }
+
+    fn scope_lookup(name: &str) -> JsExpr {
+        JsExpr::SystemCall {
+            system: "Flash.Scope".into(),
+            method: "findPropStrict".into(),
+            args: vec![JsExpr::Literal(Constant::String(name.into()))],
+        }
+    }
+
+    fn body_stmt(name: &str) -> JsStmt {
+        JsStmt::Expr(JsExpr::Call {
+            callee: Box::new(JsExpr::Var(name.into())),
+            args: vec![],
+        })
+    }
+
+    // --- Scope resolution ---
+
+    #[test]
+    fn scope_lookup_ancestor_resolves_to_this_for_instance_field() {
+        let mut ctx = empty_ctx();
+        ctx.ancestors.insert("MyClass".into());
+        ctx.instance_fields.insert("x".into());
+        let result = resolve_field(&scope_lookup("classes:MyClass::x"), "x", &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::Field { object, field }
+            if matches!(object.as_ref(), JsExpr::This) && field == "x"));
+    }
+
+    #[test]
+    fn scope_lookup_ancestor_static_resolves_to_class_dot_field() {
+        let mut ctx = empty_ctx();
+        ctx.ancestors.insert("MyClass".into());
+        let result = resolve_field(&scope_lookup("classes:MyClass::MAX"), "MAX", &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::Field { object, field }
+            if matches!(object.as_ref(), JsExpr::Var(n) if n == "MyClass") && field == "MAX"));
+    }
+
+    #[test]
+    fn scope_lookup_non_ancestor_resolves_to_bare_var() {
+        let ctx = empty_ctx();
+        let result = resolve_field(&scope_lookup("global::trace"), "trace", &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::Var(n) if n == "trace"));
+    }
+
+    #[test]
+    fn scope_lookup_with_self_and_method_resolves_to_this() {
+        let mut ctx = empty_ctx();
+        ctx.has_self = true;
+        ctx.method_names.insert("update".into());
+        let result = resolve_field(&scope_lookup("global::update"), "update", &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::Field { object, field }
+            if matches!(object.as_ref(), JsExpr::This) && field == "update"));
+    }
+
+    // --- SystemCall rewrites ---
+
+    #[test]
+    fn construct_super_becomes_super_call() {
+        let ctx = empty_ctx();
+        let args = vec![JsExpr::This, JsExpr::Literal(Constant::Int(42))];
+        let result = rewrite_system_call("Flash.Class", "constructSuper", &args, &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::SuperCall(args) if args.len() == 1));
+    }
+
+    #[test]
+    fn construct_super_suppressed_becomes_null() {
+        let mut ctx = empty_ctx();
+        ctx.suppress_super = true;
+        let args = vec![JsExpr::This];
+        let result = rewrite_system_call("Flash.Class", "constructSuper", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::Literal(Constant::Null))));
+    }
+
+    #[test]
+    fn construct_becomes_new() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Var("MyClass".into()),
+            JsExpr::Literal(Constant::Int(1)),
+        ];
+        let result = rewrite_system_call("Flash.Object", "construct", &args, &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        assert!(matches!(&expr, JsExpr::New { callee, args }
+            if matches!(callee.as_ref(), JsExpr::Var(n) if n == "MyClass")
+            && args.len() == 1));
+    }
+
+    #[test]
+    fn construct_object_no_args_becomes_empty_object() {
+        let ctx = empty_ctx();
+        let args = vec![JsExpr::Var("Object".into())];
+        let result = rewrite_system_call("Flash.Object", "construct", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::ObjectInit(pairs)) if pairs.is_empty()));
+    }
+
+    #[test]
+    fn typeof_rewrite() {
+        let ctx = empty_ctx();
+        let args = vec![JsExpr::Var("x".into())];
+        let result = rewrite_system_call("Flash.Object", "typeOf", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::TypeOf(_))));
+    }
+
+    #[test]
+    fn has_property_becomes_in() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Var("obj".into()),
+            JsExpr::Literal(Constant::String("key".into())),
+        ];
+        let result = rewrite_system_call("Flash.Object", "hasProperty", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::In { .. })));
+    }
+
+    #[test]
+    fn delete_property_becomes_delete() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Var("obj".into()),
+            JsExpr::Literal(Constant::String("key".into())),
+        ];
+        let result = rewrite_system_call("Flash.Object", "deleteProperty", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::Delete { .. })));
+    }
+
+    #[test]
+    fn new_object_becomes_object_init() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::Literal(Constant::String("a".into())),
+            JsExpr::Literal(Constant::Int(1)),
+            JsExpr::Literal(Constant::String("b".into())),
+            JsExpr::Literal(Constant::Int(2)),
+        ];
+        let result = rewrite_system_call("Flash.Object", "newObject", &args, &ctx);
+        assert!(result.is_some());
+        let expr = result.unwrap();
+        if let JsExpr::ObjectInit(pairs) = expr {
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0].0, "a");
+            assert_eq!(pairs[1].0, "b");
+        } else {
+            panic!("expected ObjectInit, got {:?}", expr);
+        }
+    }
+
+    #[test]
+    fn call_super_becomes_super_method_call() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::This,
+            JsExpr::Literal(Constant::String("ns::doStuff".into())),
+            JsExpr::Literal(Constant::Int(42)),
+        ];
+        let result = rewrite_system_call("Flash.Class", "callSuper", &args, &ctx);
+        assert!(result.is_some());
+        if let Some(JsExpr::SuperMethodCall { method, args }) = result {
+            assert_eq!(method, "doStuff");
+            assert_eq!(args.len(), 1);
+        } else {
+            panic!("expected SuperMethodCall");
+        }
+    }
+
+    #[test]
+    fn get_super_becomes_super_get() {
+        let ctx = empty_ctx();
+        let args = vec![
+            JsExpr::This,
+            JsExpr::Literal(Constant::String("value".into())),
+        ];
+        let result = rewrite_system_call("Flash.Class", "getSuper", &args, &ctx);
+        assert!(matches!(result, Some(JsExpr::SuperGet(n)) if n == "value"));
+    }
+
+    #[test]
+    fn apply_type_becomes_array() {
+        let ctx = empty_ctx();
+        let result = rewrite_system_call("Flash.Object", "applyType", &[], &ctx);
+        assert!(matches!(result, Some(JsExpr::Var(n)) if n == "Array"));
+    }
+
+    #[test]
+    fn class_coercion_in_scope_call() {
+        let mut ctx = empty_ctx();
+        ctx.known_classes.insert("Sprite".into());
+        // When scope arg has no class prefix, callee resolves to bare Var("Sprite")
+        // which triggers the class coercion path.
+        let rewritten = resolve_scope_call(
+            "Sprite",
+            &[JsExpr::Literal(Constant::String("Sprite".into()))],
+            vec![JsExpr::Var("obj".into())],
+            &ctx,
+        );
+        assert!(matches!(&rewritten, JsExpr::Cast { kind: CastKind::AsType, .. }));
+    }
+
+    // --- hoist_super_call ---
+
+    #[test]
+    fn hoist_super_call_no_deps() {
+        let mut body = vec![
+            body_stmt("a"),
+            body_stmt("b"),
+            JsStmt::Expr(JsExpr::SuperCall(vec![])),
+        ];
+        hoist_super_call(&mut body, None);
+        assert!(matches!(&body[0], JsStmt::Expr(JsExpr::SuperCall(_))));
+    }
+
+    #[test]
+    fn hoist_super_call_with_dep() {
+        let mut body = vec![
+            JsStmt::VarDecl {
+                name: "x".into(),
+                ty: Some(Type::Int(32)),
+                init: Some(JsExpr::Literal(Constant::Int(1))),
+                mutable: false,
+            },
+            body_stmt("other"),
+            JsStmt::Expr(JsExpr::SuperCall(vec![JsExpr::Var("x".into())])),
+        ];
+        hoist_super_call(&mut body, None);
+        assert!(matches!(&body[1], JsStmt::Expr(JsExpr::SuperCall(_))));
+    }
+
+    #[test]
+    fn hoist_super_call_rewrites_this_to_prototype() {
+        let mut body = vec![JsStmt::Expr(JsExpr::SuperCall(vec![JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "handler".into(),
+        }]))];
+        hoist_super_call(&mut body, Some("MyClass"));
+        if let JsStmt::Expr(JsExpr::SuperCall(args)) = &body[0] {
+            assert!(matches!(&args[0], JsExpr::Field { object, field }
+                if field == "handler"
+                && matches!(object.as_ref(), JsExpr::Field { object: inner, field: proto }
+                    if proto == "prototype"
+                    && matches!(inner.as_ref(), JsExpr::Var(n) if n == "MyClass"))));
+        } else {
+            panic!("expected SuperCall");
+        }
+    }
+
+    // --- Statement-level rewrites ---
+
+    #[test]
+    fn throw_statement_rewrite() {
+        let ctx = empty_ctx();
+        let stmt = JsStmt::Expr(JsExpr::SystemCall {
+            system: "Flash.Exception".into(),
+            method: "throw".into(),
+            args: vec![JsExpr::Var("err".into())],
+        });
+        let result = rewrite_stmt(stmt, &ctx);
+        assert!(matches!(result, Some(JsStmt::Throw(_))));
+    }
+
+    #[test]
+    fn standalone_scope_lookup_suppressed() {
+        let ctx = empty_ctx();
+        let stmt = JsStmt::Expr(scope_lookup("classes:Foo::bar"));
+        let result = rewrite_stmt(stmt, &ctx);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn set_super_statement_rewrite() {
+        let ctx = empty_ctx();
+        let stmt = JsStmt::Expr(JsExpr::SystemCall {
+            system: "Flash.Class".into(),
+            method: "setSuper".into(),
+            args: vec![
+                JsExpr::This,
+                JsExpr::Literal(Constant::String("value".into())),
+                JsExpr::Literal(Constant::Int(42)),
+            ],
+        });
+        let result = rewrite_stmt(stmt, &ctx);
+        assert!(result.is_some());
+        assert!(matches!(&result.unwrap(), JsStmt::Assign {
+            target: JsExpr::SuperGet(prop), ..
+        } if prop == "value"));
+    }
+
+    // --- eliminate_dead_activations ---
+
+    #[test]
+    fn dead_activation_removed() {
+        let mut body = vec![
+            JsStmt::VarDecl {
+                name: "act$0".into(),
+                ty: Some(Type::Dynamic),
+                init: Some(JsExpr::Activation),
+                mutable: false,
+            },
+            JsStmt::Assign {
+                target: JsExpr::Field {
+                    object: Box::new(JsExpr::Var("act$0".into())),
+                    field: "x".into(),
+                },
+                value: JsExpr::Literal(Constant::Int(1)),
+            },
+            body_stmt("other"),
+        ];
+        eliminate_dead_activations(&mut body);
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn live_activation_kept() {
+        let mut body = vec![
+            JsStmt::VarDecl {
+                name: "act$0".into(),
+                ty: Some(Type::Dynamic),
+                init: Some(JsExpr::Activation),
+                mutable: false,
+            },
+            JsStmt::Expr(JsExpr::Call {
+                callee: Box::new(JsExpr::Var("doSomething".into())),
+                args: vec![JsExpr::Var("act$0".into())],
+            }),
+        ];
+        eliminate_dead_activations(&mut body);
+        assert_eq!(body.len(), 2);
+    }
+
+    // --- as3Bind ---
+
+    #[test]
+    fn method_ref_in_non_callee_position_bound() {
+        let bindable: HashSet<String> = ["update".to_string()].into();
+        let mut expr = JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "update".into(),
+        };
+        bind_method_refs_expr(&mut expr, &bindable, false);
+        assert!(matches!(&expr, JsExpr::Call { callee, args }
+            if matches!(callee.as_ref(), JsExpr::Var(n) if n == "as3Bind")
+            && args.len() == 2));
+    }
+
+    #[test]
+    fn method_ref_in_callee_position_not_bound() {
+        let bindable: HashSet<String> = ["update".to_string()].into();
+        let mut expr = JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "update".into(),
+        };
+        bind_method_refs_expr(&mut expr, &bindable, true);
+        assert!(matches!(&expr, JsExpr::Field { field, .. } if field == "update"));
+    }
+
+    // --- const instance field promotion ---
+
+    #[test]
+    fn const_instance_field_resolves_to_class_static() {
+        let mut ctx = empty_ctx();
+        ctx.has_self = true;
+        ctx.class_short_name = Some("MyClass".into());
+        ctx.const_instance_fields.insert("MAX_HP".into());
+
+        let expr = JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "MAX_HP".into(),
+        };
+        let result = rewrite_expr(expr, &ctx);
+        assert!(matches!(&result, JsExpr::Field { object, field }
+            if matches!(object.as_ref(), JsExpr::Var(n) if n == "MyClass")
+            && field == "MAX_HP"));
+    }
+}
