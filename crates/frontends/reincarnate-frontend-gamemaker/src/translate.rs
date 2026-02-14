@@ -687,13 +687,26 @@ fn is_2d_array_access(var_ref: &VariableRef, instance: i16) -> bool {
     instance >= 0 && var_ref.ref_type == 0
 }
 
+/// Check if a variable operand uses stacktop-via-ref_type encoding.
+///
+/// In older GameMaker bytecode (pre-GMS2), `ref_type == 0x80` with a
+/// non-negative instance type indicates that the target instance is on the
+/// operand stack, similar to the GMS2 Stacktop instance type (-9). The
+/// `instance` field provides a type hint (which object type to expect) but
+/// the actual instance ID is popped from the stack at runtime.
+fn is_stacktop_ref(var_ref: &VariableRef, instance: i16) -> bool {
+    instance >= 0 && var_ref.ref_type == 0x80
+}
+
 /// Compute the stack effect (pops, pushes) of an instruction.
 fn stack_effect(inst: &Instruction) -> (usize, usize) {
     match inst.opcode {
         Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
             if let Operand::Variable { var_ref, instance } = &inst.operand {
-                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop)) {
-                    (1, 1)
+                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop))
+                    || is_stacktop_ref(var_ref, *instance)
+                {
+                    (1, 1) // pops instance from stack, pushes field value
                 } else if is_2d_array_access(var_ref, *instance) {
                     (2, 1) // pops 2D indices, pushes value
                 } else {
@@ -720,8 +733,10 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
         Opcode::Popz => (1, 0),
         Opcode::Pop => {
             if let Operand::Variable { var_ref, instance } = &inst.operand {
-                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop)) {
-                    (2, 0)
+                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Stacktop))
+                    || is_stacktop_ref(var_ref, *instance)
+                {
+                    (2, 0) // pops value + instance from stack
                 } else if is_2d_array_access(var_ref, *instance) {
                     (3, 0) // pops value + 2D indices
                 } else {
@@ -1233,6 +1248,22 @@ fn translate_push_variable(
 ) -> Result<(), String> {
     let var_name = resolve_variable_name(inst, ctx);
 
+    // Handle stacktop-via-ref_type (ref_type == 0x80 with instance >= 0).
+    // In pre-GMS2 bytecode, the instance is on the stack rather than encoded
+    // as instance type -9. Pop the instance and read the field from it.
+    if is_stacktop_ref(var_ref, instance) {
+        let target = pop(stack, inst)?;
+        let name_val = fb.const_string(&var_name);
+        let val = fb.system_call(
+            "GameMaker.Instance",
+            "getField",
+            &[target, name_val],
+            Type::Dynamic,
+        );
+        stack.push(val);
+        return Ok(());
+    }
+
     // Handle 2D array access (ref_type == 0 with non-negative instance).
     // The instruction pops 2 indices from the stack (dim1, dim2).
     if is_2d_array_access(var_ref, instance) {
@@ -1453,6 +1484,22 @@ fn translate_pop(
 ) -> Result<(), String> {
     if let Operand::Variable { var_ref, instance } = &inst.operand {
         let var_name = resolve_variable_name(inst, ctx);
+
+        // Handle stacktop-via-ref_type (ref_type == 0x80 with instance >= 0).
+        // In pre-GMS2 bytecode, the instance is on the stack. Pop the
+        // instance (top), then pop the value (below), and store.
+        if is_stacktop_ref(var_ref, *instance) {
+            let target = pop(stack, inst)?; // instance (top of stack)
+            let value = pop(stack, inst)?; // value to store (below)
+            let name_val = fb.const_string(&var_name);
+            fb.system_call(
+                "GameMaker.Instance",
+                "setField",
+                &[target, name_val, value],
+                Type::Void,
+            );
+            return Ok(());
+        }
 
         // Handle 2D array access (ref_type == 0 with non-negative instance).
         // Stack layout: [value, dim2, dim1] with dim1 on top.
