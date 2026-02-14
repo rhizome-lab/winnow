@@ -57,12 +57,17 @@ pub fn translate_code_entry(
     func_name: &str,
     ctx: &TranslateCtx,
 ) -> Result<reincarnate_core::ir::func::Function, String> {
-    let instructions = decode::decode(bytecode).map_err(|e| format!("{func_name}: {e}"))?;
-    if instructions.is_empty() {
+    let all_instructions = decode::decode(bytecode).map_err(|e| format!("{func_name}: {e}"))?;
+    if all_instructions.is_empty() {
         return build_empty_function(func_name, ctx);
     }
 
-
+    // Filter to only instructions reachable from the entry point.
+    // In GMS2.3+ shared bytecode blobs, the decoded range may include
+    // sibling functions' code beyond this function's Ret/Exit. Without
+    // filtering, their branches create spurious block starts that cause
+    // stack underflows.
+    let instructions = filter_reachable(&all_instructions);
 
     // Pass 1: Find basic block boundaries.
     let block_starts = find_block_starts(&instructions);
@@ -457,6 +462,65 @@ fn rewrite_to_switch(func: &mut Function, block_id: BlockId, chain: &SwitchChain
         func.blocks[mid].insts.clear();
         func.blocks[mid].params.clear();
     }
+}
+
+/// Filter instructions to only those reachable from the entry point.
+///
+/// In GMS2.3+ shared bytecode blobs, the decoded byte range may extend
+/// past this function's terminal instruction into sibling functions' code.
+/// This function walks the control flow from instruction 0, following
+/// branches and fall-through, stopping at Ret/Exit. Only reachable
+/// instructions are returned.
+fn filter_reachable(instructions: &[Instruction]) -> Vec<Instruction> {
+    let offset_to_idx: HashMap<usize, usize> = instructions
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| (inst.offset, i))
+        .collect();
+
+    let mut visited = vec![false; instructions.len()];
+    let mut worklist = vec![0usize]; // start at instruction index 0
+
+    while let Some(idx) = worklist.pop() {
+        if idx >= instructions.len() || visited[idx] {
+            continue;
+        }
+        visited[idx] = true;
+        let inst = &instructions[idx];
+
+        match inst.opcode {
+            Opcode::B => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    if let Some(&ti) = offset_to_idx.get(&target) {
+                        worklist.push(ti);
+                    }
+                }
+            }
+            Opcode::Bt | Opcode::Bf | Opcode::PushEnv | Opcode::PopEnv => {
+                if let Operand::Branch(offset) = inst.operand {
+                    let target = (inst.offset as i64 + offset as i64) as usize;
+                    if let Some(&ti) = offset_to_idx.get(&target) {
+                        worklist.push(ti);
+                    }
+                }
+                worklist.push(idx + 1);
+            }
+            Opcode::Ret | Opcode::Exit => {
+                // Terminal — don't follow.
+            }
+            _ => {
+                worklist.push(idx + 1);
+            }
+        }
+    }
+
+    instructions
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| visited[*i])
+        .map(|(_, inst)| inst.clone())
+        .collect()
 }
 
 /// Pass 1: Identify basic block start offsets.
@@ -1082,23 +1146,64 @@ fn translate_instruction(
         Opcode::Bt => {
             if let Operand::Branch(offset) = inst.operand {
                 let cond = pop(stack, inst)?;
-                let (then_off, then_target) = resolve_branch_target(inst, offset, block_map)?;
-                let (else_off, else_target) = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                let then_args = get_branch_args(stack, block_entry_depths.get(&then_off).copied().unwrap_or(0));
-                let else_args = get_branch_args(stack, block_entry_depths.get(&else_off).copied().unwrap_or(0));
-                fb.br_if(cond, then_target, &then_args, else_target, &else_args);
+                let branch_target = resolve_branch_target(inst, offset, block_map).ok();
+                let fall_target = resolve_fallthrough(instructions, inst_idx, block_map).ok();
+                match (branch_target, fall_target) {
+                    (Some((then_off, then_blk)), Some((else_off, else_blk))) => {
+                        let then_args = get_branch_args(stack, block_entry_depths.get(&then_off).copied().unwrap_or(0));
+                        let else_args = get_branch_args(stack, block_entry_depths.get(&else_off).copied().unwrap_or(0));
+                        fb.br_if(cond, then_blk, &then_args, else_blk, &else_args);
+                    }
+                    (Some((off, blk)), None) => {
+                        // Fall-through past end → branch or implicit return.
+                        let ret_blk = fb.create_block();
+                        fb.br_if(cond, blk, &get_branch_args(stack, block_entry_depths.get(&off).copied().unwrap_or(0)), ret_blk, &[]);
+                        fb.switch_to_block(ret_blk);
+                        fb.ret(None);
+                    }
+                    (None, Some((off, blk))) => {
+                        // Branch target past end → fall-through or implicit return.
+                        let ret_blk = fb.create_block();
+                        fb.br_if(cond, ret_blk, &[], blk, &get_branch_args(stack, block_entry_depths.get(&off).copied().unwrap_or(0)));
+                        fb.switch_to_block(ret_blk);
+                        fb.ret(None);
+                    }
+                    (None, None) => {
+                        // Both targets past end → pop condition and implicit return.
+                        fb.ret(None);
+                    }
+                }
                 *terminated = true;
             }
         }
         Opcode::Bf => {
             if let Operand::Branch(offset) = inst.operand {
                 let cond = pop(stack, inst)?;
-                let (branch_off, branch_target) = resolve_branch_target(inst, offset, block_map)?;
-                let (fall_off, fall_target) = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                let fall_args = get_branch_args(stack, block_entry_depths.get(&fall_off).copied().unwrap_or(0));
-                let target_args = get_branch_args(stack, block_entry_depths.get(&branch_off).copied().unwrap_or(0));
-                // Bf branches when false, so swap: then=fallthrough, else=branch
-                fb.br_if(cond, fall_target, &fall_args, branch_target, &target_args);
+                let branch_target = resolve_branch_target(inst, offset, block_map).ok();
+                let fall_target = resolve_fallthrough(instructions, inst_idx, block_map).ok();
+                // Bf branches when false, so: then=fallthrough, else=branch
+                match (fall_target, branch_target) {
+                    (Some((then_off, then_blk)), Some((else_off, else_blk))) => {
+                        let then_args = get_branch_args(stack, block_entry_depths.get(&then_off).copied().unwrap_or(0));
+                        let else_args = get_branch_args(stack, block_entry_depths.get(&else_off).copied().unwrap_or(0));
+                        fb.br_if(cond, then_blk, &then_args, else_blk, &else_args);
+                    }
+                    (Some((off, blk)), None) => {
+                        let ret_blk = fb.create_block();
+                        fb.br_if(cond, blk, &get_branch_args(stack, block_entry_depths.get(&off).copied().unwrap_or(0)), ret_blk, &[]);
+                        fb.switch_to_block(ret_blk);
+                        fb.ret(None);
+                    }
+                    (None, Some((off, blk))) => {
+                        let ret_blk = fb.create_block();
+                        fb.br_if(cond, ret_blk, &[], blk, &get_branch_args(stack, block_entry_depths.get(&off).copied().unwrap_or(0)));
+                        fb.switch_to_block(ret_blk);
+                        fb.ret(None);
+                    }
+                    (None, None) => {
+                        fb.ret(None);
+                    }
+                }
                 *terminated = true;
             }
         }
