@@ -8,6 +8,7 @@ pub mod ast;
 pub mod expr;
 pub mod lexer;
 pub mod macros;
+pub mod parser;
 
 use ast::PassageAst;
 
@@ -16,12 +17,5 @@ use ast::PassageAst;
 /// Errors are accumulated in `PassageAst.errors` rather than aborting —
 /// a single broken passage must not prevent parsing the other 9,999.
 pub fn parse_passage(source: &str) -> PassageAst {
-    // Stub: returns empty AST until parser.rs is implemented in Phase 3.
-    PassageAst {
-        body: Vec::new(),
-        errors: vec![ast::ParseError {
-            span: ast::Span::new(0, source.len()),
-            message: "SugarCube parser not yet implemented".into(),
-        }],
-    }
+    parser::parse(source)
 }
