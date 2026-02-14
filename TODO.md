@@ -687,14 +687,11 @@ The decompiled GML reference for Bounty is at `~/git/bounty/`. Scripts in
 
 ### Critical
 
-- [ ] **`Op::MethodCall` IR node + remove `receiver_is_first_arg`** — The shared
-  `lower_call` in the backend has a `receiver_is_first_arg` bool on `LowerCtx`
-  to distinguish Flash (first arg = receiver → `receiver.method(rest)`) from
-  GameMaker (all args are plain function args). This is a hack. The proper fix
-  is to add `Op::MethodCall { receiver, method, args }` to the core IR so Flash
-  uses it for `CallProperty`/`CallPropVoid` and `Op::Call` remains purely for
-  free function calls. Then `lower_call` doesn't need the flag — it always emits
-  free calls, and `Op::MethodCall` always emits `receiver.method(args)`.
+- [x] **`Op::MethodCall` IR node + remove `receiver_is_first_arg`** — Done.
+  `Op::MethodCall { receiver, method, args }` added to core IR. Flash frontend
+  uses `fb.call_method()` for CallProperty/CallPropVoid/CallPropLex/CallStatic/
+  CallMethod. GameMaker uses plain `Op::Call` (no method dispatch). Backend
+  lowers `MethodCall` to `receiver.method(args)` without any per-engine flag.
 
 - [x] **2D array write: stack pop order** — Fixed. The GML bytecode stack
   layout for 2D array Pop instructions is `[value, dim2, dim1]` with dim1 on
@@ -757,7 +754,37 @@ Several related issues around boolean handling in GML output. GML has no
 dedicated boolean type — `true`/`false` are 1/0 at runtime. The bytecode
 preserves these as integers, losing boolean semantics.
 
-- [ ] **Short-circuit `||`/`&&` emitted as nested ternaries** — The IR
+- [x] **Stacktop-via-ref_type stack imbalance** — Fixed. In pre-GMS2 bytecode,
+  `ref_type=0x80` with `instance >= 0` encodes a stacktop reference (the
+  target instance is on the operand stack). The translator was treating these
+  as normal field access, causing Pop to consume 1 value instead of 2 and
+  Push to consume 0 instead of 1. This left the stack unbalanced — the
+  `repeat` loop counter would get buried under unconsumed values, making
+  the decrement instruction operate on the wrong value.
+
+- [x] **Empty `while (true) {}` loop bodies (general loop structurizer)** —
+  Fixed. The structurizer's `emitted` set prevents exponential blowup by
+  skipping already-visited blocks. When a general loop's header was also its
+  body entry, the header was marked as emitted before `structurize_loop`
+  could process it, producing empty loop bodies. Fixed by removing the
+  header from `emitted` in `structurize_general_loop` before re-entering.
+  Restored 25 `repeat`/`with` loop bodies in Bounty.
+
+- [x] **Guard clause drops continuation branch assigns** — Fixed. When the
+  structurizer emits a guard clause (one branch terminates, the other
+  continues), block-param assignments for the continuation branch were
+  lost. Now when the continuation has assigns, it's nested inside the
+  else body instead of flattened as a sibling.
+
+- [ ] **General loop block-param counter uses initial value** — In `repeat(N)`
+  loops emitted as `while (true) { ... }`, the loop counter decrement
+  `v10 - 1` renders as `v100 - 1` (using the initial entry value instead
+  of the mutable loop variable). The IR is correct (`sub v10, v120` where
+  v10 is a block param), but the emitter resolves v10 to v100 somewhere
+  in the build_val → name_coalescing → forward_substitute pipeline. The
+  root cause is not yet identified. Affects all `repeat` loops with counters.
+
+- [x] **Short-circuit `||`/`&&` emitted as nested ternaries** — Fixed. The IR
   encodes boolean short-circuit evaluation as BrIf chains with block params
   carrying 0/1. The structurizer emits these as `(A) ? 1 : ((B) ? (C) : 0)`
   instead of `A || (B && C)`. Example in `advantage_add`: the condition
@@ -811,16 +838,11 @@ assigned from `variable_global_get()` or untyped argument passthrough.
 
 ### Medium Priority (output quality)
 
-- [ ] **While → for loop promotion** — GML `for` loops emit as `while` with
-  a separate `let i = 0` init and `i += 1` increment in the else branch.
-  Example: `let i = 0; while (i < 20) { ... } else { i += 1; continue; }`
-  should be `for (let i = 0; i < 20; i++)`. Pattern: alloc + store(0) before
-  a while-loop, increment + `br back-edge` in the else/continue path. Could
-  detect in the structurizer (recognize the init-condition-increment pattern)
-  or as an AST-level rewrite. The Flash frontend already handles this via
-  `try_for_loop` in the structurizer — GML should use the same mechanism,
-  but the init/increment may be in different blocks due to the else-continue
-  structure.
+- [x] **While → for loop promotion** — Fixed. AST-level rewrite pass
+  `promote_while_to_for` detects `init; while (cond) { body; update; }`
+  patterns and rewrites as `for (init; cond; update) { body }`. Handles both
+  VarDecl and Assign inits, looks backwards past non-related declarations,
+  and supports tail-increment and else-continue-increment patterns.
 - [ ] **Sprite constant resolution** — `this.sprite_index = 34` should be
   `this.sprite_index = Sprites.spr_dice`. Requires mapping sprite indices to
   enum names at emission time (the Sprites enum already exists in data output).
