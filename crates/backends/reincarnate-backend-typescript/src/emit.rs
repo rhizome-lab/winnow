@@ -94,7 +94,7 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
             emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
         }
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, debug, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &module.sprite_names, debug, &mut out)?;
         }
     }
 
@@ -658,16 +658,13 @@ fn build_instance_field_sets(module: &Module, type_defs: &BTreeMap<String, Exter
 }
 
 /// Build a qualified name from a ClassDef's namespace + name.
-/// Check if a struct has a `sprite_index` field whose default can be resolved
-/// to a named sprite constant.
+/// Check if a struct has a `sprite_index` field that might reference a sprite
+/// constant — either as a field default or via dynamic assignment in methods.
 fn needs_sprite_import(struct_def: &StructDef, sprite_names: &[String]) -> bool {
     if sprite_names.is_empty() {
         return false;
     }
-    struct_def.fields.iter().any(|(name, _, default)| {
-        name == "sprite_index"
-            && matches!(default, Some(Constant::Int(idx)) if (*idx as usize) < sprite_names.len())
-    })
+    struct_def.fields.iter().any(|(name, _, _)| name == "sprite_index")
 }
 
 /// Try to resolve a sprite_index field default to a `Sprites.Name` string.
@@ -948,7 +945,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
 
         emit_imports(module, &mut out);
         for &fid in &free_funcs {
-            emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, debug, &mut out)?;
+            emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &module.sprite_names, debug, &mut out)?;
         }
         strip_unused_namespace_imports(&mut out);
         let path = module_dir.join("_init.ts");
@@ -1176,6 +1173,20 @@ fn strip_unused_namespace_imports(out: &mut String) {
         // Check whether `ALIAS.` appears anywhere AFTER this import line.
         let needle = format!("{alias}.");
         if !out[line_end..].contains(&needle) {
+            removals.push((start, line_end));
+        }
+    }
+
+    // Also strip `import { Sprites } from "..."` when `Sprites.` never appears.
+    for (start, _) in out
+        .match_indices("import { Sprites }")
+        .collect::<Vec<_>>()
+    {
+        let line_end = out[start..]
+            .find('\n')
+            .map(|i| start + i + 1)
+            .unwrap_or(out.len());
+        if !out[line_end..].contains("Sprites.") {
             removals.push((start, line_end));
         }
     }
@@ -2238,7 +2249,7 @@ fn emit_functions(
     out: &mut String,
 ) -> Result<(), CoreError> {
     for id in module.functions.keys().collect::<Vec<_>>() {
-        emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, debug, out)?;
+        emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, &module.sprite_names, debug, out)?;
     }
     Ok(())
 }
@@ -2251,6 +2262,7 @@ fn emit_function(
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    sprite_names: &[String],
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2267,7 +2279,7 @@ fn emit_function(
     };
     let js_func = crate::lower::lower_function(&ast, &ctx);
     let mut js_func = match engine {
-        EngineKind::GameMaker => crate::rewrites::gamemaker::rewrite_gamemaker_function(js_func),
+        EngineKind::GameMaker => crate::rewrites::gamemaker::rewrite_gamemaker_function(js_func, sprite_names),
         EngineKind::Flash => {
             let rewrite_ctx = crate::rewrites::flash::FlashRewriteCtx {
                 class_names: class_names.clone(),
@@ -2572,7 +2584,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, debug, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, debug, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2656,6 +2668,7 @@ fn emit_class_method(
     known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    sprite_names: &[String],
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2699,7 +2712,7 @@ fn emit_class_method(
     let ctx = crate::lower::LowerCtx { self_param_name };
     let js_func = crate::lower::lower_function(&ast, &ctx);
     let mut js_func = match engine {
-        EngineKind::GameMaker => crate::rewrites::gamemaker::rewrite_gamemaker_function(js_func),
+        EngineKind::GameMaker => crate::rewrites::gamemaker::rewrite_gamemaker_function(js_func, sprite_names),
         EngineKind::Flash => {
             let rewrite_ctx = crate::rewrites::flash::FlashRewriteCtx {
                 class_names: class_names.clone(),

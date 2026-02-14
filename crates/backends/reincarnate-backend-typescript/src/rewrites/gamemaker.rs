@@ -28,14 +28,14 @@ pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'stati
 }
 
 /// Rewrite a function's body, resolving GameMaker SystemCalls.
-pub fn rewrite_gamemaker_function(mut func: JsFunction) -> JsFunction {
-    rewrite_stmts(&mut func.body);
+pub fn rewrite_gamemaker_function(mut func: JsFunction, sprite_names: &[String]) -> JsFunction {
+    rewrite_stmts(&mut func.body, sprite_names);
     func
 }
 
-fn rewrite_stmts(stmts: &mut Vec<JsStmt>) {
+fn rewrite_stmts(stmts: &mut Vec<JsStmt>, sprite_names: &[String]) {
     for stmt in stmts.iter_mut() {
-        rewrite_stmt(stmt);
+        rewrite_stmt(stmt, sprite_names);
     }
     collapse_with_blocks(stmts);
 }
@@ -102,20 +102,22 @@ fn collapse_with_blocks(stmts: &mut Vec<JsStmt>) {
     }
 }
 
-fn rewrite_stmt(stmt: &mut JsStmt) {
+fn rewrite_stmt(stmt: &mut JsStmt, sprite_names: &[String]) {
     match stmt {
         JsStmt::VarDecl { init, .. } => {
             if let Some(expr) = init {
-                rewrite_expr(expr);
+                rewrite_expr(expr, sprite_names);
             }
         }
         JsStmt::Assign { target, value } => {
-            rewrite_expr(target);
-            rewrite_expr(value);
+            rewrite_expr(target, sprite_names);
+            rewrite_expr(value, sprite_names);
+            try_resolve_sprite_assign(target, value, sprite_names);
         }
         JsStmt::CompoundAssign { target, value, .. } => {
-            rewrite_expr(target);
-            rewrite_expr(value);
+            rewrite_expr(target, sprite_names);
+            rewrite_expr(value, sprite_names);
+            try_resolve_sprite_assign(target, value, sprite_names);
         }
         JsStmt::Expr(e) => {
             // Intercept global set with constant key → global.field = val
@@ -136,7 +138,7 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
                     let JsExpr::Literal(Constant::String(field_name)) = name_expr else {
                         unreachable!()
                     };
-                    rewrite_expr(&mut val);
+                    rewrite_expr(&mut val, sprite_names);
                     *stmt = JsStmt::Assign {
                         target: JsExpr::Field {
                             object: Box::new(JsExpr::Var("global".into())),
@@ -184,7 +186,7 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
                                 field: field_name,
                             };
                             let mut val = val;
-                            rewrite_expr(&mut val);
+                            rewrite_expr(&mut val, sprite_names);
                             *stmt = JsStmt::Assign { target, value: val };
                             return;
                         }
@@ -202,7 +204,7 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
                             let JsExpr::Literal(Constant::String(field_name)) = field else {
                                 unreachable!()
                             };
-                            rewrite_expr(&mut index_expr);
+                            rewrite_expr(&mut index_expr, sprite_names);
                             let target = JsExpr::Index {
                                 collection: Box::new(JsExpr::Field {
                                     object: Box::new(JsExpr::Index {
@@ -217,7 +219,7 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
                                 index: Box::new(index_expr),
                             };
                             let mut val = val;
-                            rewrite_expr(&mut val);
+                            rewrite_expr(&mut val, sprite_names);
                             *stmt = JsStmt::Assign { target, value: val };
                             return;
                         }
@@ -225,22 +227,22 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
                     }
                 }
             }
-            rewrite_expr(e);
+            rewrite_expr(e, sprite_names);
         }
-        JsStmt::Return(Some(e)) => rewrite_expr(e),
+        JsStmt::Return(Some(e)) => rewrite_expr(e, sprite_names),
         JsStmt::Return(None) => {}
         JsStmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            rewrite_expr(cond);
-            rewrite_stmts(then_body);
-            rewrite_stmts(else_body);
+            rewrite_expr(cond, sprite_names);
+            rewrite_stmts(then_body, sprite_names);
+            rewrite_stmts(else_body, sprite_names);
         }
         JsStmt::While { cond, body } => {
-            rewrite_expr(cond);
-            rewrite_stmts(body);
+            rewrite_expr(cond, sprite_names);
+            rewrite_stmts(body, sprite_names);
         }
         JsStmt::For {
             init,
@@ -248,22 +250,22 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
             update,
             body,
         } => {
-            rewrite_stmts(init);
-            rewrite_expr(cond);
-            rewrite_stmts(update);
-            rewrite_stmts(body);
+            rewrite_stmts(init, sprite_names);
+            rewrite_expr(cond, sprite_names);
+            rewrite_stmts(update, sprite_names);
+            rewrite_stmts(body, sprite_names);
         }
         JsStmt::Loop { body } => {
-            rewrite_stmts(body);
+            rewrite_stmts(body, sprite_names);
         }
         JsStmt::ForOf { iterable, body, .. } => {
-            rewrite_expr(iterable);
-            rewrite_stmts(body);
+            rewrite_expr(iterable, sprite_names);
+            rewrite_stmts(body, sprite_names);
         }
-        JsStmt::Throw(e) => rewrite_expr(e),
+        JsStmt::Throw(e) => rewrite_expr(e, sprite_names),
         JsStmt::Dispatch { blocks, .. } => {
             for (_, stmts) in blocks {
-                rewrite_stmts(stmts);
+                rewrite_stmts(stmts, sprite_names);
             }
         }
         JsStmt::Switch {
@@ -271,19 +273,40 @@ fn rewrite_stmt(stmt: &mut JsStmt) {
             cases,
             default_body,
         } => {
-            rewrite_expr(value);
+            rewrite_expr(value, sprite_names);
             for (_, stmts) in cases {
-                rewrite_stmts(stmts);
+                rewrite_stmts(stmts, sprite_names);
             }
-            rewrite_stmts(default_body);
+            rewrite_stmts(default_body, sprite_names);
         }
         JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {}
     }
 }
 
-fn rewrite_expr(expr: &mut JsExpr) {
+/// If `target` is a `Field { field: "sprite_index", .. }` and `value` is a
+/// `Literal(Int(idx))` within range, replace the value with `Sprites.Name`.
+fn try_resolve_sprite_assign(target: &JsExpr, value: &mut JsExpr, sprite_names: &[String]) {
+    if sprite_names.is_empty() {
+        return;
+    }
+    let is_sprite_field = matches!(target, JsExpr::Field { field, .. } if field == "sprite_index");
+    if !is_sprite_field {
+        return;
+    }
+    if let JsExpr::Literal(Constant::Int(idx)) = value {
+        let idx = *idx as usize;
+        if let Some(name) = sprite_names.get(idx) {
+            *value = JsExpr::Field {
+                object: Box::new(JsExpr::Var("Sprites".into())),
+                field: name.clone(),
+            };
+        }
+    }
+}
+
+fn rewrite_expr(expr: &mut JsExpr, sprite_names: &[String]) {
     // First, recurse into children.
-    rewrite_expr_children(expr);
+    rewrite_expr_children(expr, sprite_names);
 
     // Then, attempt to resolve SystemCall patterns.
     let replacement = match expr {
@@ -300,27 +323,27 @@ fn rewrite_expr(expr: &mut JsExpr) {
     }
 }
 
-fn rewrite_expr_children(expr: &mut JsExpr) {
+fn rewrite_expr_children(expr: &mut JsExpr, sprite_names: &[String]) {
     match expr {
         JsExpr::Binary { lhs, rhs, .. } | JsExpr::Cmp { lhs, rhs, .. } => {
-            rewrite_expr(lhs);
-            rewrite_expr(rhs);
+            rewrite_expr(lhs, sprite_names);
+            rewrite_expr(rhs, sprite_names);
         }
         JsExpr::LogicalOr { lhs, rhs } | JsExpr::LogicalAnd { lhs, rhs } => {
-            rewrite_expr(lhs);
-            rewrite_expr(rhs);
+            rewrite_expr(lhs, sprite_names);
+            rewrite_expr(rhs, sprite_names);
         }
-        JsExpr::Unary { expr: inner, .. } => rewrite_expr(inner),
-        JsExpr::Not(inner) | JsExpr::PostIncrement(inner) => rewrite_expr(inner),
-        JsExpr::Field { object, .. } => rewrite_expr(object),
+        JsExpr::Unary { expr: inner, .. } => rewrite_expr(inner, sprite_names),
+        JsExpr::Not(inner) | JsExpr::PostIncrement(inner) => rewrite_expr(inner, sprite_names),
+        JsExpr::Field { object, .. } => rewrite_expr(object, sprite_names),
         JsExpr::Index { collection, index } => {
-            rewrite_expr(collection);
-            rewrite_expr(index);
+            rewrite_expr(collection, sprite_names);
+            rewrite_expr(index, sprite_names);
         }
         JsExpr::Call { callee, args } => {
-            rewrite_expr(callee);
+            rewrite_expr(callee, sprite_names);
             for arg in args {
-                rewrite_expr(arg);
+                rewrite_expr(arg, sprite_names);
             }
         }
         JsExpr::Ternary {
@@ -328,61 +351,61 @@ fn rewrite_expr_children(expr: &mut JsExpr) {
             then_val,
             else_val,
         } => {
-            rewrite_expr(cond);
-            rewrite_expr(then_val);
-            rewrite_expr(else_val);
+            rewrite_expr(cond, sprite_names);
+            rewrite_expr(then_val, sprite_names);
+            rewrite_expr(else_val, sprite_names);
         }
         JsExpr::ArrayInit(items) | JsExpr::TupleInit(items) => {
             for item in items {
-                rewrite_expr(item);
+                rewrite_expr(item, sprite_names);
             }
         }
         JsExpr::ObjectInit(fields) => {
             for (_, val) in fields {
-                rewrite_expr(val);
+                rewrite_expr(val, sprite_names);
             }
         }
         JsExpr::New { callee, args } => {
-            rewrite_expr(callee);
+            rewrite_expr(callee, sprite_names);
             for arg in args {
-                rewrite_expr(arg);
+                rewrite_expr(arg, sprite_names);
             }
         }
-        JsExpr::TypeOf(inner) => rewrite_expr(inner),
+        JsExpr::TypeOf(inner) => rewrite_expr(inner, sprite_names),
         JsExpr::In { key, object } => {
-            rewrite_expr(key);
-            rewrite_expr(object);
+            rewrite_expr(key, sprite_names);
+            rewrite_expr(object, sprite_names);
         }
         JsExpr::Delete { object, key } => {
-            rewrite_expr(object);
-            rewrite_expr(key);
+            rewrite_expr(object, sprite_names);
+            rewrite_expr(key, sprite_names);
         }
         JsExpr::Cast { expr: inner, .. } | JsExpr::TypeCheck { expr: inner, .. } => {
-            rewrite_expr(inner)
+            rewrite_expr(inner, sprite_names)
         }
-        JsExpr::ArrowFunction { body, .. } => rewrite_stmts(body),
+        JsExpr::ArrowFunction { body, .. } => rewrite_stmts(body, sprite_names),
         JsExpr::SuperCall(args) | JsExpr::SuperMethodCall { args, .. } => {
             for arg in args {
-                rewrite_expr(arg);
+                rewrite_expr(arg, sprite_names);
             }
         }
         JsExpr::SuperGet(_) => {}
-        JsExpr::SuperSet { value, .. } => rewrite_expr(value),
+        JsExpr::SuperSet { value, .. } => rewrite_expr(value, sprite_names),
         JsExpr::GeneratorCreate { args, .. } => {
             for arg in args {
-                rewrite_expr(arg);
+                rewrite_expr(arg, sprite_names);
             }
         }
-        JsExpr::GeneratorResume(inner) => rewrite_expr(inner),
+        JsExpr::GeneratorResume(inner) => rewrite_expr(inner, sprite_names),
         JsExpr::Yield(inner) => {
             if let Some(e) = inner {
-                rewrite_expr(e);
+                rewrite_expr(e, sprite_names);
             }
         }
         JsExpr::Activation => {}
         JsExpr::SystemCall { args, .. } => {
             for arg in args {
-                rewrite_expr(arg);
+                rewrite_expr(arg, sprite_names);
             }
         }
         // Leaf nodes — nothing to recurse into.
