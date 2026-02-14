@@ -481,6 +481,18 @@ fn infer_inst_type(
                         return None;
                     }
                 }
+                // GameMaker.Global get: resolve from global_types.
+                ("GameMaker.Global", "get") => {
+                    if let Some(first) = args.first() {
+                        if let Some(name) = const_strings.get(first) {
+                            ctx.global_types.get(name.as_str()).cloned().unwrap_or(Type::Dynamic)
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
                 _ => return None,
             }
         }
@@ -512,6 +524,53 @@ fn infer_common_type<'a>(mut types: impl Iterator<Item = &'a Type>) -> Type {
         }
     }
     result
+}
+
+/// Cross-function scan: collect value types from all `SystemCall("GameMaker.Global", "set")`
+/// instructions. Returns a map from global name → inferred type.
+fn build_global_types(module: &Module) -> HashMap<String, Type> {
+    let mut global_stores: HashMap<String, Option<Type>> = HashMap::new();
+    for func in module.functions.values() {
+        let const_strings: HashMap<ValueId, &str> = func
+            .insts
+            .values()
+            .filter_map(|inst| {
+                if let Op::Const(Constant::String(s)) = &inst.op {
+                    Some((inst.result?, s.as_str()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for inst in func.insts.values() {
+            if let Op::SystemCall {
+                system,
+                method,
+                args,
+            } = &inst.op
+            {
+                if system == "GameMaker.Global" && method == "set" && args.len() == 2 {
+                    if let Some(name) = const_strings.get(&args[0]) {
+                        let value_ty = func.value_types[args[1]].clone();
+                        if value_ty != Type::Dynamic {
+                            let entry =
+                                global_stores.entry(name.to_string()).or_insert(None);
+                            match entry {
+                                None => *entry = Some(value_ty),
+                                Some(existing) => {
+                                    *existing = union_type(existing.clone(), value_ty)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    global_stores
+        .into_iter()
+        .filter_map(|(name, ty)| ty.map(|t| (name, t)))
+        .collect()
 }
 
 /// Run type inference on a single function within the given module context.
@@ -659,6 +718,27 @@ impl Transform for TypeInference {
             if inferred != Type::Dynamic && func.sig.return_ty != inferred {
                 func.sig.return_ty = inferred;
                 changed = true;
+            }
+        }
+
+        // Phase 3: cross-function global type inference from write sites.
+        let inferred_globals = build_global_types(&module);
+        let mut globals_changed = false;
+        for g in &mut module.globals {
+            if g.ty == Type::Dynamic {
+                if let Some(inferred) = inferred_globals.get(&g.name) {
+                    g.ty = inferred.clone();
+                    globals_changed = true;
+                    changed = true;
+                }
+            }
+        }
+
+        // Re-run per-function inference with updated global types.
+        if globals_changed {
+            let ctx = ModuleContext::from_module(&module);
+            for func in module.functions.keys().collect::<Vec<_>>() {
+                changed |= infer_function(&mut module.functions[func], &ctx);
             }
         }
 
@@ -1418,5 +1498,57 @@ mod tests {
             Op::Alloc(ty) => assert_eq!(*ty, Type::Dynamic),
             other => panic!("expected Alloc, got {:?}", other),
         }
+    }
+
+    /// Cross-function global type inference: a set in one function types a get in another.
+    #[test]
+    fn global_type_inferred_from_write_site() {
+        // Writer function: global.set("score", 42)
+        let writer_sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Void, ..Default::default() };
+        let mut writer_fb =
+            FunctionBuilder::new("writer", writer_sig, Visibility::Public);
+        let name = writer_fb.const_string("score");
+        let val = writer_fb.const_int(42);
+        writer_fb.system_call("GameMaker.Global", "set", &[name, val], Type::Void);
+        writer_fb.ret(None);
+        let writer = writer_fb.build();
+
+        // Reader function: global.get("score") — should resolve to Int(64)
+        let reader_sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Dynamic, ..Default::default() };
+        let mut reader_fb =
+            FunctionBuilder::new("reader", reader_sig, Visibility::Public);
+        let name2 = reader_fb.const_string("score");
+        let result = reader_fb.system_call(
+            "GameMaker.Global", "get", &[name2], Type::Dynamic,
+        );
+        reader_fb.ret(Some(result));
+        let reader = reader_fb.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_global(Global {
+            name: "score".into(),
+            ty: Type::Dynamic,
+            visibility: Visibility::Public,
+            mutable: true,
+            init: None,
+        });
+        mb.add_function(writer);
+        mb.add_function(reader);
+        let module = mb.build();
+
+        let transform = TypeInference;
+        let module = transform.apply(module).unwrap().module;
+
+        // Global type should be inferred from the write site.
+        let score_global = module.globals.iter().find(|g| g.name == "score").unwrap();
+        assert_eq!(score_global.ty, Type::Int(64));
+
+        // Reader's get result should now be Int(64).
+        let reader_func = &module.functions[FuncId::new(1)];
+        assert_eq!(reader_func.value_types[result], Type::Int(64));
     }
 }
