@@ -353,6 +353,214 @@ pub fn dom_tree_preorder(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+pub(crate) mod test_helpers {
+    use super::*;
+    use crate::entity::EntityRef;
+    use crate::ir::builder::ModuleBuilder;
+    use crate::ir::{BlockId, FuncId, Function, Op, ValueId};
+    use crate::pipeline::Transform;
+    use std::collections::HashSet;
+
+    /// Validate IR well-formedness — panics with diagnostic on any violation.
+    pub fn assert_well_formed(func: &Function) {
+        let all_values: HashSet<ValueId> = (0..func.value_types.len())
+            .map(|i| ValueId::new(i as u32))
+            .collect();
+
+        // Build the set of blocks that contain instructions.
+        let reachable_blocks: HashSet<BlockId> = {
+            let mut reachable = HashSet::new();
+            let mut worklist = vec![func.entry];
+            reachable.insert(func.entry);
+            while let Some(block_id) = worklist.pop() {
+                for &inst_id in &func.blocks[block_id].insts {
+                    for target in branch_targets(&func.insts[inst_id].op) {
+                        if reachable.insert(target) {
+                            worklist.push(target);
+                        }
+                    }
+                }
+            }
+            reachable
+        };
+
+        for &block_id in &reachable_blocks {
+            let block = &func.blocks[block_id];
+
+            // Check block params have valid value IDs.
+            for param in &block.params {
+                assert!(
+                    all_values.contains(&param.value),
+                    "block {:?} param {:?} not in value_types",
+                    block_id,
+                    param.value
+                );
+            }
+
+            // Check instructions.
+            assert!(
+                !block.insts.is_empty(),
+                "reachable block {:?} has no instructions",
+                block_id
+            );
+
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id];
+
+                // Check result value exists.
+                if let Some(result) = inst.result {
+                    assert!(
+                        all_values.contains(&result),
+                        "inst {:?} result {:?} not in value_types",
+                        inst_id,
+                        result
+                    );
+                }
+
+                // Check operand values exist.
+                for operand in value_operands(&inst.op) {
+                    assert!(
+                        all_values.contains(&operand),
+                        "inst {:?} operand {:?} not in value_types (op: {:?})",
+                        inst_id,
+                        operand,
+                        inst.op
+                    );
+                }
+
+                // Check branch targets are valid blocks.
+                for target in branch_targets(&inst.op) {
+                    assert!(
+                        func.blocks.keys().any(|b| b == target),
+                        "inst {:?} branches to non-existent block {:?}",
+                        inst_id,
+                        target
+                    );
+                }
+            }
+
+            // Check last instruction is a terminator.
+            let last_inst = &func.insts[*block.insts.last().unwrap()];
+            assert!(
+                matches!(
+                    &last_inst.op,
+                    Op::Br { .. }
+                        | Op::BrIf { .. }
+                        | Op::Switch { .. }
+                        | Op::Return(_)
+                        | Op::Yield(_)
+                ),
+                "reachable block {:?} does not end with a terminator, last op: {:?}",
+                block_id,
+                last_inst.op
+            );
+
+            // Check branch arg count matches target block param count.
+            let last_op = &last_inst.op;
+            check_branch_arg_counts(func, block_id, last_op);
+        }
+    }
+
+    fn check_branch_arg_counts(func: &Function, _src: BlockId, op: &Op) {
+        match op {
+            Op::Br { target, args } => {
+                let param_count = func.blocks[*target].params.len();
+                assert_eq!(
+                    args.len(),
+                    param_count,
+                    "Br to {:?} has {} args but target has {} params",
+                    target,
+                    args.len(),
+                    param_count
+                );
+            }
+            Op::BrIf {
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+                ..
+            } => {
+                let then_params = func.blocks[*then_target].params.len();
+                assert_eq!(
+                    then_args.len(),
+                    then_params,
+                    "BrIf then-arm to {:?} has {} args but target has {} params",
+                    then_target,
+                    then_args.len(),
+                    then_params
+                );
+                let else_params = func.blocks[*else_target].params.len();
+                assert_eq!(
+                    else_args.len(),
+                    else_params,
+                    "BrIf else-arm to {:?} has {} args but target has {} params",
+                    else_target,
+                    else_args.len(),
+                    else_params
+                );
+            }
+            Op::Switch {
+                cases, default, ..
+            } => {
+                for (val, target, args) in cases {
+                    let param_count = func.blocks[*target].params.len();
+                    assert_eq!(
+                        args.len(),
+                        param_count,
+                        "Switch case {:?} to {:?} has {} args but target has {} params",
+                        val,
+                        target,
+                        args.len(),
+                        param_count
+                    );
+                }
+                let default_params = func.blocks[default.0].params.len();
+                assert_eq!(
+                    default.1.len(),
+                    default_params,
+                    "Switch default to {:?} has {} args but target has {} params",
+                    default.0,
+                    default.1.len(),
+                    default_params
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Apply a transform, validate well-formedness, then apply again and assert
+    /// the second run reports no changes (idempotent).
+    pub fn assert_idempotent<T: Transform>(pass: &T, func: Function) {
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+        let r1 = pass.apply(module).unwrap();
+        assert_well_formed(&r1.module.functions[FuncId::new(0)]);
+        let r2 = pass.apply(r1.module).unwrap();
+        assert!(
+            !r2.changed,
+            "{} not idempotent: second apply still reports changes",
+            pass.name()
+        );
+        assert_well_formed(&r2.module.functions[FuncId::new(0)]);
+    }
+
+    /// Apply a transform to a function, returning the (changed, Function) pair.
+    pub fn apply_transform<T: Transform>(pass: &T, func: Function) -> (bool, Function) {
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+        let result = pass.apply(module).unwrap();
+        (
+            result.changed,
+            result.module.functions[FuncId::new(0)].clone(),
+        )
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::EntityRef;
