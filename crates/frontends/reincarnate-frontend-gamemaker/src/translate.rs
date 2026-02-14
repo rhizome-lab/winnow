@@ -123,6 +123,10 @@ pub fn translate_code_entry(
 
     // Pass 3: Translate instructions.
     let mut stack: Vec<ValueId> = Vec::new();
+    // Track GML type sizes (in 4-byte units) for each value on the stack.
+    // Used by Dup to compute correct item count when items have different sizes
+    // (e.g., Variable = 4 units vs Int16 = 1 unit).
+    let mut gml_sizes: HashMap<ValueId, u8> = HashMap::new();
     fb.switch_to_block(fb.entry_block());
     let mut terminated = false;
 
@@ -139,6 +143,10 @@ pub fn translate_code_entry(
                 fb.switch_to_block(block);
                 stack.clear();
                 if let Some(params) = block_params.get(&inst.offset) {
+                    for &p in params {
+                        // Block params are Variable-sized (16 bytes = 4 units).
+                        gml_sizes.insert(p, 4);
+                    }
                     stack.extend(params.iter().copied());
                 }
                 terminated = false;
@@ -160,6 +168,7 @@ pub fn translate_code_entry(
             ctx,
             &mut terminated,
             &block_entry_depths,
+            &mut gml_sizes,
         )?;
     }
 
@@ -698,6 +707,23 @@ fn is_stacktop_ref(var_ref: &VariableRef, instance: i16) -> bool {
     instance >= 0 && var_ref.ref_type == 0x80
 }
 
+/// Return the GML stack slot size of a DataType in 4-byte units.
+///
+/// The GML VM stack uses variable-width slots:
+///   - Int16, Int32, Boolean, String: 4 bytes (1 unit)
+///   - Double, Int64: 8 bytes (2 units)
+///   - Variable (RValue): 16 bytes (4 units)
+///
+/// This matters for `Dup(N)` which duplicates `(N+1) * sizeof(type1)` bytes,
+/// not `N+1` items.
+fn gml_slot_units(dt: DataType) -> u8 {
+    match dt {
+        DataType::Variable => 4,
+        DataType::Double | DataType::Int64 => 2,
+        _ => 1, // Int16, Int32, Boolean, String
+    }
+}
+
 /// Compute the stack effect (pops, pushes) of an instruction.
 fn stack_effect(inst: &Instruction) -> (usize, usize) {
     match inst.opcode {
@@ -723,12 +749,21 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
         Opcode::Cmp => (2, 1),
         Opcode::Conv => (1, 1),
         Opcode::Dup => {
-            // Dup(N) duplicates the top N+1 values on the stack.
+            // Dup(N) duplicates `(N+1) * sizeof(type1)` bytes from the stack.
             // In GMS2.3+, the high byte of N is DupExtra (swap/struct flags);
-            // only the low byte is the actual count.
+            // only the low byte is the actual duplication size.
+            // When DupExtra != 0 AND type1=Variable AND size=0 → no-op (struct swap marker).
+            // When DupExtra != 0 AND size > 0 → swap mode (reorders, no net change).
+            // The actual item count depends on stack item type sizes (tracked by gml_sizes),
+            // so this approximation uses type1-based counting for depth prediction.
             if let Operand::Dup(n) = inst.operand {
-                let count = (n & 0xFF) as usize + 1;
-                (0, count)
+                let dup_extra = (n >> 8) & 0xFF;
+                let dup_size = n & 0xFF;
+                if dup_extra != 0 {
+                    (0, 0) // swap or no-op: no net item change
+                } else {
+                    (0, dup_size as usize + 1)
+                }
             } else {
                 (0, 1)
             }
@@ -757,10 +792,11 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
             }
         }
         Opcode::CallV => {
+            // CallV pops: function ref + instance + argc args
             if let Operand::Call { argc, .. } = inst.operand {
-                (argc as usize + 1, 1)
+                (argc as usize + 2, 1)
             } else {
-                (1, 1)
+                (2, 1)
             }
         }
         Opcode::Ret => (1, 0),
@@ -772,7 +808,8 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
         Opcode::Break => {
             if let Operand::Break { signal, .. } = inst.operand {
                 match signal {
-                    0xFFFF | 0xFFFC | 0xFFFB => (0, 0), // chkindex, pushac, setowner
+                    0xFFFF | 0xFFFC => (0, 0),            // chkindex, pushac
+                    0xFFFB => (1, 0),                     // setowner — pops owner ID
                     0xFFFE => (2, 1),                     // pushaf
                     0xFFFD => (3, 0),                     // popaf
                     0xFFF6 => (0, 1),                     // chknullish — pushes boolean
@@ -894,13 +931,25 @@ fn translate_instruction(
     ctx: &TranslateCtx,
     terminated: &mut bool,
     block_entry_depths: &HashMap<usize, usize>,
+    gml_sizes: &mut HashMap<ValueId, u8>,
 ) -> Result<(), String> {
     match inst.opcode {
         // ============================================================
         // Constants
         // ============================================================
         Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
+            let depth_before = stack.len();
             translate_push(inst, fb, stack, locals, ctx)?;
+            // Annotate newly pushed value with its GML type size.
+            if stack.len() > depth_before {
+                if let Some(&val) = stack.last() {
+                    let units = match &inst.operand {
+                        Operand::Variable { .. } => 4, // Variable reads → RValue (16 bytes)
+                        _ => gml_slot_units(inst.type1),
+                    };
+                    gml_sizes.insert(val, units);
+                }
+            }
         }
 
         // ============================================================
@@ -909,27 +958,37 @@ fn translate_instruction(
         Opcode::Add => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.add(a, b));
+            let r = fb.add(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Sub => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.sub(a, b));
+            let r = fb.sub(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Mul => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.mul(a, b));
+            let r = fb.mul(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Div => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.div(a, b));
+            let r = fb.div(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Rem | Opcode::Mod => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.rem(a, b));
+            let r = fb.rem(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
 
         // ============================================================
@@ -937,11 +996,15 @@ fn translate_instruction(
         // ============================================================
         Opcode::Neg => {
             let a = pop(stack, inst)?;
-            stack.push(fb.neg(a));
+            let r = fb.neg(a);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Not => {
             let a = pop(stack, inst)?;
-            stack.push(fb.not(a));
+            let r = fb.not(a);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
 
         // ============================================================
@@ -950,27 +1013,37 @@ fn translate_instruction(
         Opcode::And => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.bit_and(a, b));
+            let r = fb.bit_and(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Or => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.bit_or(a, b));
+            let r = fb.bit_or(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Xor => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.bit_xor(a, b));
+            let r = fb.bit_xor(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Shl => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.shl(a, b));
+            let r = fb.shl(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
         Opcode::Shr => {
             let b = pop(stack, inst)?;
             let a = pop(stack, inst)?;
-            stack.push(fb.shr(a, b));
+            let r = fb.shr(a, b);
+            gml_sizes.insert(r, gml_slot_units(inst.type1));
+            stack.push(r);
         }
 
         // ============================================================
@@ -981,7 +1054,9 @@ fn translate_instruction(
             let a = pop(stack, inst)?;
             if let Operand::Comparison(kind) = inst.operand {
                 let cmp_kind = comparison_to_cmp_kind(kind);
-                stack.push(fb.cmp(cmp_kind, a, b));
+                let r = fb.cmp(cmp_kind, a, b);
+                gml_sizes.insert(r, 1); // Boolean = 4 bytes = 1 unit
+                stack.push(r);
             } else {
                 return Err(format!(
                     "{:#x}: Cmp without comparison operand",
@@ -1045,18 +1120,90 @@ fn translate_instruction(
             let _ = pop(stack, inst)?;
         }
         Opcode::Dup => {
-            let count = if let Operand::Dup(n) = inst.operand {
-                (n & 0xFF) as usize + 1
+            if let Operand::Dup(n) = inst.operand {
+                let dup_extra = (n >> 8) & 0xFF;
+                let dup_size = (n & 0xFF) as usize;
+                // GMS2.3+: when DupExtra != 0 AND type1=Variable AND size=0,
+                // the instruction is a struct swap marker — no-op for decompilation.
+                if dup_extra != 0 && inst.type1 == DataType::Variable && dup_size == 0 {
+                    // no-op
+                } else if dup_extra != 0 && dup_size > 0 {
+                    // Dup Swap mode: rearranges stack data without duplicating.
+                    // Pop `dup_size * type_unit` units from top, then `dup_extra * type_unit`
+                    // units from below, then push top back, then push bottom.
+                    // Net effect on item count: 0 (just reorders).
+                    let type_unit = gml_slot_units(inst.type1) as usize;
+                    let top_units_needed = dup_size * type_unit;
+                    let bottom_units_needed = dup_extra as usize * type_unit;
+
+                    // Pop top data
+                    let mut top_items = Vec::new();
+                    let mut top_units = 0;
+                    while top_units < top_units_needed && !stack.is_empty() {
+                        let v = stack.pop().unwrap();
+                        top_units += gml_sizes.get(&v).copied().unwrap_or(1) as usize;
+                        top_items.push(v);
+                    }
+                    // Pop bottom data
+                    let mut bottom_items = Vec::new();
+                    let mut bottom_units = 0;
+                    while bottom_units < bottom_units_needed && !stack.is_empty() {
+                        let v = stack.pop().unwrap();
+                        bottom_units += gml_sizes.get(&v).copied().unwrap_or(1) as usize;
+                        bottom_items.push(v);
+                    }
+                    // Push top back first, then bottom (reverses order)
+                    for &v in top_items.iter().rev() {
+                        stack.push(v);
+                    }
+                    for &v in bottom_items.iter().rev() {
+                        stack.push(v);
+                    }
+                } else {
+                    // Normal dup: duplicate (dup_size + 1) * type_unit units from stack top.
+                    let type_unit = gml_slot_units(inst.type1) as usize;
+                    let total_units = (dup_size + 1) * type_unit;
+
+                    // Count backwards from stack top to find how many items
+                    // correspond to total_units.
+                    let mut units_remaining = total_units;
+                    let mut item_count = 0;
+                    for &v in stack.iter().rev() {
+                        if units_remaining == 0 {
+                            break;
+                        }
+                        let item_units = gml_sizes.get(&v).copied().unwrap_or(1) as usize;
+                        if item_units > units_remaining {
+                            // Item is larger than remaining units — this shouldn't
+                            // happen with well-formed bytecode. Include it anyway.
+                            item_count += 1;
+                            break;
+                        }
+                        units_remaining -= item_units;
+                        item_count += 1;
+                    }
+
+                    if stack.len() < item_count {
+                        return Err(format!(
+                            "{:#x}: Dup({}) on stack of depth {} (need {} items for {} units)",
+                            inst.offset, dup_size, stack.len(), item_count, total_units
+                        ));
+                    }
+                    let start = stack.len() - item_count;
+                    let to_dup: Vec<ValueId> = stack[start..].to_vec();
+                    for &v in &to_dup {
+                        let copied = fb.copy(v);
+                        gml_sizes.insert(copied, gml_sizes.get(&v).copied().unwrap_or(1));
+                        stack.push(copied);
+                    }
+                }
             } else {
-                1
-            };
-            if stack.len() < count {
-                return Err(format!("{:#x}: Dup({}) on stack of depth {}", inst.offset, count - 1, stack.len()));
-            }
-            let start = stack.len() - count;
-            let to_dup: Vec<ValueId> = stack[start..].to_vec();
-            for &v in &to_dup {
+                if stack.is_empty() {
+                    return Err(format!("{:#x}: Dup(0) on stack of depth 0", inst.offset));
+                }
+                let v = *stack.last().unwrap();
                 let copied = fb.copy(v);
+                gml_sizes.insert(copied, gml_sizes.get(&v).copied().unwrap_or(1));
                 stack.push(copied);
             }
         }
@@ -1093,17 +1240,21 @@ fn translate_instruction(
                     args.insert(0, self_val);
                 }
                 let result = fb.call(&func_name, &args, Type::Dynamic);
+                gml_sizes.insert(result, 4); // Call returns Variable (16 bytes)
                 stack.push(result);
             }
         }
         Opcode::CallV => {
             if let Operand::Call { argc, .. } = inst.operand {
                 let callee = pop(stack, inst)?;
+                // CallV also pops the instance/receiver below the function ref.
+                let _instance = pop(stack, inst)?;
                 let mut args = Vec::with_capacity(argc as usize);
                 for _ in 0..argc {
                     args.push(pop(stack, inst)?);
                 }
                 let result = fb.call_indirect(callee, &args, Type::Dynamic);
+                gml_sizes.insert(result, 4); // CallV returns Variable (16 bytes)
                 stack.push(result);
             }
         }
@@ -1115,6 +1266,7 @@ fn translate_instruction(
             let val = pop(stack, inst)?;
             let target_ty = datatype_to_ir_type(inst.type2);
             let coerced = fb.coerce(val, target_ty);
+            gml_sizes.insert(coerced, gml_slot_units(inst.type2));
             stack.push(coerced);
         }
 
@@ -1180,6 +1332,7 @@ fn translate_instruction(
                         let index = pop(stack, inst)?;
                         let array = pop(stack, inst)?;
                         let val = fb.get_index(array, index, Type::Dynamic);
+                        gml_sizes.insert(val, 4); // Variable (16 bytes)
                         stack.push(val);
                     }
                     0xFFFD => {
@@ -1193,12 +1346,17 @@ fn translate_instruction(
                         // pushac — array copy (push reference)
                         // For decompilation, treat as a nop (value already on stack).
                     }
-                    0xFFFB => {} // setowner — nop for decompilation
+                    0xFFFB => {
+                        // setowner — pops the owner instance ID from the stack.
+                        let _ = pop(stack, inst)?;
+                    }
                     0xFFFA => {
                         // isstaticok — static init guard. Pushes true if statics
                         // are already initialized; used with Bt to skip init code.
                         // For decompilation we push false so the init code is emitted.
-                        stack.push(fb.const_bool(false));
+                        let r = fb.const_bool(false);
+                        gml_sizes.insert(r, 1); // Boolean (4 bytes)
+                        stack.push(r);
                     }
                     0xFFF9 => {} // setstatic — set static scope, nop for decompilation
                     0xFFF8 => {} // savearef — save array ref to temp, nop for decompilation
@@ -1212,6 +1370,7 @@ fn translate_instruction(
                         })?;
                         let null_val = fb.const_null();
                         let is_null = fb.cmp(CmpKind::Eq, val, null_val);
+                        gml_sizes.insert(is_null, 1); // Boolean (4 bytes)
                         stack.push(is_null);
                     }
                     0xFFF5 => {
@@ -1224,6 +1383,7 @@ fn translate_instruction(
                             .cloned()
                             .unwrap_or_else(|| format!("func_ref_unknown_{:#x}", abs_addr));
                         let val = fb.global_ref(&func_name, Type::Dynamic);
+                        gml_sizes.insert(val, 4); // Variable (16 bytes)
                         stack.push(val);
                     }
                     _ => {
