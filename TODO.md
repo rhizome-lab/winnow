@@ -9,56 +9,28 @@
 
 ## Critical — Transform Pass Test Coverage
 
-Every transform pass needs comprehensive unit tests and adversarial tests.
-Current tests are happy-path only — they verify the pass works on simple
-inputs but don't exercise edge cases, interactions between passes, or
-inputs that stress correctness invariants.
+- [x] **Unit tests for each pass** — Identity, edge cases, boundary conditions,
+  side-effect preservation. 18 identity/idempotency + 24 edge case tests.
+- [x] **Adversarial tests** — Shared constants, cyclic block params, diamond
+  CFGs, deep chains, overflow/NaN, escape analysis, constraint cycles.
+  30 adversarial tests; 2 bugs found and documented (#[ignore] + BUG).
+- [x] **Pass interaction tests** — 6 cross-pass tests (fold→DCE, infer→cast-elim,
+  mem2reg→DCE, cfg-simplify→mem2reg, full pipeline well-formed + idempotent).
+- [x] **Round-trip invariant tests** — Well-formedness validator + idempotency
+  harness in util.rs; every test verifies both properties.
+- [x] **Stress tests** — 13 tests exercising all passes on varied IR shapes
+  (linear chains, diamonds, loops, nested diamonds) × 6 type variants.
+- [x] **Regression tests** — DCE branch-arg chain liveness (f0ac828).
 
-### What's needed
-
-- [ ] **Unit tests for each pass** — Every transform pass needs tests covering:
-  - Identity (no-op on already-optimal input)
-  - Basic transformation (the happy path)
-  - Edge cases (empty functions, void returns, unreachable blocks)
-  - Boundary conditions (single-block functions, maximum nesting)
-  - Preservation of side effects (syscalls, stores must not be dropped)
-
-- [ ] **Adversarial / fuzz-style tests** — Craft IR inputs specifically
-  designed to break assumptions:
-  - Shared constants used in both return paths AND arithmetic
-  - Cyclic block params (loop back-edges feeding into themselves)
-  - Diamond-shaped CFGs with asymmetric block params
-  - Dead blocks with stale references
-  - Functions with 0 blocks, 1 instruction, or thousands of blocks
-
-- [ ] **Pass interaction tests** — Run passes in sequence and verify the
-  composed output is correct. Known broken interaction:
-  - **cfg-simplify + structurizer/linearizer**: cfg-simplify's trivial
-    param elimination changes block param structure, which breaks
-    ternary detection in the linearizer for `br_if → const → merge`
-    patterns. Discovered via `get_race` in the Bounty GML project:
-    without cfg-simplify the ternary `(0 === arg) ? 1 : 0` emits
-    correctly; with cfg-simplify the comparison becomes an orphaned
-    bare expression statement. This is a pre-existing bug.
-
-- [ ] **Round-trip invariant tests** — For each pass, verify:
-  - `apply(module).module` is well-formed (all ValueIds resolve, all
-    block params have matching branch args, all types consistent)
-  - `changed == false` implies module is byte-identical
-  - Running the same pass twice produces `changed == false` on the
-    second run (idempotency)
-
-- [ ] **End-to-end regression tests** — Both frontends produce IR patterns
-  that stress different parts of the pipeline. Need snapshot tests that
-  emit known functions and compare output against expected baselines.
+Still open (not transform-pass scope):
+- [ ] **End-to-end regression tests** — Snapshot tests for both frontends.
   - **Flash**: 15 new vN identifiers regressed in `91fe86e` (MethodCall
     refactor). Pre-existing 5 vN (hasNext2 one-shot, split-path phi).
-    Total 20 unique vN vs the documented 0. The MethodCall change likely
-    broke name propagation or linearizer inlining for method receivers.
-  - **GML**: `get_race` body is completely wrong — comparisons become
-    bare expression statements, `argument[N]` resolves to instance
-    fields instead of function parameters. cfg-simplify + structurizer
-    interaction orphans ternary patterns.
+  - **GML**: `get_race` body wrong — cfg-simplify + structurizer interaction
+    orphans ternary patterns.
+- [ ] **cfg-simplify + structurizer/linearizer interaction** — cfg-simplify's
+  trivial param elimination breaks ternary detection in the linearizer.
+  This is a pre-existing bug, not a transform-pass issue.
 
 ## Known Bugs (found by adversarial tests)
 

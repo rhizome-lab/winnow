@@ -708,6 +708,55 @@ mod tests {
         assert!(has_add, "live add should be preserved");
     }
 
+    /// Regression: value forwarded through sequential merge blocks via block params
+    /// must be kept alive. Without backward liveness propagation through branch-arg
+    /// chains, intermediate params would be incorrectly eliminated. (fix: f0ac828)
+    #[test]
+    fn branch_arg_chain_liveness() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let val = fb.const_int(42);
+
+        // Build 4 sequential merge blocks, forwarding `val` through each.
+        // entry → if/else → merge1(val) → if/else → merge2(val) → ... → ret
+        let mut current_val = val;
+        for _ in 0..4 {
+            let then_b = fb.create_block();
+            let else_b = fb.create_block();
+            let (merge, merge_params) = fb.create_block_with_params(&[Type::Int(64)]);
+            fb.br_if(cond, then_b, &[], else_b, &[]);
+
+            fb.switch_to_block(then_b);
+            fb.br(merge, &[current_val]);
+
+            fb.switch_to_block(else_b);
+            fb.br(merge, &[current_val]);
+
+            fb.switch_to_block(merge);
+            current_val = merge_params[0];
+        }
+
+        fb.ret(Some(current_val));
+
+        let func = apply_dce(fb.build());
+        // The final merge param should still exist and feed the Return.
+        let has_return_val = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&id| {
+                matches!(func.insts[id].op, Op::Return(Some(_)))
+            })
+        });
+        assert!(has_return_val, "return value must survive branch-arg chain");
+        // All merge blocks should still have their params (not stripped as dead).
+        let non_entry_blocks_with_params = func.blocks.iter()
+            .filter(|(id, _)| *id != func.entry)
+            .filter(|(_, b)| !b.params.is_empty())
+            .count();
+        assert_eq!(non_entry_blocks_with_params, 4, "all 4 merge blocks should keep their params");
+    }
+
     /// SystemCall result unused — call preserved due to side effects.
     #[test]
     fn system_call_kept() {
