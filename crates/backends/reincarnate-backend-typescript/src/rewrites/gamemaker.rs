@@ -22,6 +22,7 @@ pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'stati
         ("GameMaker.Instance", "getAll") => &["getAllField"],
         ("GameMaker.Instance", "setAll") => &["setAllField"],
         ("GameMaker.Instance", "setField") => &["setInstanceField"],
+        ("GameMaker.Instance", "withBegin") => &["withInstances"],
         ("GameMaker.Instance", "withInstances") => &["withInstances"],
         _ => &[],
     }
@@ -42,6 +43,15 @@ fn rewrite_stmts(stmts: &mut Vec<JsStmt>, sprite_names: &[String]) {
 
 /// Detect `withBegin(target) ... withEnd()` bracket patterns and collapse them
 /// into `withInstances(target, () => { ...body... })`.
+///
+/// Two patterns are handled:
+///
+/// 1. **Flat**: `withBegin(target); ...body...; withEnd();` — all at the same
+///    nesting level.
+///
+/// 2. **Loop-wrapped** (produced by the structurizer from PushEnv/PopEnv
+///    back-edges): `withBegin(target); loop { ...body...; withEnd(); continue; }`
+///    — the `withEnd` is inside the loop body, not at the outer level.
 fn collapse_with_blocks(stmts: &mut Vec<JsStmt>) {
     let mut i = 0;
     while i < stmts.len() {
@@ -56,7 +66,31 @@ fn collapse_with_blocks(stmts: &mut Vec<JsStmt>) {
             continue;
         }
 
-        // Find the matching withEnd at the same nesting level.
+        // --- Pattern 2: loop-wrapped ---
+        // withBegin(target); Loop { ...body...; withEnd(); continue; }
+        if i + 1 < stmts.len() {
+            let is_loop = matches!(&stmts[i + 1], JsStmt::Loop { .. } | JsStmt::While { .. });
+            if is_loop {
+                if let Some(body) = try_extract_with_loop_body(&mut stmts[i + 1]) {
+                    // Extract the target from withBegin.
+                    let JsStmt::Expr(JsExpr::SystemCall { args, .. }) = &mut stmts[i] else {
+                        unreachable!()
+                    };
+                    let target = args.pop().unwrap();
+
+                    // Remove the loop statement.
+                    stmts.remove(i + 1);
+
+                    // Replace withBegin with withInstances(target, () => { body }).
+                    stmts[i] = make_with_instances(target, body);
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+
+        // --- Pattern 1: flat ---
+        // withBegin(target); ...body...; withEnd();
         let end_idx = stmts[i + 1..].iter().position(|s| {
             matches!(
                 s,
@@ -83,23 +117,61 @@ fn collapse_with_blocks(stmts: &mut Vec<JsStmt>) {
         stmts.remove(i + 1);
 
         // Replace withBegin with withInstances(target, () => { body }).
-        stmts[i] = JsStmt::Expr(JsExpr::SystemCall {
-            system: "GameMaker.Instance".into(),
-            method: "withInstances".into(),
-            args: vec![
-                target,
-                JsExpr::ArrowFunction {
-                    params: vec![],
-                    return_ty: Type::Void,
-                    body,
-                    has_rest_param: false,
-                    cast_as: None,
-                },
-            ],
-        });
+        stmts[i] = make_with_instances(target, body);
 
         i += 1;
     }
+}
+
+/// Try to extract the with-body from a loop statement that wraps a with-block.
+///
+/// Recognizes loops whose body ends with `withEnd(); continue;` or just
+/// `withEnd();`. Returns the body with those trailing statements stripped,
+/// or `None` if the pattern doesn't match.
+fn try_extract_with_loop_body(loop_stmt: &mut JsStmt) -> Option<Vec<JsStmt>> {
+    let body = match loop_stmt {
+        JsStmt::Loop { body } => body,
+        JsStmt::While { body, .. } => body,
+        _ => return None,
+    };
+
+    // Find withEnd() — typically second-to-last (before continue) or last.
+    let end_pos = body.iter().rposition(|s| {
+        matches!(
+            s,
+            JsStmt::Expr(JsExpr::SystemCall { system, method, .. })
+            if system == "GameMaker.Instance" && method == "withEnd"
+        )
+    })?;
+
+    // Everything after withEnd should be only Continue/Break (structurizer artifacts).
+    let all_tail_ok = body[end_pos + 1..]
+        .iter()
+        .all(|s| matches!(s, JsStmt::Continue | JsStmt::Break));
+    if !all_tail_ok {
+        return None;
+    }
+
+    // Truncate: remove withEnd and everything after it.
+    body.truncate(end_pos);
+    Some(std::mem::take(body))
+}
+
+/// Build a `withInstances(target, () => { body })` statement.
+fn make_with_instances(target: JsExpr, body: Vec<JsStmt>) -> JsStmt {
+    JsStmt::Expr(JsExpr::Call {
+        callee: Box::new(JsExpr::Var("withInstances".into())),
+        args: vec![
+            target,
+            JsExpr::ArrowFunction {
+                params: vec![],
+                return_ty: Type::Void,
+                body,
+                has_rest_param: false,
+                cast_as: None,
+            },
+        ],
+    })
 }
 
 fn rewrite_stmt(stmt: &mut JsStmt, sprite_names: &[String]) {
