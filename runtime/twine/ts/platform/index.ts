@@ -21,7 +21,7 @@ export {
   scheduleInterval, cancelInterval,
 } from "./timing";
 
-export { registerCommand, removeCommand, triggerCommand } from "./input";
+export { registerCommand, removeCommand, triggerCommand, getCommands } from "./input";
 
 export { showDialog, closeDialog, isDialogOpen } from "./dialog";
 

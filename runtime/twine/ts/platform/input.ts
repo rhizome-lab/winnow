@@ -1,34 +1,39 @@
-/** Browser input — command registry with keyboard bindings. */
+/** Browser input — keybinds-backed command registry with UI components. */
 
-interface CommandEntry {
-  binding: string;
-  handler: () => void;
+import keybindsInit, { type Command, registerComponents, executeCommand } from "keybinds";
+
+// Register web components (<command-palette>, <keybind-cheatsheet>, etc.)
+registerComponents();
+
+let commands: Command[] = [];
+let cleanup: (() => void) | null = null;
+
+// Web component elements — created lazily on first registerCommand
+let palette: HTMLElement | null = null;
+let cheatsheet: HTMLElement | null = null;
+
+function ensureUI(): void {
+  if (palette) return;
+  palette = document.createElement("command-palette");
+  palette.setAttribute("auto-trigger", "");
+  document.body.appendChild(palette);
+
+  cheatsheet = document.createElement("keybind-cheatsheet");
+  cheatsheet.setAttribute("auto-trigger", "");
+  document.body.appendChild(cheatsheet);
 }
 
-const commands = new Map<string, CommandEntry>();
+function syncUI(): void {
+  if (palette) (palette as any).commands = commands;
+  if (cheatsheet) (cheatsheet as any).commands = commands;
+}
 
-document.addEventListener("keydown", (e) => {
-  for (const [, entry] of commands) {
-    if (matchBinding(entry.binding, e)) {
-      e.preventDefault();
-      entry.handler();
-      return;
-    }
+function rebind(): void {
+  if (cleanup) cleanup();
+  if (commands.length > 0) {
+    cleanup = keybindsInit(commands);
   }
-});
-
-function matchBinding(binding: string, e: KeyboardEvent): boolean {
-  const parts = binding.toLowerCase().split("+");
-  const key = parts.pop()!;
-  const needCtrl = parts.includes("ctrl");
-  const needShift = parts.includes("shift");
-  const needAlt = parts.includes("alt");
-
-  if (needCtrl !== e.ctrlKey) return false;
-  if (needShift !== e.shiftKey) return false;
-  if (needAlt !== e.altKey) return false;
-
-  return e.key.toLowerCase() === key || e.code.toLowerCase() === key;
+  syncUI();
 }
 
 export function registerCommand(
@@ -36,14 +41,26 @@ export function registerCommand(
   defaultBinding: string,
   handler: () => void,
 ): void {
-  commands.set(id, { binding: defaultBinding, handler });
+  ensureUI();
+  commands = commands.filter(c => c.id !== id);
+  commands.push({
+    id,
+    label: id.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+    keys: defaultBinding ? [defaultBinding] : [],
+    execute: handler,
+  });
+  rebind();
 }
 
 export function removeCommand(id: string): void {
-  commands.delete(id);
+  commands = commands.filter(c => c.id !== id);
+  rebind();
 }
 
 export function triggerCommand(id: string): void {
-  const entry = commands.get(id);
-  if (entry) entry.handler();
+  executeCommand(commands, id);
+}
+
+export function getCommands(): Command[] {
+  return commands;
 }
