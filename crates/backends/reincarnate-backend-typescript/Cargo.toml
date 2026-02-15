@@ -8,6 +8,8 @@ description = "TypeScript codegen backend for Reincarnate"
 
 [dependencies]
 reincarnate-core = { path = "../../reincarnate-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -402,6 +402,8 @@ name = "reincarnate-backend-typescript"
 version = "0.1.0"
 dependencies = [
  "reincarnate-core",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

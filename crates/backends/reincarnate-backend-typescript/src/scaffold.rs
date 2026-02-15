@@ -1,5 +1,6 @@
 //! Generate project scaffold files: index.html, tsconfig.json, and main entry point.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
@@ -20,8 +21,7 @@ pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Opti
     fs::write(output_dir.join("index.html"), html)?;
     fs::write(output_dir.join("tsconfig.json"), TSCONFIG)?;
     fs::write(output_dir.join("main.ts"), generate_main(modules, runtime_config))?;
-    let package_json = if is_twine(modules) { PACKAGE_JSON_TWINE } else { PACKAGE_JSON };
-    fs::write(output_dir.join("package.json"), package_json)?;
+    fs::write(output_dir.join("package.json"), generate_package_json(runtime_config))?;
     Ok(())
 }
 
@@ -208,36 +208,82 @@ const TSCONFIG: &str = r#"{
 }
 "#;
 
-const PACKAGE_JSON: &str = r#"{
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm",
-    "serve": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm --serve --servedir=."
-  },
-  "devDependencies": {
-    "esbuild": "^0.24.0",
-    "typescript": "^5.0.0"
-  }
+/// Schema for the generated `package.json`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    private: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    main: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scripts: Option<PackageScripts>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    dependencies: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    dev_dependencies: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    peer_dependencies: BTreeMap<String, String>,
 }
-"#;
 
-const PACKAGE_JSON_TWINE: &str = r#"{
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm",
-    "serve": "esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm --serve --servedir=."
-  },
-  "dependencies": {
-    "jquery": "^3.7.0"
-  },
-  "devDependencies": {
-    "esbuild": "^0.24.0",
-    "typescript": "^5.0.0"
-  }
+#[derive(serde::Serialize)]
+struct PackageScripts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serve: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dev: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    test: Option<String>,
 }
-"#;
+
+/// Generate `package.json` from runtime config dependencies.
+fn generate_package_json(runtime_config: Option<&RuntimeConfig>) -> String {
+    let dependencies = runtime_config
+        .map(|c| c.scaffold.dependencies.clone())
+        .unwrap_or_default();
+
+    let mut dev_dependencies = BTreeMap::new();
+    dev_dependencies.insert("esbuild".into(), "^0.24.0".into());
+    dev_dependencies.insert("typescript".into(), "^5.0.0".into());
+
+    let pkg = PackageJson {
+        name: None,
+        version: None,
+        private: Some(true),
+        description: None,
+        license: None,
+        r#type: Some("module".into()),
+        main: None,
+        scripts: Some(PackageScripts {
+            build: Some("esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm".into()),
+            serve: Some("esbuild main.ts --bundle --outfile=dist/bundle.js --format=esm --serve --servedir=.".into()),
+            dev: None,
+            start: None,
+            test: None,
+        }),
+        dependencies,
+        dev_dependencies,
+        peer_dependencies: BTreeMap::new(),
+    };
+
+    let mut json = serde_json::to_string_pretty(&pkg).unwrap();
+    json.push('\n');
+    json
+}
 
 /// Generate `main.ts` — imports all modules and calls the entry point in a
 /// requestAnimationFrame game loop.

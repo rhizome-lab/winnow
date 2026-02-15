@@ -76,6 +76,10 @@ pub struct ScaffoldConfig {
     /// These are emitted after runtime imports (e.g. data/rooms, data/sprites).
     #[serde(default)]
     pub data_imports: Vec<ImportGroup>,
+    /// npm dependencies to include in the generated package.json.
+    /// e.g. `{ "jquery": "^3.7.0" }`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependencies: BTreeMap<String, String>,
 }
 
 /// A group of named imports from a single path.
