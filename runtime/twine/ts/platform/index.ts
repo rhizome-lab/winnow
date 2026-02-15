@@ -31,5 +31,13 @@ export { type SettingUIEntry, showSettingsUI } from "./settings-ui";
 
 export {
   type SidebarConfig,
-  renderSidebar, stowSidebar, unstowSidebar, destroySidebar,
+  renderSidebar, stowSidebar, unstowSidebar, toggleSidebar, destroySidebar,
 } from "./layout";
+
+// Wire cross-concern commands — kept here so concern modules stay independent.
+import { registerCommand } from "./input";
+import { closeDialog } from "./dialog";
+import { toggleSidebar } from "./layout";
+
+registerCommand("close-dialog", "escape", closeDialog);
+registerCommand("toggle-sidebar", "", toggleSidebar);

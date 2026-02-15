@@ -1,7 +1,5 @@
 /** Browser layout — sidebar/UIBar rendering. */
 
-import { registerCommand } from "./input";
-
 export interface SidebarConfig {
   storyTitle: string;
   passageTitle: string;
@@ -81,6 +79,11 @@ export function unstowSidebar(): void {
   }
 }
 
+export function toggleSidebar(): void {
+  if (sidebarEl?.style.display === "none") unstowSidebar();
+  else stowSidebar();
+}
+
 export function destroySidebar(): void {
   if (sidebarEl) {
     sidebarEl.remove();
@@ -88,8 +91,3 @@ export function destroySidebar(): void {
     document.body.style.marginLeft = "";
   }
 }
-
-registerCommand("toggle-sidebar", "", () => {
-  if (sidebarEl?.style.display === "none") unstowSidebar();
-  else stowSidebar();
-});
