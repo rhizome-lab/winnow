@@ -49,20 +49,39 @@ export function startStory(passageMap: Record<string, () => void>, startPassage?
   Events.trigger(":storyready");
 }
 
-/** Navigate to a passage by name. */
-export function goto(target: string): void {
-  const fn = passages.get(target);
-  if (!fn) {
-    console.error(`[navigation] passage not found: "${target}"`);
-    return;
+/** Run a special passage by name, if it exists. Errors are logged. */
+function runSpecial(name: string): void {
+  const fn = passages.get(name);
+  if (fn) {
+    try {
+      fn();
+    } catch (e) {
+      console.error(`[navigation] error in ${name}:`, e);
+    }
   }
-  State.pushMoment(target);
+}
+
+/** Render a passage with full event lifecycle and special passage support. */
+function renderPassage(target: string, fn: () => void): void {
   State.clearTemps();
   currentPassage = target;
   Output.clear();
 
+  // Check for nobr tag
+  const tags = passageTags.get(target);
+  if (tags && tags.includes("nobr")) {
+    Output.setNobr(true);
+  }
+
   Events.trigger(":passageinit", { passage: target });
+
+  // PassageReady runs after :passageinit, before the main passage
+  runSpecial("PassageReady");
+
   Events.trigger(":passagestart", { passage: target });
+
+  // PassageHeader content is prepended before the main passage
+  runSpecial("PassageHeader");
 
   try {
     fn();
@@ -71,12 +90,30 @@ export function goto(target: string): void {
     Output.text(`Error in passage "${target}": ${e}`);
   }
 
+  // PassageFooter content is appended after the main passage
+  runSpecial("PassageFooter");
+
   Events.trigger(":passagerender", { passage: target });
 
+  // PassageDone runs after :passagerender, before flush
+  runSpecial("PassageDone");
+
+  Output.setNobr(false);
   Output.flush();
 
   Events.trigger(":passageend", { passage: target });
   Events.trigger(":passagedisplay", { passage: target });
+}
+
+/** Navigate to a passage by name. */
+export function goto(target: string): void {
+  const fn = passages.get(target);
+  if (!fn) {
+    console.error(`[navigation] passage not found: "${target}"`);
+    return;
+  }
+  State.pushMoment(target);
+  renderPassage(target, fn);
 }
 
 /** Go back to the previous passage. */
@@ -86,31 +123,12 @@ export function back(): void {
     console.warn("[navigation] no history to go back to");
     return;
   }
-  currentPassage = title;
   const fn = passages.get(title);
   if (!fn) {
     console.error(`[navigation] passage not found on back: "${title}"`);
     return;
   }
-  State.clearTemps();
-  Output.clear();
-
-  Events.trigger(":passageinit", { passage: title });
-  Events.trigger(":passagestart", { passage: title });
-
-  try {
-    fn();
-  } catch (e) {
-    console.error(`[navigation] error in passage "${title}" (back):`, e);
-    Output.text(`Error in passage "${title}": ${e}`);
-  }
-
-  Events.trigger(":passagerender", { passage: title });
-
-  Output.flush();
-
-  Events.trigger(":passageend", { passage: title });
-  Events.trigger(":passagedisplay", { passage: title });
+  renderPassage(title, fn);
 }
 
 /** Return to the previous passage (alias for back). */

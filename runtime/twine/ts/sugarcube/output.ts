@@ -8,6 +8,15 @@
 
 import { scheduleTimeout, cancelTimeout, scheduleInterval, cancelInterval } from "../platform";
 
+// --- nobr flag ---
+
+let nobrActive = false;
+
+/** Set the nobr (no line break) flag. When active, break() is suppressed. */
+export function setNobr(active: boolean): void {
+  nobrActive = active;
+}
+
 // --- Buffer stack ---
 
 const bufferStack: DocumentFragment[] = [];
@@ -69,10 +78,11 @@ export function htmlDynamic(template: string, ...attrs: any[]): void {
   buf.appendChild(temp.content.cloneNode(true));
 }
 
-/** Emit a line break. */
+/** Emit a line break. Suppressed when nobr tag is active. */
 // Using a name that avoids JS reserved word conflicts in import context.
 export { lineBreak as break };
 function lineBreak(): void {
+  if (nobrActive) return;
   currentBuffer().appendChild(document.createElement("br"));
 }
 
