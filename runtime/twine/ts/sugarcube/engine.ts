@@ -10,6 +10,56 @@
  */
 
 import * as State from "./state";
+import * as Navigation from "./navigation";
+
+// --- Global setup for eval'd scripts ---
+
+let globalsInitialized = false;
+
+/** Set up SugarCube globals on globalThis so eval'd scripts can reference them.
+ *
+ * DoL's user scripts reference setup, V, Config, State, Save, etc. as
+ * bare globals. This function exposes them once, before any eval runs.
+ */
+function ensureGlobals(): void {
+  if (globalsInitialized) return;
+  globalsInitialized = true;
+
+  const g = globalThis as any;
+
+  // setup: empty object that user scripts populate with game data
+  if (!g.setup) g.setup = {};
+
+  // V: proxy for story variables (State.get/set)
+  if (!g.V) {
+    g.V = new Proxy({} as Record<string, any>, {
+      get(_t: any, prop: string) { return State.get(prop); },
+      set(_t: any, prop: string, val: any) { State.set(prop, val); return true; },
+    });
+  }
+
+  // SugarCube API surface stubs
+  if (!g.Config) g.Config = { passages: {}, saves: {}, history: {} };
+  if (!g.Save) g.Save = { slots: { length: 8 }, autosave: {} };
+  if (!g.Template) g.Template = { size: 0 };
+  if (!g.Wikifier) g.Wikifier = {};
+  if (!g.Story) {
+    g.Story = {
+      get: (name: string) => ({ title: name, text: "" }),
+      has: (name: string) => Navigation.has(name),
+    };
+  }
+  if (!g.passage) g.passage = () => Navigation.current();
+
+  // Expose State on global for scripts that reference it directly
+  if (!g.State) {
+    g.State = {
+      variables: g.V,
+      temporary: {},
+      get active() { return { title: Navigation.current(), variables: g.V }; },
+    };
+  }
+}
 
 /** Resolve a bare name (used for function lookups in expression context). */
 export function resolve(name: string): any {
@@ -71,20 +121,22 @@ export { instanceof_ as instanceof };
 
 /** Create an arrow function from parameter names and a body expression string. */
 export function arrow(params: string, body: string): (...args: any[]) => any {
-  // Build a function that evaluates the body with access to State
+  ensureGlobals();
+  const g = globalThis as any;
   return new Function(
-    "State",
+    "State", "setup", "V", "Config",
     `return function(${params}) { return ${body}; }`
-  )(State);
+  )(g.State, g.setup, g.V, g.Config);
 }
 
 /** Evaluate raw JavaScript code (<<script>> blocks). */
 // Using a wrapper to avoid shadowing the global eval.
 export { evalCode as eval };
 function evalCode(code: string): void {
-  // Give eval'd code access to runtime modules
-  const fn = new Function("State", code);
-  fn(State);
+  ensureGlobals();
+  const g = globalThis as any;
+  const fn = new Function("State", "setup", "V", "Config", code);
+  fn(g.State, g.setup, g.V, g.Config);
 }
 
 /** Throw an error. */
