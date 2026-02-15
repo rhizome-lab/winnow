@@ -203,22 +203,24 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
         }
 
         JsStmt::Assign { target, value } => {
-            let _ = writeln!(
-                out,
-                "{indent}{} = {};",
-                print_expr(target),
-                print_expr(value),
-            );
+            let tgt = print_expr(target);
+            let val = print_expr(value);
+            if tgt.starts_with('{') {
+                let _ = writeln!(out, "{indent}({tgt}) = {val};");
+            } else {
+                let _ = writeln!(out, "{indent}{tgt} = {val};");
+            }
         }
 
         JsStmt::CompoundAssign { target, op, value } => {
-            let _ = writeln!(
-                out,
-                "{indent}{} {}= {};",
-                print_expr(target),
-                binop_str(*op),
-                print_expr(value),
-            );
+            let tgt = print_expr(target);
+            let val = print_expr(value);
+            let op_str = binop_str(*op);
+            if tgt.starts_with('{') {
+                let _ = writeln!(out, "{indent}({tgt}) {op_str}= {val};");
+            } else {
+                let _ = writeln!(out, "{indent}{tgt} {op_str}= {val};");
+            }
         }
 
         JsStmt::Expr(expr) => {
