@@ -895,30 +895,41 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a `[[link]]` or `[[text|passage]]` navigation link.
+    ///
+    /// Syntax: `[[content][$setter1][$setter2]...]`
+    /// where content is `text|passage`, `text->passage`, `passage<-text`, or `passage`.
+    /// The outer delimiters are `[[` ... `]]`, but setters `[$...]` sit between the
+    /// inner `]` (closing the content) and the outer `]` (closing the link).
     fn parse_link(&mut self) -> Node {
         let start = self.pos;
         self.pos += 2; // skip [[
 
-        // Find the closing ]]
+        // Scan link content up to the first `]` at bracket depth 0.
+        // This stops before any `][$setter]` blocks.
         let content_start = self.pos;
         let mut depth = 0i32;
         while !self.at_end() {
-            if self.remaining().starts_with("]]") && depth == 0 {
-                break;
-            }
             match self.ch() {
-                b'[' => depth += 1,
-                b']' => depth -= 1,
-                _ => {}
+                b'[' => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                b']' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                    self.pos += 1;
+                }
+                _ => self.advance_char(),
             }
-            self.advance_char();
         }
-        let end = self.snap_to_char_boundary(self.pos);
-        let content = &self.src[content_start..end];
+        let content_end = self.snap_to_char_boundary(self.pos);
+        let content = &self.src[content_start..content_end];
 
-        // Skip closing ]]
-        if self.remaining().starts_with("]]") {
-            self.pos += 2;
+        // Consume the `]` that closes the content portion
+        if !self.at_end() && self.ch() == b']' {
+            self.pos += 1;
         }
 
         // Parse link content: text|passage or just passage
@@ -939,7 +950,7 @@ impl<'a> Parser<'a> {
             (content.to_string(), content.to_string())
         };
 
-        // Check for setter: [$code] after the link
+        // Parse setter blocks: [$code] between the content `]` and the closing `]`
         let mut setters = Vec::new();
         while !self.at_end() && self.remaining().starts_with("[$") {
             self.pos += 1; // skip [
@@ -958,10 +969,15 @@ impl<'a> Parser<'a> {
             let setter_end = self.snap_to_char_boundary(self.pos);
             let setter_src = &self.src[setter_start..setter_end];
             if !self.at_end() {
-                self.pos += 1; // skip ]
+                self.pos += 1; // skip closing ]
             }
             let mut lexer = ExprLexer::new(setter_src, setter_start);
             setters.push(expr::parse_expr(&mut lexer));
+        }
+
+        // Consume the final `]` (closing bracket of the link)
+        if !self.at_end() && self.ch() == b']' {
+            self.pos += 1;
         }
 
         // Determine target kind: if it starts with $ or _, it's an expression
@@ -1273,6 +1289,30 @@ mod tests {
         if let NodeKind::Link(link) = &node.kind {
             assert!(matches!(&link.text, LinkText::Plain(s) if s == "Go back"));
             assert!(matches!(&link.target, LinkTarget::Name(s) if s == "Foyer"));
+        } else {
+            panic!("expected Link");
+        }
+    }
+
+    #[test]
+    fn link_with_setter() {
+        let node = first_node("[[text|passage][$x to 5]]");
+        if let NodeKind::Link(link) = &node.kind {
+            assert!(matches!(&link.text, LinkText::Plain(s) if s == "text"));
+            assert!(matches!(&link.target, LinkTarget::Name(s) if s == "passage"));
+            assert_eq!(link.setters.len(), 1, "expected 1 setter, got {:?}", link.setters);
+        } else {
+            panic!("expected Link");
+        }
+    }
+
+    #[test]
+    fn link_with_multiple_setters() {
+        let node = first_node("[[Go|Room][$x to 1][$y to 2]]");
+        if let NodeKind::Link(link) = &node.kind {
+            assert!(matches!(&link.text, LinkText::Plain(s) if s == "Go"));
+            assert!(matches!(&link.target, LinkTarget::Name(s) if s == "Room"));
+            assert_eq!(link.setters.len(), 2, "expected 2 setters, got {:?}", link.setters);
         } else {
             panic!("expected Link");
         }
