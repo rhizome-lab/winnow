@@ -4668,4 +4668,39 @@ mod tests {
             "Ternary assign `i = cond ? 1 : 0` was incorrectly consumed: {body:?}"
         );
     }
+
+    #[test]
+    fn absorb_phi_skips_else_branch_write() {
+        // Pattern: let vN; if (C) { vN = E; } else { vN = F; } if (vN) { D }
+        // absorb_phi_condition must NOT absorb because vN has a write in the
+        // else branch. Before the fix, count_var_refs_in_stmt skipped bare
+        // Var writes, causing the pass to remove the VarDecl and leave a
+        // stray assignment to an undeclared variable.
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v620".to_string(),
+                ty: None,
+                init: None,
+                mutable: true,
+            },
+            Stmt::If {
+                cond: var("cond1"),
+                then_body: vec![assign(var("v620"), var("expr1"))],
+                else_body: vec![assign(var("v620"), var("expr2"))],
+            },
+            Stmt::If {
+                cond: var("v620"),
+                then_body: vec![Stmt::Expr(var("action"))],
+                else_body: vec![],
+            },
+        ];
+
+        absorb_phi_condition(&mut body);
+
+        // All three statements should remain unchanged.
+        assert_eq!(body.len(), 3, "absorb_phi_condition incorrectly absorbed a phi with an else-branch write: {body:?}");
+        assert!(matches!(&body[0], Stmt::VarDecl { name, .. } if name == "v620"));
+        assert!(matches!(&body[1], Stmt::If { .. }));
+        assert!(matches!(&body[2], Stmt::If { cond, .. } if *cond == var("v620")));
+    }
 }

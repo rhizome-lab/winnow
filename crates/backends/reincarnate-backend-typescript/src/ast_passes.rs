@@ -725,3 +725,61 @@ fn infer_expr_type(expr: &JsExpr, var_types: &HashMap<String, Type>) -> Option<T
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::js_ast::{JsExpr, JsStmt};
+    use reincarnate_core::ir::inst::CmpKind;
+    use reincarnate_core::ir::value::Constant;
+
+    fn var(name: &str) -> JsExpr {
+        JsExpr::Var(name.to_string())
+    }
+
+    fn int_lit(n: i64) -> JsExpr {
+        JsExpr::Literal(Constant::Int(n))
+    }
+
+    fn eq(lhs: JsExpr, rhs: JsExpr) -> JsExpr {
+        JsExpr::Cmp {
+            kind: CmpKind::Eq,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        }
+    }
+
+    #[test]
+    fn switch_recovery_nested_if_else_chain() {
+        // if (x === 3) { A } else if (x === 2) { B } else if (x === 1) { C }
+        // Should produce a single 3-case switch, not if { } else { switch { } }.
+        let mut body = vec![JsStmt::If {
+            cond: eq(var("x"), int_lit(3)),
+            then_body: vec![JsStmt::Expr(var("A"))],
+            else_body: vec![JsStmt::If {
+                cond: eq(var("x"), int_lit(2)),
+                then_body: vec![JsStmt::Expr(var("B"))],
+                else_body: vec![JsStmt::If {
+                    cond: eq(var("x"), int_lit(1)),
+                    then_body: vec![JsStmt::Expr(var("C"))],
+                    else_body: vec![],
+                }],
+            }],
+        }];
+
+        recover_switch_statements(&mut body);
+
+        assert_eq!(body.len(), 1, "Expected single statement, got: {body:?}");
+        match &body[0] {
+            JsStmt::Switch { cases, .. } => {
+                assert_eq!(
+                    cases.len(),
+                    3,
+                    "Expected 3-case switch, got {}-case: {cases:?}",
+                    cases.len()
+                );
+            }
+            other => panic!("Expected Switch, got: {other:?}"),
+        }
+    }
+}
