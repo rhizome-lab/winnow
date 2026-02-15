@@ -48,6 +48,7 @@ From ecosystem-wide session analysis:
 - **Implement fully:** No silent arbitrary caps, incomplete pagination, or unexposed trait methods. The test projects (`~/reincarnate/flash/cc/` for Flash, `~/reincarnate/gamemaker/bounty/` for GML) are example inputs, not the universe — fixing only the cases they exercise is a half measure. If a class of bug exists, fix the entire class. If a pattern applies to all properties on a type, apply it to all of them, not just the ones that happen to blow up today.
 - **Name for purpose:** Avoid names that describe one consumer
 - **Verify before stating:** Don't assert API behavior or codebase facts without checking
+- **Consider tests for bug fixes:** When fixing a bug that has a clear, self-contained reproduction — especially in compiler passes (transforms, structurizer, AST passes, emit) — write a regression test. Not every fix warrants a test (runtime stubs, config changes, one-off wiring), but if the bug can recur from future code changes, a test prevents that. Err on the side of writing the test if unsure.
 
 ## Design Principles
 
