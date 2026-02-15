@@ -146,7 +146,7 @@ fn build_passage_map(modules: &[Module]) -> String {
     for module in modules {
         for (display_name, func_name) in &module.passage_names {
             let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
-            entries.push(format!("  \"{escaped}\": {func_name}"));
+            entries.push(format!("  \"{escaped}\": {}", sanitize_ident(func_name)));
         }
     }
     if entries.is_empty() {
