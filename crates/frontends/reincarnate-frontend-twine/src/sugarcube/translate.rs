@@ -39,6 +39,8 @@ pub struct TranslateCtx {
     func_name: String,
     /// Counter for generating unique setter callback names.
     setter_count: usize,
+    /// Counter for generating unique arrow function names.
+    arrow_count: usize,
     /// Setter callback functions generated for link setters.
     pub setter_callbacks: Vec<Function>,
 }
@@ -60,6 +62,7 @@ impl TranslateCtx {
             widgets: Vec::new(),
             func_name: name.to_string(),
             setter_count: 0,
+            arrow_count: 0,
             setter_callbacks: Vec::new(),
         }
     }
@@ -260,15 +263,35 @@ impl TranslateCtx {
             }
             ExprKind::Template { parts } => self.lower_template(parts),
             ExprKind::Arrow { params, body } => {
-                // Opaque JS function — store as SystemCall with param/body info
-                let param_str = self.fb.const_string(params.join(","));
-                let body_val = self.lower_expr(body);
-                self.fb.system_call(
-                    "SugarCube.Engine",
-                    "arrow",
-                    &[param_str, body_val],
-                    Type::Dynamic,
-                )
+                // Build arrow as a real helper function (same pattern as setter callbacks).
+                let arrow_name = format!("{}_arrow_{}", self.func_name, self.arrow_count);
+                self.arrow_count += 1;
+
+                let sig = FunctionSig {
+                    params: vec![Type::Dynamic; params.len()],
+                    return_ty: Type::Dynamic,
+                    defaults: vec![],
+                    has_rest_param: false,
+                };
+                let mut arrow_fb = FunctionBuilder::new(&arrow_name, sig, Visibility::Public);
+
+                // Name each parameter so the emitter produces readable arg names.
+                for (idx, name) in params.iter().enumerate() {
+                    let v = arrow_fb.param(idx);
+                    arrow_fb.name_value(v, name.clone());
+                }
+
+                let saved_fb = std::mem::replace(&mut self.fb, arrow_fb);
+                let saved_temps = std::mem::take(&mut self.temp_vars);
+
+                let result = self.lower_expr(body);
+                self.fb.ret(Some(result));
+
+                let built = std::mem::replace(&mut self.fb, saved_fb);
+                self.temp_vars = saved_temps;
+                self.setter_callbacks.push(built.build());
+
+                self.fb.global_ref(&arrow_name, Type::Dynamic)
             }
             ExprKind::Delete(inner) => {
                 let val = self.lower_expr(inner);
@@ -1625,8 +1648,9 @@ pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
     }
 }
 
-/// Translate a widget body into an IR Function.
-pub fn translate_widget(name: &str, body: &[Node]) -> Function {
+/// Translate a widget body into an IR Function plus any auxiliary functions
+/// (setter callbacks, arrow functions) generated during translation.
+pub fn translate_widget(name: &str, body: &[Node]) -> (Function, Vec<Function>) {
     let func_name = format!("widget_{name}");
     let mut ctx = TranslateCtx::new(&func_name);
 
@@ -1641,7 +1665,8 @@ pub fn translate_widget(name: &str, body: &[Node]) -> Function {
     ctx.lower_nodes(body);
     ctx.fb.ret(None);
 
-    ctx.fb.build()
+    let callbacks = std::mem::take(&mut ctx.setter_callbacks);
+    (ctx.fb.build(), callbacks)
 }
 
 /// Translate a user `<script>` block into an IR Function that evals the code.

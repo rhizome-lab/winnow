@@ -629,16 +629,6 @@ export function instanceof_(value: any, type_: any): boolean {
 }
 export { instanceof_ as instanceof };
 
-/** Create an arrow function from parameter names and a body expression string. */
-export function arrow(params: string, body: string): (...args: any[]) => any {
-  ensureGlobals();
-  const g = globalThis as any;
-  return new Function(
-    "State", "setup", "V", "Config",
-    `return function(${params}) { return ${body}; }`
-  )(g.State, g.setup, g.V, g.Config);
-}
-
 /** Evaluate raw JavaScript code (<<script>> blocks).
  *
  * Errors are caught and logged — matches SugarCube's behavior where user
