@@ -1696,6 +1696,14 @@ pub fn translate_widget(name: &str, body: &[Node]) -> Function {
     let func_name = format!("widget_{name}");
     let mut ctx = TranslateCtx::new(&func_name);
 
+    // Initialize _args from State (set by Widget.call before invocation)
+    let args_name = ctx.fb.const_string("_args");
+    let args_val = ctx
+        .fb
+        .system_call("SugarCube.State", "get", &[args_name], Type::Dynamic);
+    let alloc = ctx.get_or_create_temp("args");
+    ctx.fb.store(alloc, args_val);
+
     ctx.lower_nodes(body);
     ctx.fb.ret(None);
 
