@@ -163,6 +163,16 @@ impl<'a> Parser<'a> {
             return Some(self.parse_html_tag());
         }
 
+        // Line break
+        if self.ch() == b'\n' {
+            let start = self.pos;
+            self.pos += 1;
+            return Some(Node {
+                kind: NodeKind::LineBreak,
+                span: Span::new(start, self.pos),
+            });
+        }
+
         // Variable interpolation: $name or _name (followed by ident char)
         if (self.ch() == b'$' || self.ch() == b'_') && self.pos + 1 < self.bytes.len() {
             let next = self.bytes[self.pos + 1];
@@ -1226,6 +1236,7 @@ impl<'a> Parser<'a> {
                 {
                     break;
                 }
+                b'\n' => break,
                 b'/' if self.remaining().starts_with("/*") => break,
                 b'$' if self.pos + 1 < self.bytes.len()
                     && (self.bytes[self.pos + 1].is_ascii_alphabetic()

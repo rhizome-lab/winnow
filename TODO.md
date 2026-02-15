@@ -924,21 +924,15 @@ causing compile errors if any emitted code calls them.
   pluggable parser registry, AST caching, and all standard parsers.
   `Dialog.wiki()` now uses `Wikifier.wikifyEval()`.
 
-- [ ] **`<<nobr>>` compile-time bug** — `lower_nobr()` in `translate.rs`
-  doesn't suppress `break()` calls inside `<<nobr>>` blocks — it lowers
-  the body unchanged. The runtime side (`output.ts`) is ready (`nobrActive`
-  flag), but the compiler never sets the suppression flag.
+- [x] **`<<nobr>>` compile-time bug** — `lower_nobr()` in `translate.rs`
+  now sets `suppress_line_breaks` flag to suppress `break()` calls inside
+  `<<nobr>>` blocks. Restores previous state on exit for correct nesting.
 
-- [ ] **`\n` → `<br>` fidelity bug** — The Rust parser does NOT emit
-  `Output.break()` for bare `\n` in passage text. In original SugarCube,
-  the `lineBreak` parser converts `\n` to `<br>`. Our compiled passages
-  leave `\n` as whitespace in text nodes, which browsers collapse. For
-  games that don't delete the lineBreak parser, this means missing line
-  breaks.
+- [x] **`\n` → `<br>` fidelity bug** — Parser now emits `NodeKind::LineBreak`
+  for each `\n` in passage text, which translates to `Output.break()` calls.
 
-- [ ] **`NodeKind::LineBreak` is dead code** — Defined in the Twine AST
-  but never created by the parser. Should either be used (for `\n` →
-  `Output.break()`) or removed.
+- [x] **`NodeKind::LineBreak` is dead code** — Parser now creates `LineBreak`
+  nodes for `\n` characters. No longer dead code.
 
 - [ ] **Passage rendering strategy** — Implement `passage_rendering`
   manifest option (`auto`/`compiled`/`wikifier`). In `wikifier` mode,

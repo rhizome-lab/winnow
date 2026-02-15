@@ -31,6 +31,8 @@ pub struct TranslateCtx {
     temp_vars: HashMap<String, ValueId>,
     /// Whether we're inside a `<<nobr>>` / `<<silently>>` block.
     suppress_output: bool,
+    /// Whether line breaks are suppressed (inside `<<nobr>>`).
+    suppress_line_breaks: bool,
     /// Extracted widget definitions (name → body nodes) accumulated during translation.
     pub widgets: Vec<(String, Vec<Node>)>,
     /// The passage/widget function name (used to generate unique setter names).
@@ -54,6 +56,7 @@ impl TranslateCtx {
             fb,
             temp_vars: HashMap::new(),
             suppress_output: false,
+            suppress_line_breaks: false,
             widgets: Vec::new(),
             func_name: name.to_string(),
             setter_count: 0,
@@ -227,7 +230,7 @@ impl TranslateCtx {
     }
 
     fn emit_line_break(&mut self) {
-        if self.suppress_output {
+        if self.suppress_output || self.suppress_line_breaks {
             return;
         }
         self.fb
@@ -1425,11 +1428,12 @@ impl TranslateCtx {
     }
 
     fn lower_nobr(&mut self, mac: &MacroNode) {
-        // <<nobr>> suppresses whitespace line breaks (but doesn't suppress all output)
-        // For IR purposes, we just lower the body normally
+        let was = self.suppress_line_breaks;
+        self.suppress_line_breaks = true;
         for clause in &mac.clauses {
             self.lower_nodes(&clause.body);
         }
+        self.suppress_line_breaks = was;
     }
 
     fn lower_silently(&mut self, mac: &MacroNode) {
