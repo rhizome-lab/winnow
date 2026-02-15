@@ -51,6 +51,44 @@ export function merge_color(col1: number, col2: number, amount: number): number 
   );
 }
 
+export function color_get_hue(color: number): number {
+  const r = (color & 0xff) / 255;
+  const g = ((color >> 8) & 0xff) / 255;
+  const b = (color >> 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return 0;
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h = Math.round(h * 255 / 6);
+  if (h < 0) h += 255;
+  return h;
+}
+
+export function make_color_hsv(h: number, s: number, v: number): number {
+  const hf = (h / 255) * 6;
+  const sf = s / 255;
+  const vf = v / 255;
+  const c = vf * sf;
+  const x = c * (1 - Math.abs(hf % 2 - 1));
+  const m = vf - c;
+  let r: number, g: number, b: number;
+  if (hf < 1) { r = c; g = x; b = 0; }
+  else if (hf < 2) { r = x; g = c; b = 0; }
+  else if (hf < 3) { r = 0; g = c; b = x; }
+  else if (hf < 4) { r = 0; g = x; b = c; }
+  else if (hf < 5) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  return make_color_rgb(
+    Math.round((r + m) * 255),
+    Math.round((g + m) * 255),
+    Math.round((b + m) * 255),
+  );
+}
+
 /** Convert a GML BGR color to a CSS hex string. */
 export function gmlColorToCss(color: number): string {
   const r = color & 0xff;

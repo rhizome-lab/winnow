@@ -250,6 +250,65 @@ export function draw_text_ext_color(
   drawConfig.ext = oldExt;
 }
 
+export function draw_text_ext_transformed(
+  x: number, y: number, text: string, sep: number, w: number,
+  xscale: number, yscale: number, angle: number,
+): void {
+  const ctx = getCtx();
+  const oldExt = drawConfig.ext;
+  drawConfig.ext = { sep, w };
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(xscale, yscale);
+  if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+  draw_text(0, 0, text);
+  ctx.restore();
+  drawConfig.ext = oldExt;
+}
+
+export function draw_text_transformed_color(
+  x: number, y: number, text: string,
+  xscale: number, yscale: number, angle: number,
+  c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+): void {
+  const ctx = getCtx();
+  const oldColor = drawConfig.color;
+  const oldAlpha = drawAlpha;
+  drawConfig.color = c1;
+  drawAlpha = alpha;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(xscale, yscale);
+  if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+  draw_text(0, 0, text);
+  ctx.restore();
+  drawConfig.color = oldColor;
+  drawAlpha = oldAlpha;
+}
+
+export function draw_text_ext_transformed_color(
+  x: number, y: number, text: string, sep: number, w: number,
+  xscale: number, yscale: number, angle: number,
+  c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+): void {
+  const ctx = getCtx();
+  const oldColor = drawConfig.color;
+  const oldAlpha = drawAlpha;
+  const oldExt = drawConfig.ext;
+  drawConfig.color = c1;
+  drawAlpha = alpha;
+  drawConfig.ext = { sep, w };
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(xscale, yscale);
+  if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+  draw_text(0, 0, text);
+  ctx.restore();
+  drawConfig.color = oldColor;
+  drawAlpha = oldAlpha;
+  drawConfig.ext = oldExt;
+}
+
 export function string_height_ext(text: string, sep: number, w: number): number {
   const font = fonts[drawConfig.font];
   if (!font) return 0;

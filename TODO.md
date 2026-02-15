@@ -125,14 +125,8 @@ improve output fidelity:
 
 ### Missing Runtime Functions
 
-**draw.ts**:
-- [ ] `draw_text_ext_transformed`
-- [ ] `draw_text_transformed_color`
-- [ ] `draw_text_ext_transformed_color`
-
-**color.ts**:
-- [ ] `color_get_hue`
-- [ ] `make_color_hsv`
+All previously listed functions have been implemented. Check `function_modules`
+in runtime.json for any newly referenced but unimplemented functions.
 
 ## Twine Frontend
 
