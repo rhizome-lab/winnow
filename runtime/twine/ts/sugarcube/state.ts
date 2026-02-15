@@ -141,3 +141,27 @@ export function deleteSlot(name: string): void {
 export function hasSlot(name: string): boolean {
   return loadLocal(SLOT_PREFIX + name) !== null;
 }
+
+// --- Export/Import for Save.export/import ---
+
+/** Export the full history array for serialization. */
+export function exportHistory(): Moment[] {
+  return JSON.parse(JSON.stringify(history));
+}
+
+/** Export the current story variables for serialization. */
+export function exportVariables(): Record<string, any> {
+  return JSON.parse(JSON.stringify(storyVars));
+}
+
+/** Import full state (history + variables) from deserialized data. */
+export function importState(importedHistory: Moment[], importedVars: Record<string, any>): void {
+  history.length = 0;
+  for (const moment of importedHistory) {
+    history.push(moment);
+  }
+  for (const key of Object.keys(storyVars)) {
+    delete storyVars[key];
+  }
+  Object.assign(storyVars, importedVars);
+}

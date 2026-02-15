@@ -77,33 +77,84 @@ function ensureGlobals(): void {
   };
 
   // --- Save ---
-  const noop = () => {};
+  const saveSlotCount = 8;
+  const onLoadCallbacks = new Set<Function>();
+  const onSaveCallbacks = new Set<Function>();
+
   g.Save = {
     slots: {
-      length: 8,
-      count() { return 0; },
-      isEmpty() { return true; },
-      has(_i: number) { return false; },
-      get(_i: number) { return null; },
-      load(_i: number) {},
-      save(_i: number) {},
-      delete(_i: number) {},
+      length: saveSlotCount,
+      count() {
+        let n = 0;
+        for (let i = 0; i < saveSlotCount; i++) { if (State.hasSlot(String(i))) n++; }
+        return n;
+      },
+      isEmpty() { return g.Save.slots.count() === 0; },
+      has(i: number) { return State.hasSlot(String(i)); },
+      get(i: number) {
+        const raw = State.loadSlot(String(i));
+        return raw !== undefined ? { title: raw } : null;
+      },
+      load(i: number) {
+        const title = State.loadSlot(String(i));
+        if (title) {
+          for (const cb of onLoadCallbacks) cb();
+          Navigation.goto(title);
+        }
+      },
+      save(i: number, title?: string, metadata?: any) {
+        for (const cb of onSaveCallbacks) cb();
+        State.saveSlot(String(i));
+      },
+      delete(i: number) { State.deleteSlot(String(i)); },
       ok() { return true; },
     },
     autosave: {
-      has() { return false; },
-      get() { return null; },
-      load() {},
-      save() {},
-      delete() {},
+      has() { return State.hasSlot("auto"); },
+      get() {
+        const raw = State.loadSlot("auto");
+        return raw !== undefined ? { title: raw } : null;
+      },
+      load() {
+        const title = State.loadSlot("auto");
+        if (title) {
+          for (const cb of onLoadCallbacks) cb();
+          Navigation.goto(title);
+        }
+      },
+      save(_title?: string, _metadata?: any) { State.saveSlot("auto"); },
+      delete() { State.deleteSlot("auto"); },
       ok() { return true; },
     },
-    export() { return ""; },
-    import(_data: string) {},
-    serialize() { return ""; },
-    deserialize(_data: string) {},
-    onLoad: { add(_fn: Function) {}, delete(_fn: Function) {}, clear: noop, size: 0 },
-    onSave: { add(_fn: Function) {}, delete(_fn: Function) {}, clear: noop, size: 0 },
+    export() {
+      // Export full state as base64 JSON
+      const data = { history: State.exportHistory(), variables: State.exportVariables() };
+      return btoa(JSON.stringify(data));
+    },
+    import(data: string) {
+      try {
+        const parsed = JSON.parse(atob(data));
+        State.importState(parsed.history, parsed.variables);
+        const title = State.peekMoment();
+        if (title) Navigation.goto(title);
+      } catch (e) {
+        console.error("[Save] import failed:", e);
+      }
+    },
+    serialize() { return g.Save.export(); },
+    deserialize(data: string) { g.Save.import(data); },
+    onLoad: {
+      add(fn: Function) { onLoadCallbacks.add(fn); },
+      delete(fn: Function) { onLoadCallbacks.delete(fn); },
+      clear() { onLoadCallbacks.clear(); },
+      get size() { return onLoadCallbacks.size; },
+    },
+    onSave: {
+      add(fn: Function) { onSaveCallbacks.add(fn); },
+      delete(fn: Function) { onSaveCallbacks.delete(fn); },
+      clear() { onSaveCallbacks.clear(); },
+      get size() { return onSaveCallbacks.size; },
+    },
   };
 
   // --- Macro ---
