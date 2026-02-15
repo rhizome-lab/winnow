@@ -1,21 +1,39 @@
-/** SugarCube widget invocation stubs.
+/** SugarCube widget invocation.
  *
- * When the translator encounters an unknown macro name, it emits a
- * Widget.call(name, ...args) SystemCall. Content blocks within the
- * widget invocation are bracketed by content_start/content_end.
+ * Widget functions are emitted as `widget_<name>` and registered in the
+ * passage registry alongside regular passages. The <<widget>> macro
+ * invocation calls Widget.call(name, ...args), which looks up the
+ * function and invokes it.
  */
+
+import * as State from "./state";
+import { pushBuffer, popBuffer } from "./output";
 
 /** Invoke a widget by name. */
 export function call(name: string, ...args: any[]): void {
-  console.log("[widget:call]", name, ...args);
+  // Set _args temp variable for the widget to access
+  State.set("_args", args);
+
+  // Look up widget function in the passage registry
+  import("./navigation").then((nav) => {
+    const fn = nav.getPassage(name);
+    if (fn) {
+      fn();
+    } else {
+      console.warn(`[widget] widget not found: "${name}"`);
+    }
+  });
 }
 
-/** Start a widget content block. */
+/** Start a widget content block (<<widget>> body content). */
 export function content_start(): void {
-  console.log("[widget:content_start]");
+  pushBuffer();
 }
 
 /** End a widget content block. */
 export function content_end(): void {
-  console.log("[widget:content_end]");
+  const body = popBuffer();
+  // Widget body content is captured but consumed by the widget function.
+  // The widget accesses it via the _contents temp variable.
+  State.set("_contents", body);
 }

@@ -9,9 +9,11 @@
  * the backend rewrite pass — they never reach this module at runtime.
  */
 
+import * as State from "./state";
+
 /** Resolve a bare name (used for function lookups in expression context). */
 export function resolve(name: string): any {
-  // At runtime, this would look up `name` in the SugarCube story scope.
+  // Check passage/widget registry first, then globalThis
   return (globalThis as any)[name];
 }
 
@@ -67,20 +69,22 @@ export function instanceof_(value: any, type_: any): boolean {
 }
 export { instanceof_ as instanceof };
 
-/** Create an arrow function from parameter names and a body expression. */
-export function arrow(params: string, body: any): any {
-  // params is a comma-separated string of parameter names
-  // body is the evaluated body expression
-  // At runtime this would need proper JS evaluation
-  console.log("[arrow]", params, body);
-  return body;
+/** Create an arrow function from parameter names and a body expression string. */
+export function arrow(params: string, body: string): (...args: any[]) => any {
+  // Build a function that evaluates the body with access to State
+  return new Function(
+    "State",
+    `return function(${params}) { return ${body}; }`
+  )(State);
 }
 
 /** Evaluate raw JavaScript code (<<script>> blocks). */
 // Using a wrapper to avoid shadowing the global eval.
 export { evalCode as eval };
 function evalCode(code: string): void {
-  console.log("[eval]", code);
+  // Give eval'd code access to runtime modules
+  const fn = new Function("State", code);
+  fn(State);
 }
 
 /** Throw an error. */
@@ -88,26 +92,57 @@ export function error(message: string): never {
   throw new Error(message);
 }
 
-/** Start a <<done>> block (deferred execution). */
+// --- Deferred execution (<<done>>) ---
+
+const doneQueue: (() => void)[] = [];
+let doneBuffering = false;
+
+/** Start a <<done>> block (deferred execution until end of passage). */
 export function done_start(): void {
-  console.log("[done_start]");
+  doneBuffering = true;
 }
 
 /** End a <<done>> block. */
 export function done_end(): void {
-  console.log("[done_end]");
+  doneBuffering = false;
 }
+
+/** Execute all queued done blocks. Called after passage rendering. */
+export function flushDone(): void {
+  const queued = doneQueue.splice(0);
+  for (const fn of queued) {
+    fn();
+  }
+}
+
+// --- Loop control flow ---
+
+/** Sentinel for <<break>>. */
+const BREAK_SENTINEL = Symbol("break");
+
+/** Sentinel for <<continue>>. */
+const CONTINUE_SENTINEL = Symbol("continue");
 
 /** Break out of a loop (<<break>>). */
 // Using a wrapper to avoid JS reserved word.
 export { breakLoop as break };
-function breakLoop(): void {
-  console.log("[break]");
+function breakLoop(): never {
+  throw BREAK_SENTINEL;
 }
 
 /** Continue to next iteration (<<continue>>). */
 // Using a wrapper to avoid JS reserved word.
 export { continueLoop as continue };
-function continueLoop(): void {
-  console.log("[continue]");
+function continueLoop(): never {
+  throw CONTINUE_SENTINEL;
+}
+
+/** Check if an error is a break sentinel. */
+export function isBreak(e: unknown): boolean {
+  return e === BREAK_SENTINEL;
+}
+
+/** Check if an error is a continue sentinel. */
+export function isContinue(e: unknown): boolean {
+  return e === CONTINUE_SENTINEL;
 }
