@@ -86,7 +86,7 @@ Layer 1: Platform Implementation         platform/browser.ts
 
 **Direct DOM ops stay in shim modules** — Twine is fundamentally DOM-based, so `createElement`, `querySelector`, etc. are called directly in the sugarcube/ modules, not abstracted through the platform layer. Only concerns that benefit from swappability go through platform.
 
-**Platform concern modules never import from sibling concern modules.** Each module (persistence, audio, input, dialog, save-ui, etc.) is independently swappable — swapping one must not require updating another. Cross-concern dependencies are injected via callbacks (e.g. `initCommands(registerCommand)`) or wired at the integration point (`index.ts`). If module A needs functionality from module B, it receives it as a parameter, never via `import`.
+**Platform concern modules never import from sibling concern modules.** Each module (persistence, audio, input, dialog, save-ui, settings-ui, layout, etc.) is independently swappable — swapping one must not require updating another. Cross-concern dependencies are injected via callbacks (e.g. `initCommands(registerCommand)`, `init(showDialog, closeDialog)`) or wired at the integration point (`index.ts`). If module A needs functionality from module B, it receives it as a parameter, never via `import`. Two modules sharing an implementation detail (e.g. save-ui and settings-ui both happen to use dialog today) is never a reason to merge them — a replacement save-ui might not use dialogs at all.
 
 Swap platforms by changing the re-export in `platform/index.ts` — zero runtime cost since it's just module aliasing.
 
