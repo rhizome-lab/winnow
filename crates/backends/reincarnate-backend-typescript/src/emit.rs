@@ -3036,7 +3036,8 @@ mod tests {
         assert!(out.contains("false"), "Should contain false:\n{out}");
         assert!(out.contains("42"), "Should contain 42:\n{out}");
         assert!(out.contains("3.125"), "Should contain 3.125:\n{out}");
-        assert!(out.contains(r#""hello \"world\"\nnewline""#), "Should contain escaped string:\n{out}");
+        // Multiline strings are emitted as template literals
+        assert!(out.contains("`hello \"world\"\nnewline`"), "Should contain template literal string:\n{out}");
     }
 
     #[test]

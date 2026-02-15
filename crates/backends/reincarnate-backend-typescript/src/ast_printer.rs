@@ -832,7 +832,13 @@ pub(crate) fn emit_constant(c: &Constant) -> String {
         Constant::Int(n) => n.to_string(),
         Constant::UInt(n) => n.to_string(),
         Constant::Float(f) => format_float(*f),
-        Constant::String(s) => format!("\"{}\"", escape_js_string(s)),
+        Constant::String(s) => {
+            if s.contains('\n') {
+                format!("`{}`", escape_js_template(s))
+            } else {
+                format!("\"{}\"", escape_js_string(s))
+            }
+        }
     }
 }
 
@@ -854,6 +860,34 @@ pub fn escape_js_string(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Escape a string for use inside a JS template literal (backtick-quoted).
+/// Newlines are preserved literally; backticks and `${` are escaped.
+fn escape_js_template(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => { out.push_str("\\\\"); i += 1; }
+            b'`' => { out.push_str("\\`"); i += 1; }
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+                out.push_str("\\${");
+                i += 2;
+            }
+            b'\r' => {
+                // Normalize \r\n to \n, drop bare \r
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                    i += 1;
+                }
+                out.push('\n');
+                i += 1;
+            }
+            _ => { out.push(bytes[i] as char); i += 1; }
         }
     }
     out
