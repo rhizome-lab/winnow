@@ -16,6 +16,7 @@ import * as Settings from "./settings";
 import * as Platform from "../platform";
 import jQuery from "jquery";
 import { installExtensions } from "./jquery-extensions";
+import { Wikifier } from "./wikifier";
 
 // --- Global setup for eval'd scripts ---
 
@@ -179,21 +180,7 @@ function ensureGlobals(): void {
   };
 
   // --- Wikifier ---
-  g.Wikifier = {
-    wikifyEval(markup: string): Text {
-      return document.createTextNode(markup);
-    },
-    createExternalLink(url: string, text: string): HTMLAnchorElement {
-      const a = document.createElement("a");
-      a.href = url;
-      a.textContent = text;
-      a.target = "_blank";
-      return a;
-    },
-    isExternalLink(url: string): boolean {
-      return /^(?:https?|mailto|tel):/.test(url);
-    },
-  };
+  g.Wikifier = Wikifier;
 
   // --- Passage ---
   class PassageShim {
@@ -306,8 +293,7 @@ function ensureGlobals(): void {
       }
     },
     wiki(content: string) {
-      // No full wikification — render as plain text
-      dialogBody.appendChild(document.createTextNode(content));
+      dialogBody.appendChild(Wikifier.wikifyEval(content));
     },
   };
 
@@ -333,6 +319,30 @@ function ensureGlobals(): void {
   g.previous = () => {
     const all = State.passages();
     return all.length >= 2 ? all[all.length - 2] : "";
+  };
+
+  // --- tags() ---
+  g.tags = (...passageNames: string[]) => {
+    if (passageNames.length === 0) {
+      return Navigation.getTags(Navigation.current());
+    }
+    const result: string[] = [];
+    for (const name of passageNames) {
+      result.push(...Navigation.getTags(name));
+    }
+    return result;
+  };
+
+  // --- importStyles(url) ---
+  g.importStyles = (url: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = url;
+      link.onload = () => resolve();
+      link.onerror = () => reject(new Error(`failed to load stylesheet: ${url}`));
+      document.head.appendChild(link);
+    });
   };
 }
 
