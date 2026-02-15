@@ -11,7 +11,7 @@
   },
   "scaffold": {
     "imports": [{ "names": ["startStory"], "path": "sugarcube/navigation" }],
-    "entry": "{userScripts}\nstartStory({passages}, {startPassage});",
+    "entry": "{userScripts}\nstartStory({passages}, {startPassage}, {passageTags});",
     "dependencies": {
       "jquery": "^3.7.0"
     }

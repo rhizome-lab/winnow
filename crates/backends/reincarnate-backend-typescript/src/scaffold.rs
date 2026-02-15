@@ -156,6 +156,29 @@ fn build_passage_map(modules: &[Module]) -> String {
     }
 }
 
+/// Build passage tag map: `{ "Name": ["tag1", "tag2"], ... }`.
+fn build_passage_tags(modules: &[Module]) -> String {
+    let mut entries = Vec::new();
+    for module in modules {
+        for (display_name, tags) in &module.passage_tags {
+            let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+            let tag_list: Vec<String> = tags
+                .iter()
+                .map(|t| {
+                    let t_escaped = t.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{t_escaped}\"")
+                })
+                .collect();
+            entries.push(format!("  \"{escaped}\": [{}]", tag_list.join(", ")));
+        }
+    }
+    if entries.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n}}", entries.join(",\n"))
+    }
+}
+
 /// Build user script call statements (e.g. `__user_script_0();`).
 ///
 /// Detects functions named `__user_script_*` in the module and emits
@@ -337,12 +360,14 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> 
         let class_list = class_names.join(", ");
         let room_creation_code = build_room_creation_code_array(modules);
         let passage_map = build_passage_map(modules);
+        let passage_tags = build_passage_tags(modules);
         let user_scripts = build_user_script_calls(modules);
         let start_passage = find_start_passage(modules);
         let expanded = entry
             .replace("{classes}", &class_list)
             .replace("{roomCreationCode}", &room_creation_code)
             .replace("{passages}", &passage_map)
+            .replace("{passageTags}", &passage_tags)
             .replace("{userScripts}", &user_scripts)
             .replace("{startPassage}", &start_passage);
         let _ = writeln!(out, "{}", expanded);

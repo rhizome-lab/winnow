@@ -614,6 +614,12 @@ impl ModuleBuilder {
         self.module.passage_names.insert(display_name, func_name);
     }
 
+    pub fn add_passage_tags(&mut self, display_name: String, tags: Vec<String>) {
+        if !tags.is_empty() {
+            self.module.passage_tags.insert(display_name, tags);
+        }
+    }
+
     pub fn build(self) -> Module {
         self.module
     }

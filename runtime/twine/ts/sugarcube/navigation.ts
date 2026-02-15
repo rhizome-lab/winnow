@@ -7,6 +7,9 @@ import * as Events from "./events";
 /** Registry of passage name → passage function. */
 const passages: Map<string, () => void> = new Map();
 
+/** Registry of passage name → tags. */
+const passageTags: Map<string, string[]> = new Map();
+
 /** Current passage name. */
 let currentPassage = "";
 
@@ -17,9 +20,14 @@ let currentPassage = "";
  * 2. Run StoryInit passage (if it exists)
  * 3. Navigate to the explicit start passage (or first registered)
  */
-export function startStory(passageMap: Record<string, () => void>, startPassage?: string): void {
+export function startStory(passageMap: Record<string, () => void>, startPassage?: string, tagMap?: Record<string, string[]>): void {
   for (const [name, fn] of Object.entries(passageMap)) {
     passages.set(name, fn);
+  }
+  if (tagMap) {
+    for (const [name, tags] of Object.entries(tagMap)) {
+      passageTags.set(name, tags);
+    }
   }
 
   // Run StoryInit if it exists (initializes story variables)
@@ -140,4 +148,14 @@ export function has(name: string): boolean {
 /** Get a passage function by name (for widget/engine lookup). */
 export function getPassage(name: string): (() => void) | undefined {
   return passages.get(name);
+}
+
+/** Get the tags for a passage. */
+export function getTags(name: string): string[] {
+  return passageTags.get(name) || [];
+}
+
+/** Get all passage names in the registry. */
+export function allPassages(): string[] {
+  return Array.from(passages.keys());
 }

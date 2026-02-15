@@ -105,6 +105,7 @@ impl TwineFrontend {
 
             // Register passage name → function name mapping for the passage registry
             mb.add_passage_name(passage.name.clone(), func_name);
+            mb.add_passage_tags(passage.name.clone(), passage.tags.clone());
 
             // Track start passage
             if Some(&passage.name) == start_passage_name.as_ref() {

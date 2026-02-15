@@ -151,6 +151,11 @@ pub struct Module {
     /// registry mapping names to callable functions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub passage_names: BTreeMap<String, String>,
+    /// Passage tags: display name → list of tags.
+    /// Populated by the Twine frontend so the scaffold can emit a tag
+    /// registry for runtime use (nobr, widget, special passages, etc.).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub passage_tags: BTreeMap<String, Vec<String>>,
 }
 
 impl Module {
@@ -170,6 +175,7 @@ impl Module {
             room_creation_code: BTreeMap::new(),
             sprite_names: Vec::new(),
             passage_names: BTreeMap::new(),
+            passage_tags: BTreeMap::new(),
         }
     }
 }
