@@ -12,6 +12,7 @@
 import * as State from "./state";
 import * as Navigation from "./navigation";
 import * as Macro from "./macro";
+import * as Settings from "./settings";
 import * as Platform from "../platform";
 import jQuery from "jquery";
 import { installExtensions } from "./jquery-extensions";
@@ -262,6 +263,18 @@ function ensureGlobals(): void {
   g.L10n = {
     get(key: string) { return key; },
   };
+
+  // --- Setting ---
+  g.Setting = {
+    addToggle: Settings.addToggle,
+    addList: Settings.addList,
+    addRange: Settings.addRange,
+    load: Settings.load,
+    save: Settings.save,
+    reset: Settings.reset,
+  };
+  // Load persisted settings
+  Settings.load();
 
   // --- Dialog ---
   let dialogTitle = "";
