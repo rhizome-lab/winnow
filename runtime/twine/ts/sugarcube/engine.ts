@@ -40,6 +40,20 @@ function ensureGlobals(): void {
   g.$ = jQuery;
   installExtensions();
 
+  // --- version: SugarCube version info (checked by macro addons) ---
+  g.version = Object.freeze({
+    title: "SugarCube",
+    major: 2,
+    minor: 36,
+    patch: 1,
+    prerelease: null,
+    build: null,
+    date: new Date("2023-01-01"),
+    extensions: {},
+    toString() { return "2.36.1"; },
+    long() { return `SugarCube v2.36.1`; },
+  });
+
   // --- setup: empty object that user scripts populate with game data ---
   if (!g.setup) g.setup = {};
 
