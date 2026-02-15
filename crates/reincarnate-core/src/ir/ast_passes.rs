@@ -2388,15 +2388,16 @@ fn try_absorb_phi_condition(body: &mut Vec<Stmt>) -> bool {
             continue;
         }
 
-        // vN must not appear in the else_body at all.
-        let else_refs = match &body[i] {
+        // vN must not appear in the else_body at all (reads or writes).
+        // Use stmt_references_var which checks both, unlike
+        // count_var_refs_in_stmt which only counts reads.
+        let else_has_refs = match &body[i] {
             Stmt::If { else_body, .. } => else_body
                 .iter()
-                .map(|s| count_var_refs_in_stmt(s, &var_name))
-                .sum::<usize>(),
+                .any(|s| stmt_references_var(s, &var_name)),
             _ => unreachable!(),
         };
-        if else_refs > 0 {
+        if else_has_refs {
             continue;
         }
 
