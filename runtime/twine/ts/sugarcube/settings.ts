@@ -4,7 +4,7 @@
  * Settings are persisted to localStorage via the platform layer.
  */
 
-import { loadLocal, saveLocal, removeLocal } from "../platform";
+import { loadLocal, saveLocal, removeLocal, type SettingUIEntry, showSettingsUI } from "../platform";
 
 const STORAGE_KEY = "reincarnate-settings";
 
@@ -43,6 +43,8 @@ type SettingDef = ToggleDef | ListDef | RangeDef;
 const definitions: Map<string, SettingDef> = new Map();
 const values: Record<string, any> = {};
 
+let register: ((id: string, binding: string, handler: () => void) => void) | null = null;
+
 // --- Registration ---
 
 /** Register a toggle (boolean) setting. */
@@ -62,6 +64,12 @@ export function addToggle(name: string, def: {
   definitions.set(name, setting);
   if (!(name in values)) {
     values[name] = setting.default;
+  }
+  if (register) {
+    register(`toggle-${name}`, "", () => {
+      set(name, !get(name));
+      save();
+    });
   }
 }
 
@@ -84,6 +92,14 @@ export function addList(name: string, def: {
   definitions.set(name, setting);
   if (!(name in values)) {
     values[name] = setting.default;
+  }
+  if (register) {
+    for (const opt of def.list) {
+      register(`set-${name}-${opt}`, "", () => {
+        set(name, opt);
+        save();
+      });
+    }
   }
 }
 
@@ -174,4 +190,29 @@ export function reset(): void {
 /** Get all registered setting definitions (for UI rendering). */
 export function getDefinitions(): Map<string, SettingDef> {
   return definitions;
+}
+
+/** Register commands for settings management. */
+export function initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
+  register = registerCommand;
+  registerCommand("open-settings", "", () => {
+    const entries: SettingUIEntry[] = [];
+    for (const [name, def] of definitions) {
+      entries.push({
+        name,
+        type: def.type,
+        label: def.label,
+        desc: def.desc,
+        value: get(name),
+        ...(def.type === "list" ? { list: (def as any).list } : {}),
+        ...(def.type === "range" ? { min: (def as any).min, max: (def as any).max, step: (def as any).step } : {}),
+      });
+    }
+    showSettingsUI(
+      entries,
+      (n, v) => { set(n, v); save(); },
+      () => reset(),
+    );
+  });
+  registerCommand("reset-settings", "", () => reset());
 }

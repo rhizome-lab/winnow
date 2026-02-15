@@ -13,3 +13,7 @@ export function closeDialog(): void {
 export function isDialogOpen(): boolean {
   return isOverlayVisible();
 }
+
+export function initCommands(register: (id: string, binding: string, handler: () => void) => void): void {
+  register("close-dialog", "escape", closeDialog);
+}

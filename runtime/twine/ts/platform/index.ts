@@ -34,10 +34,10 @@ export {
   renderSidebar, stowSidebar, unstowSidebar, toggleSidebar, destroySidebar,
 } from "./layout";
 
-// Wire cross-concern commands — kept here so concern modules stay independent.
+// Each concern module registers its own commands via initCommands.
 import { registerCommand } from "./input";
-import { closeDialog } from "./dialog";
-import { toggleSidebar } from "./layout";
+import { initCommands as initDialogCommands } from "./dialog";
+import { initCommands as initLayoutCommands } from "./layout";
 
-registerCommand("close-dialog", "escape", closeDialog);
-registerCommand("toggle-sidebar", "", toggleSidebar);
+initDialogCommands(registerCommand);
+initLayoutCommands(registerCommand);

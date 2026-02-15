@@ -273,7 +273,14 @@ function ensureGlobals(): void {
     save: Settings.save,
     reset: Settings.reset,
   };
-  // Load persisted settings
+
+  // --- Commands ---
+  // Each module registers its own commands; engine.ts just calls initCommands.
+  Settings.initCommands(Platform.registerCommand);
+  State.initCommands(Platform.registerCommand, Navigation.goto);
+  Navigation.initCommands(Platform.registerCommand);
+
+  // Load persisted settings (after initCommands so toggle/list commands are registered)
   Settings.load();
 
   // --- Dialog ---

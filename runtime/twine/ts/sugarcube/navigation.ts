@@ -177,3 +177,9 @@ export function getTags(name: string): string[] {
 export function allPassages(): string[] {
   return Array.from(passages.keys());
 }
+
+/** Register commands for navigation. */
+export function initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
+  registerCommand("go-back", "", () => back());
+  registerCommand("restart", "", () => location.reload());
+}

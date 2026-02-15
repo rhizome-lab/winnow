@@ -5,7 +5,7 @@
  * The moment system tracks history for back/return navigation.
  */
 
-import { loadLocal, saveLocal, removeLocal } from "../platform";
+import { loadLocal, saveLocal, removeLocal, type SaveSlotInfo, showSaveUI } from "../platform";
 
 // --- Variable stores ---
 
@@ -189,4 +189,43 @@ export function importState(importedHistory: Moment[], importedVars: Record<stri
     delete storyVars[key];
   }
   Object.assign(storyVars, importedVars);
+}
+
+const SLOT_COUNT = 8;
+
+/** Register commands for save/load operations. */
+export function initCommands(
+  registerCommand: (id: string, binding: string, handler: () => void) => void,
+  goto: (passage: string) => void,
+): void {
+  registerCommand("quicksave", "$mod+s", () => saveSlot("auto"));
+  registerCommand("quickload", "", () => {
+    const title = loadSlot("auto");
+    if (title) goto(title);
+  });
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const slot = i;
+    registerCommand(`save-to-slot-${slot + 1}`, "", () => saveSlot(String(slot)));
+    registerCommand(`load-from-slot-${slot + 1}`, "", () => {
+      const title = loadSlot(String(slot));
+      if (title) goto(title);
+    });
+  }
+  registerCommand("open-saves", "", () => {
+    const slots: SaveSlotInfo[] = [];
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const has = hasSlot(String(i));
+      slots.push({ index: i, title: has ? `Save ${i + 1}` : null, date: null, isEmpty: !has });
+    }
+    showSaveUI(
+      slots,
+      (i) => saveSlot(String(i)),
+      (i) => { const t = loadSlot(String(i)); if (t) goto(t); },
+      (i) => deleteSlot(String(i)),
+    );
+  });
+  registerCommand("export-save", "", () => {
+    const data = { history: exportHistory(), variables: exportVariables() };
+    navigator.clipboard.writeText(btoa(JSON.stringify(data)));
+  });
 }

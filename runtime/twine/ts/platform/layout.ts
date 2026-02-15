@@ -84,6 +84,10 @@ export function toggleSidebar(): void {
   else stowSidebar();
 }
 
+export function initCommands(register: (id: string, binding: string, handler: () => void) => void): void {
+  register("toggle-sidebar", "", toggleSidebar);
+}
+
 export function destroySidebar(): void {
   if (sidebarEl) {
     sidebarEl.remove();
