@@ -1,27 +1,36 @@
 /**
- * Platform interface — re-exports from the active platform implementation.
+ * Platform interface — re-exports from per-concern implementation modules.
  *
- * To swap platforms, change the import source below. The bundler resolves
- * this at build time; tree-shaking eliminates the unused implementation.
- * The result is direct function calls with zero indirection.
- *
- * Implementations:
- *   ./browser  — Canvas 2D, DOM events, fetch, localStorage (default)
- *   ./null     — No-op stubs for testing (future)
+ * To swap a concern, change its import source below. The bundler resolves
+ * at build time; tree-shaking eliminates unused implementations.
  */
 export {
   initCanvas,
   createMeasureContext,
+} from "./graphics";
+
+export {
   addCanvasEventListener,
   addDocumentEventListener,
   getCanvasBounds,
+} from "./input";
+
+export {
   fetchResource,
   hasFetch,
+} from "./network";
+
+export {
   loadLocal,
   saveLocal,
   removeLocal,
+} from "./persistence";
+
+export {
   scheduleInterval,
   cancelScheduledInterval,
-  loadImageBitmap,
-  triggerDownload,
-} from "./browser";
+} from "./timing";
+
+export { loadImageBitmap } from "./images";
+
+export { triggerDownload } from "./files";
