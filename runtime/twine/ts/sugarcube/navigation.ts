@@ -49,7 +49,12 @@ export function goto(target: string): void {
   State.clearTemps();
   currentPassage = target;
   Output.clear();
-  fn();
+  try {
+    fn();
+  } catch (e) {
+    console.error(`[navigation] error in passage "${target}":`, e);
+    Output.text(`Error in passage "${target}": ${e}`);
+  }
   Output.flush();
 }
 
@@ -68,7 +73,12 @@ export function back(): void {
   }
   State.clearTemps();
   Output.clear();
-  fn();
+  try {
+    fn();
+  } catch (e) {
+    console.error(`[navigation] error in passage "${title}" (back):`, e);
+    Output.text(`Error in passage "${title}": ${e}`);
+  }
   Output.flush();
 }
 
@@ -86,7 +96,12 @@ export function include(passage: string): void {
     console.error(`[navigation] passage not found for include: "${passage}"`);
     return;
   }
-  fn();
+  try {
+    fn();
+  } catch (e) {
+    console.error(`[navigation] error in included passage "${passage}":`, e);
+    Output.text(`Error in passage "${passage}": ${e}`);
+  }
 }
 
 /** Get the current passage name. */
