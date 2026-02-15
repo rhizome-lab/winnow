@@ -134,6 +134,11 @@ impl<'a> Parser<'a> {
             return self.parse_macro_or_close();
         }
 
+        // [img[src]] or [img[src][link]]
+        if remaining.starts_with("[img[") {
+            return Some(self.parse_image());
+        }
+
         // [[link]]
         if remaining.starts_with("[[") {
             return Some(self.parse_link());
@@ -894,6 +899,52 @@ impl<'a> Parser<'a> {
         MacroArgs::LinkArgs { text, passage }
     }
 
+    /// Parse an `[img[src]]` or `[img[src][link]]` inline image.
+    fn parse_image(&mut self) -> Node {
+        let start = self.pos;
+        self.pos += 5; // skip [img[
+
+        // Scan src up to `]`
+        let src_start = self.pos;
+        while !self.at_end() && self.ch() != b']' {
+            self.advance_char();
+        }
+        let src_end = self.snap_to_char_boundary(self.pos);
+        let src = self.src[src_start..src_end].to_string();
+
+        // Consume `]`
+        if !self.at_end() && self.ch() == b']' {
+            self.pos += 1;
+        }
+
+        // Optional link target: `[link]`
+        let link = if !self.at_end() && self.ch() == b'[' {
+            self.pos += 1; // skip [
+            let link_start = self.pos;
+            while !self.at_end() && self.ch() != b']' {
+                self.advance_char();
+            }
+            let link_end = self.snap_to_char_boundary(self.pos);
+            let link_text = self.src[link_start..link_end].to_string();
+            if !self.at_end() && self.ch() == b']' {
+                self.pos += 1; // skip ]
+            }
+            Some(link_text)
+        } else {
+            None
+        };
+
+        // Consume final `]`
+        if !self.at_end() && self.ch() == b']' {
+            self.pos += 1;
+        }
+
+        Node {
+            kind: NodeKind::Image { src, link },
+            span: Span::new(start, self.pos),
+        }
+    }
+
     /// Parse a `[[link]]` or `[[text|passage]]` navigation link.
     ///
     /// Syntax: `[[content][$setter1][$setter2]...]`
@@ -1170,7 +1221,11 @@ impl<'a> Parser<'a> {
                 {
                     break;
                 }
-                b'[' if self.remaining().starts_with("[[") => break,
+                b'[' if self.remaining().starts_with("[img[")
+                    || self.remaining().starts_with("[[") =>
+                {
+                    break;
+                }
                 b'/' if self.remaining().starts_with("/*") => break,
                 b'$' if self.pos + 1 < self.bytes.len()
                     && (self.bytes[self.pos + 1].is_ascii_alphabetic()
@@ -1293,6 +1348,41 @@ mod tests {
             panic!("expected Link");
         }
     }
+
+    // ── Images ──────────────────────────────────────────────────────
+
+    #[test]
+    fn image_simple() {
+        let node = first_node("[img[photo.png]]");
+        if let NodeKind::Image { src, link } = &node.kind {
+            assert_eq!(src, "photo.png");
+            assert!(link.is_none());
+        } else {
+            panic!("expected Image, got {:?}", node.kind);
+        }
+    }
+
+    #[test]
+    fn image_with_link() {
+        let node = first_node("[img[photo.png][https://example.com]]");
+        if let NodeKind::Image { src, link } = &node.kind {
+            assert_eq!(src, "photo.png");
+            assert_eq!(link.as_deref(), Some("https://example.com"));
+        } else {
+            panic!("expected Image, got {:?}", node.kind);
+        }
+    }
+
+    #[test]
+    fn image_in_text() {
+        let ast = parse_str("before[img[pic.jpg]]after");
+        assert_eq!(ast.body.len(), 3);
+        assert!(matches!(&ast.body[0].kind, NodeKind::Text(s) if s == "before"));
+        assert!(matches!(&ast.body[1].kind, NodeKind::Image { src, .. } if src == "pic.jpg"));
+        assert!(matches!(&ast.body[2].kind, NodeKind::Text(s) if s == "after"));
+    }
+
+    // ── Link setters ──────────────────────────────────────────────────
 
     #[test]
     fn link_with_setter() {

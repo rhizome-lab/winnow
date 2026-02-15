@@ -33,11 +33,9 @@ export function popBuffer(): DocumentFragment {
 
 // --- Core output functions ---
 
-/** Emit plain text, processing SugarCube markup. */
+/** Emit plain text. */
 export function text(s: string): void {
-  const buf = currentBuffer();
-  // Process SugarCube inline markup
-  processMarkup(s, buf);
+  currentBuffer().appendChild(document.createTextNode(s));
 }
 
 /** Print a value (<<print expr>>). */
@@ -78,6 +76,23 @@ export function link(text: string, passage?: string, setter?: () => void): void 
     });
   }
   buf.appendChild(a);
+}
+
+// --- Images ---
+
+/** Emit an inline image, optionally wrapped in a link. */
+export function image(src: string, link?: string): void {
+  const buf = currentBuffer();
+  const img = document.createElement("img");
+  img.src = src;
+  if (link) {
+    const a = document.createElement("a");
+    a.href = link;
+    a.appendChild(img);
+    buf.appendChild(a);
+  } else {
+    buf.appendChild(img);
+  }
 }
 
 // --- Link blocks (<<link>> with body) ---
@@ -287,48 +302,3 @@ function parseDelay(value: string | number): number {
   return parseFloat(s) || 0;
 }
 
-/** Process SugarCube inline markup and append nodes to target. */
-function processMarkup(s: string, target: Node): void {
-  // Process [img[src]] and [img[src][link]] patterns
-  let remaining = s;
-  let lastIndex = 0;
-
-  const imgPattern = /\[img\[([^\]]+)\](?:\[([^\]]+)\])?\]/g;
-  let match;
-
-  while ((match = imgPattern.exec(remaining)) !== null) {
-    // Add text before the match
-    if (match.index > lastIndex) {
-      target.appendChild(
-        document.createTextNode(remaining.substring(lastIndex, match.index))
-      );
-    }
-
-    const src = match[1];
-    const linkTarget = match[2];
-
-    const img = document.createElement("img");
-    img.src = src;
-
-    if (linkTarget) {
-      const a = document.createElement("a");
-      a.href = linkTarget;
-      a.appendChild(img);
-      target.appendChild(a);
-    } else {
-      target.appendChild(img);
-    }
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  // Add remaining text
-  if (lastIndex < remaining.length) {
-    target.appendChild(
-      document.createTextNode(remaining.substring(lastIndex))
-    );
-  } else if (lastIndex === 0 && remaining.length > 0) {
-    // No matches found — add the whole string as text
-    target.appendChild(document.createTextNode(remaining));
-  }
-}

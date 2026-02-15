@@ -569,6 +569,16 @@ impl TranslateCtx {
                 let val = self.lower_expr(expr);
                 self.emit_print(val);
             }
+            NodeKind::Image { src, link } => {
+                let src_val = self.fb.const_string(src.as_str());
+                let mut args = vec![src_val];
+                if let Some(link_target) = link {
+                    let link_val = self.fb.const_string(link_target.as_str());
+                    args.push(link_val);
+                }
+                self.fb
+                    .system_call("SugarCube.Output", "image", &args, Type::Void);
+            }
             NodeKind::Html(html) => {
                 if !html.is_empty() {
                     self.emit_html(html);
