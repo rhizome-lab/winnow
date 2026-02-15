@@ -12,14 +12,21 @@ use crate::emit::sanitize_ident;
 
 /// Write all scaffold files into `output_dir`.
 pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Option<&RuntimeConfig>) -> Result<(), CoreError> {
-    fs::write(
-        output_dir.join("index.html"),
-        generate_index_html(modules),
-    )?;
+    let html = if is_twine(modules) {
+        generate_twine_index_html(modules)
+    } else {
+        generate_index_html(modules)
+    };
+    fs::write(output_dir.join("index.html"), html)?;
     fs::write(output_dir.join("tsconfig.json"), TSCONFIG)?;
     fs::write(output_dir.join("main.ts"), generate_main(modules, runtime_config))?;
     fs::write(output_dir.join("package.json"), PACKAGE_JSON)?;
     Ok(())
+}
+
+/// Detect Twine projects by the presence of passage_names in any module.
+fn is_twine(modules: &[Module]) -> bool {
+    modules.iter().any(|m| !m.passage_names.is_empty())
 }
 
 fn generate_index_html(modules: &[Module]) -> String {
@@ -56,6 +63,87 @@ fn generate_index_html(modules: &[Module]) -> String {
 </html>
 "#
     )
+}
+
+fn generate_twine_index_html(modules: &[Module]) -> String {
+    let title = modules
+        .first()
+        .map(|m| m.name.as_str())
+        .unwrap_or("Reincarnate App");
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      padding: 2em;
+      background: #111;
+      color: #eee;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 18px;
+      line-height: 1.6;
+      max-width: 54em;
+      margin-left: auto;
+      margin-right: auto;
+    }}
+    #passages {{
+      min-height: 50vh;
+    }}
+    #passages a {{
+      color: #4ea6ca;
+      cursor: pointer;
+      text-decoration: none;
+    }}
+    #passages a:hover {{
+      color: #8cc8e0;
+      text-decoration: underline;
+    }}
+    input, textarea, select, button {{
+      font-family: inherit;
+      font-size: inherit;
+      color: #eee;
+      background: #222;
+      border: 1px solid #555;
+      padding: 0.3em 0.6em;
+      border-radius: 3px;
+    }}
+    button {{
+      cursor: pointer;
+    }}
+    button:hover {{
+      background: #333;
+    }}
+  </style>
+</head>
+<body>
+  <div id="passages"></div>
+  <script type="module" src="./dist/bundle.js"></script>
+</body>
+</html>
+"#
+    )
+}
+
+/// Build passage map entries: `"Name": func_name` for each passage.
+fn build_passage_map(modules: &[Module]) -> String {
+    let mut entries = Vec::new();
+    for module in modules {
+        for (display_name, func_name) in &module.passage_names {
+            let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+            entries.push(format!("  \"{escaped}\": {func_name}"));
+        }
+    }
+    if entries.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n}}", entries.join(",\n"))
+    }
 }
 
 const TSCONFIG: &str = r#"{
@@ -138,12 +226,14 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> 
     if let Some(entry) = runtime_config.and_then(|c| c.scaffold.entry.as_deref()) {
         let class_list = class_names.join(", ");
         let room_creation_code = build_room_creation_code_array(modules);
+        let passage_map = build_passage_map(modules);
         let _ = writeln!(
             out,
             "{}",
             entry
                 .replace("{classes}", &class_list)
                 .replace("{roomCreationCode}", &room_creation_code)
+                .replace("{passages}", &passage_map)
         );
     } else if let Some(code) = metadata_entry_code(modules, runtime_config) {
         // Prefer metadata-based entry point over heuristic.

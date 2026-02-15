@@ -9,7 +9,10 @@
     "SugarCube.Input": { "path": "sugarcube/input" },
     "SugarCube.Widget": { "path": "sugarcube/widget" }
   },
-  "scaffold": {},
+  "scaffold": {
+    "imports": [{ "names": ["startStory"], "path": "sugarcube/navigation" }],
+    "entry": "startStory({passages});"
+  },
   "class_preamble": null,
   "type_definitions": {},
   "function_signatures": {},

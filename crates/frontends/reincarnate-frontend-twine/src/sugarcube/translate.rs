@@ -1510,7 +1510,7 @@ pub fn translate_user_script(index: usize, code: &str) -> Function {
 }
 
 /// Convert a passage name to a function name.
-fn passage_func_name(name: &str) -> String {
+pub fn passage_func_name(name: &str) -> String {
     let sanitized: String = name
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })

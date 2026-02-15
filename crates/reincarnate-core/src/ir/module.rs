@@ -146,6 +146,11 @@ pub struct Module {
     /// field defaults to named constants instead of raw integers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sprite_names: Vec<String>,
+    /// Passage names: original display name → sanitized function name.
+    /// Populated by the Twine frontend so the scaffold can build a passage
+    /// registry mapping names to callable functions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub passage_names: BTreeMap<String, String>,
 }
 
 impl Module {
@@ -164,6 +169,7 @@ impl Module {
             external_function_sigs: BTreeMap::new(),
             room_creation_code: BTreeMap::new(),
             sprite_names: Vec::new(),
+            passage_names: BTreeMap::new(),
         }
     }
 }

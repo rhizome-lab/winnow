@@ -610,6 +610,10 @@ impl ModuleBuilder {
         self.module.sprite_names = names;
     }
 
+    pub fn add_passage_name(&mut self, display_name: String, func_name: String) {
+        self.module.passage_names.insert(display_name, func_name);
+    }
+
     pub fn build(self) -> Module {
         self.module
     }

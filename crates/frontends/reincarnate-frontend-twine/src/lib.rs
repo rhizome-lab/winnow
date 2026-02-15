@@ -99,8 +99,12 @@ impl TwineFrontend {
 
             let ast = sugarcube::parse_passage(&passage.source);
 
+            let func_name = translate::passage_func_name(&passage.name);
             let (func, widgets) = translate::translate_passage(&passage.name, &ast);
             let func_id = mb.add_function(func);
+
+            // Register passage name → function name mapping for the passage registry
+            mb.add_passage_name(passage.name.clone(), func_name);
 
             // Track start passage
             if Some(&passage.name) == start_passage_name.as_ref() {
@@ -110,6 +114,8 @@ impl TwineFrontend {
             // Translate extracted widgets as separate functions
             for (widget_name, widget_body) in &widgets {
                 let widget_func = translate::translate_widget(widget_name, widget_body);
+                let widget_func_name = format!("widget_{widget_name}");
+                mb.add_passage_name(widget_name.clone(), widget_func_name);
                 mb.add_function(widget_func);
             }
         }
