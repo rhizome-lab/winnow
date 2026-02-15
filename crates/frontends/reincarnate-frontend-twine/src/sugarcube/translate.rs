@@ -20,6 +20,8 @@ use reincarnate_core::ir::{
 };
 
 use super::ast::*;
+use super::expr::parse_expr;
+use super::lexer::ExprLexer;
 
 /// Translation context for a single passage/widget function.
 pub struct TranslateCtx {
@@ -85,6 +87,118 @@ impl TranslateCtx {
         let s = self.fb.const_string(html);
         self.fb
             .system_call("SugarCube.Output", "html", &[s], Type::Void);
+    }
+
+    /// Emit an HTML node, resolving `@attr="expr"` patterns into dynamic
+    /// `setAttribute` calls via `htmlDynamic`.
+    fn emit_html_node(&mut self, html: &str) {
+        if self.suppress_output {
+            return;
+        }
+
+        // Quick check: does this tag have any @attr?
+        if !html.contains('@') {
+            self.emit_html(html);
+            return;
+        }
+
+        // Parse out @attr="expr" patterns
+        let mut template = String::new();
+        let mut attrs: Vec<(String, ValueId)> = Vec::new();
+        let bytes = html.as_bytes();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            // Look for @ that starts an attribute (preceded by whitespace)
+            if bytes[i] == b'@' && i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t' || bytes[i - 1] == b'\n') {
+                // Find the attribute name: @name
+                let attr_start = i;
+                i += 1; // skip @
+                let name_start = i;
+                while i < bytes.len() && bytes[i] != b'=' && bytes[i] != b' ' && bytes[i] != b'>' && bytes[i] != b'/' {
+                    i += 1;
+                }
+                let attr_name = &html[name_start..i];
+
+                // Skip whitespace around =
+                while i < bytes.len() && bytes[i] == b' ' {
+                    i += 1;
+                }
+
+                if i < bytes.len() && bytes[i] == b'=' {
+                    i += 1; // skip =
+                    // Skip whitespace after =
+                    while i < bytes.len() && bytes[i] == b' ' {
+                        i += 1;
+                    }
+
+                    if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                        let quote = bytes[i];
+                        i += 1; // skip opening quote
+                        let expr_start = i;
+                        while i < bytes.len() && bytes[i] != quote {
+                            i += 1;
+                        }
+                        let expr_str = &html[expr_start..i];
+                        if i < bytes.len() {
+                            i += 1; // skip closing quote
+                        }
+
+                        // Also consume trailing whitespace after the attribute so
+                        // the template doesn't accumulate extra spaces
+                        let after_attr = i;
+                        while i < bytes.len() && bytes[i] == b' ' {
+                            i += 1;
+                        }
+                        // If the next char is another @attr or end of tag, consume
+                        // the whitespace. Otherwise keep one space.
+                        if i < bytes.len() && bytes[i] != b'@' && bytes[i] != b'>' && bytes[i] != b'/' {
+                            i = after_attr;
+                        }
+
+                        // Strip trailing whitespace from template that preceded the @attr
+                        let trimmed = template.trim_end();
+                        let trim_len = trimmed.len();
+                        template.truncate(trim_len);
+                        // Re-add a single space if template doesn't end with '<'
+                        // (to keep tag syntax valid)
+                        if !template.ends_with('<') && !template.is_empty() {
+                            template.push(' ');
+                        }
+
+                        // Parse the expression and lower to IR
+                        let mut lexer = ExprLexer::new(expr_str, 0);
+                        let expr = parse_expr(&mut lexer);
+                        let val = self.lower_expr(&expr);
+
+                        attrs.push((attr_name.to_string(), val));
+                        continue;
+                    }
+                }
+
+                // Not a valid @attr="..." pattern — copy literally
+                template.push_str(&html[attr_start..i]);
+                continue;
+            }
+
+            template.push(bytes[i] as char);
+            i += 1;
+        }
+
+        if attrs.is_empty() {
+            self.emit_html(html);
+            return;
+        }
+
+        // Build args: [template_str, name1, val1, name2, val2, ...]
+        let template_val = self.fb.const_string(&template);
+        let mut args = vec![template_val];
+        for (name, val) in &attrs {
+            args.push(self.fb.const_string(name));
+            args.push(*val);
+        }
+        self.fb
+            .system_call("SugarCube.Output", "htmlDynamic", &args, Type::Void);
     }
 
     fn emit_line_break(&mut self) {
@@ -581,7 +695,7 @@ impl TranslateCtx {
             }
             NodeKind::Html(html) => {
                 if !html.is_empty() {
-                    self.emit_html(html);
+                    self.emit_html_node(html);
                 }
             }
             NodeKind::Comment(_) => {

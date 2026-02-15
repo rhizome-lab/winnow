@@ -52,6 +52,23 @@ export function html(s: string): void {
   buf.appendChild(temp.content.cloneNode(true));
 }
 
+/** Emit HTML with dynamic attributes.
+ *  @param template - static HTML with placeholder attrs removed
+ *  @param attrs - alternating [name, value, name, value, ...] pairs
+ */
+export function htmlDynamic(template: string, ...attrs: any[]): void {
+  const buf = currentBuffer();
+  const temp = document.createElement("template");
+  temp.innerHTML = template;
+  const el = temp.content.firstElementChild;
+  if (el) {
+    for (let i = 0; i < attrs.length; i += 2) {
+      el.setAttribute(attrs[i], String(attrs[i + 1]));
+    }
+  }
+  buf.appendChild(temp.content.cloneNode(true));
+}
+
 /** Emit a line break. */
 // Using a name that avoids JS reserved word conflicts in import context.
 export { lineBreak as break };

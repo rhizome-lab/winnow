@@ -222,7 +222,12 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
         }
 
         JsStmt::Expr(expr) => {
-            let _ = writeln!(out, "{indent}{};", print_expr(expr));
+            let s = print_expr(expr);
+            if s.starts_with('{') {
+                let _ = writeln!(out, "{indent}({s});");
+            } else {
+                let _ = writeln!(out, "{indent}{s};");
+            }
         }
 
         JsStmt::If {
