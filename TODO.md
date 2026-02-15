@@ -919,11 +919,32 @@ causing compile errors if any emitted code calls them.
 
 ### Open
 
-- [ ] **Dialog.wiki() lacks wikification** — Currently appends raw text. Real
-  SugarCube wikification parses TwineScript markup (links, macros, formatting)
-  into DOM nodes. Needs a markup-to-DOM renderer, possibly sharing the
-  existing SugarCube parser from the frontend. Stories using Dialog.wiki()
-  with markup will display unrendered source text.
+- [x] **Dialog.wiki() lacks wikification** — Fixed. Runtime Wikifier in
+  `sugarcube/wikifier.ts` provides full SugarCube 2 Wikifier API with
+  pluggable parser registry, AST caching, and all standard parsers.
+  `Dialog.wiki()` now uses `Wikifier.wikifyEval()`.
+
+- [ ] **`<<nobr>>` compile-time bug** — `lower_nobr()` in `translate.rs`
+  doesn't suppress `break()` calls inside `<<nobr>>` blocks — it lowers
+  the body unchanged. The runtime side (`output.ts`) is ready (`nobrActive`
+  flag), but the compiler never sets the suppression flag.
+
+- [ ] **`\n` → `<br>` fidelity bug** — The Rust parser does NOT emit
+  `Output.break()` for bare `\n` in passage text. In original SugarCube,
+  the `lineBreak` parser converts `\n` to `<br>`. Our compiled passages
+  leave `\n` as whitespace in text nodes, which browsers collapse. For
+  games that don't delete the lineBreak parser, this means missing line
+  breaks.
+
+- [ ] **`NodeKind::LineBreak` is dead code** — Defined in the Twine AST
+  but never created by the parser. Should either be used (for `\n` →
+  `Output.break()`) or removed.
+
+- [ ] **Passage rendering strategy** — Implement `passage_rendering`
+  manifest option (`auto`/`compiled`/`wikifier`). In `wikifier` mode,
+  Rust emitter emits passage source as string constants instead of compiled
+  functions. Navigation system passes source to runtime wikifier. `auto`
+  mode scans scripts for `Wikifier.Parser` references to choose.
 
 - [x] **Per-concern platform pluggability** — Split monolithic `browser.ts`
   into per-concern modules across all three runtimes. Twine: persistence,
