@@ -723,5 +723,80 @@ Wikifier.Parser.add({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Built-in parsers — Phase 2: links + images
+// ---------------------------------------------------------------------------
+
+/** Link: [[passage]], [[text|passage]], [[text->passage]], [[passage<-text]]
+ *  with optional setter [$var = val].
+ */
+Wikifier.Parser.add({
+  name: "link",
+  match: "\\[\\[",
+  handler(w: Wikifier) {
+    const parsed = Wikifier.helpers.parseSquareBracketedMarkup(w);
+
+    if (parsed.error) {
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    w.nextMatch = parsed.pos;
+
+    if (!parsed.link) {
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    const passage = Wikifier.helpers.evalPassageId(parsed.link.trim());
+    const displayText = parsed.text != null ? Wikifier.helpers.evalText(parsed.text.trim()) : passage;
+
+    let setter: (() => void) | undefined;
+    if (parsed.setter) {
+      setter = Wikifier.helpers.createShadowSetterCallback(parsed.setter);
+    }
+
+    if (Wikifier.isExternalLink(passage)) {
+      const a = Wikifier.createExternalLink(w.output, passage, displayText);
+      a.textContent = displayText;
+    } else {
+      Wikifier.createInternalLink(w.output, passage, displayText, setter);
+    }
+  },
+});
+
+/** Image: [img[src]], [img[src][link]] */
+Wikifier.Parser.add({
+  name: "image",
+  match: "\\[img\\[",
+  handler(w: Wikifier) {
+    const parsed = Wikifier.helpers.parseSquareBracketedMarkup(w);
+
+    if (parsed.error || !parsed.source) {
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    w.nextMatch = parsed.pos;
+
+    const src = Wikifier.helpers.evalText(parsed.source.trim());
+    const img = document.createElement("img");
+    img.src = src;
+
+    if (parsed.link) {
+      const link = Wikifier.helpers.evalPassageId(parsed.link.trim());
+      if (Wikifier.isExternalLink(link)) {
+        const a = Wikifier.createExternalLink(w.output, link);
+        a.appendChild(img);
+      } else {
+        const a = Wikifier.createInternalLink(w.output, link);
+        a.appendChild(img);
+      }
+    } else {
+      w.output.appendChild(img);
+    }
+  },
+});
+
 // Reset modified flag after initial parser registration
 Wikifier.Parser.modified = false;
