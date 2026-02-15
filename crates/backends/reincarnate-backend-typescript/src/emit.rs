@@ -26,7 +26,7 @@ pub(crate) enum EngineKind {
 /// Detect engine from runtime config system_modules keys.
 fn detect_engine(runtime_config: Option<&RuntimeConfig>) -> EngineKind {
     if let Some(cfg) = runtime_config {
-        if cfg.system_modules.keys().any(|k| k.starts_with("SugarCube.")) {
+        if cfg.system_modules.keys().any(|k| k.starts_with("SugarCube.") || k.starts_with("Harlowe.")) {
             return EngineKind::Twine;
         }
         if cfg.system_modules.keys().any(|k| k.starts_with("GameMaker.")) {

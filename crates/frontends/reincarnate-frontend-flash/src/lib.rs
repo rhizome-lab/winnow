@@ -91,6 +91,6 @@ impl Frontend for FlashFrontend {
             }
         }
 
-        Ok(FrontendOutput { modules, assets })
+        Ok(FrontendOutput { modules, assets, runtime_variant: None })
     }
 }

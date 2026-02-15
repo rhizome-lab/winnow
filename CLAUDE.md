@@ -51,6 +51,8 @@ From ecosystem-wide session analysis:
 
 ## Design Principles
 
+**Correctness over copouts.** When a design problem surfaces, solve it correctly — don't paper over it with string substitution, special-case hacks, or "simplest thing that works". A correct solution may take more time, but a hacky one accumulates debt that costs more later. When two things are fundamentally different (e.g. SugarCube and Harlowe), model them as different — don't force-merge them because they share a container format.
+
 **Unify, don't multiply.** One interface for multiple engines > separate implementations per engine. Plugin systems > hardcoded switches.
 
 **Lazy extraction.** Don't parse everything upfront. Extract on demand, cache aggressively.

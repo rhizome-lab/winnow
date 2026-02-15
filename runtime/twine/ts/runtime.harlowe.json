@@ -1,0 +1,17 @@
+{
+  "system_modules": {
+    "Harlowe.State": { "path": "harlowe/state" },
+    "Harlowe.Output": { "path": "harlowe/output" },
+    "Harlowe.Navigation": { "path": "harlowe/navigation" },
+    "Harlowe.Engine": { "path": "harlowe/engine" }
+  },
+  "scaffold": {
+    "imports": [{ "names": ["startStory"], "path": "harlowe/navigation" }],
+    "entry": "{userScripts}\nstartStory({passages}, {startPassage}, {passageTags});",
+    "dependencies": {}
+  },
+  "class_preamble": null,
+  "type_definitions": {},
+  "function_signatures": {},
+  "function_modules": []
+}

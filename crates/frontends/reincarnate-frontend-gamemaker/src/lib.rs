@@ -143,6 +143,7 @@ impl Frontend for GameMakerFrontend {
         Ok(FrontendOutput {
             modules: vec![module],
             assets,
+            runtime_variant: None,
         })
     }
 }

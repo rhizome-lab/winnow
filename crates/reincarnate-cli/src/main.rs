@@ -96,7 +96,11 @@ fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
 /// Uses `CARGO_MANIFEST_DIR` (compile-time) to locate `runtime/{engine}/{lang}/`
 /// relative to the workspace root. Loads `runtime.json` from the directory.
 /// Returns `None` if the directory or config file doesn't exist.
-fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend) -> Option<RuntimePackage> {
+///
+/// When `variant` is `Some("harlowe")`, tries `runtime.harlowe.json` first,
+/// falling back to `runtime.json`. This lets a single engine directory serve
+/// multiple sub-formats with different scaffold and system module configs.
+fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend, variant: Option<&str>) -> Option<RuntimePackage> {
     let engine_name = match engine {
         EngineOrigin::Flash => "flash",
         EngineOrigin::GameMaker => "gamemaker",
@@ -114,7 +118,14 @@ fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend) -> Option<Run
         Ok(p) if p.is_dir() => p,
         _ => return None,
     };
-    let config_path = source_dir.join("runtime.json");
+    // Try variant-specific config first (e.g. runtime.harlowe.json),
+    // then fall back to runtime.json.
+    let config_path = if let Some(v) = variant {
+        let variant_path = source_dir.join(format!("runtime.{v}.json"));
+        if variant_path.exists() { variant_path } else { source_dir.join("runtime.json") }
+    } else {
+        source_dir.join("runtime.json")
+    };
     let config_file = std::fs::File::open(&config_path).ok()?;
     let config = serde_json::from_reader(std::io::BufReader::new(config_file))
         .unwrap_or_else(|e| panic!("failed to parse {}: {e}", config_path.display()));
@@ -200,8 +211,9 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str, debug
 
     // Resolve runtime early so we can attach type_definitions to modules
     // before running transforms (type inference needs them).
+    let runtime_variant = output.runtime_variant.as_deref();
     let first_backend = manifest.targets.first().map(|t| &t.backend);
-    let early_runtime = first_backend.and_then(|b| resolve_runtime(&manifest.engine, b));
+    let early_runtime = first_backend.and_then(|b| resolve_runtime(&manifest.engine, b, runtime_variant));
     let external_type_defs = early_runtime
         .as_ref()
         .map(|rt| rt.config.type_definitions.clone())
@@ -244,7 +256,7 @@ fn cmd_emit(manifest_path: &PathBuf, skip_passes: &[String], preset: &str, debug
             assets: output.assets.clone(),
             output_dir: target.output_dir.clone(),
             lowering_config: lowering_config.clone(),
-            runtime: resolve_runtime(&manifest.engine, &target.backend),
+            runtime: resolve_runtime(&manifest.engine, &target.backend, runtime_variant),
             debug: debug.clone(),
         };
         eprintln!("[emit] emitting to {}...", target.output_dir.display());

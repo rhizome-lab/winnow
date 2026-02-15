@@ -151,6 +151,7 @@ impl TwineFrontend {
         Ok(FrontendOutput {
             modules: vec![module],
             assets,
+            runtime_variant: None,
         })
     }
 
@@ -240,6 +241,7 @@ impl TwineFrontend {
         Ok(FrontendOutput {
             modules: vec![module],
             assets,
+            runtime_variant: Some("harlowe".to_string()),
         })
     }
 }

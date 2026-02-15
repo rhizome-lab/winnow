@@ -18,6 +18,13 @@ pub struct FrontendOutput {
     pub modules: Vec<Module>,
     /// Assets extracted alongside the code.
     pub assets: AssetCatalog,
+    /// Optional variant hint for runtime config selection.
+    ///
+    /// When set, the CLI loads `runtime.{variant}.json` instead of the
+    /// default `runtime.json`. This lets a single engine (e.g. Twine) use
+    /// different runtime configurations for different sub-formats
+    /// (e.g. SugarCube vs Harlowe).
+    pub runtime_variant: Option<String>,
 }
 
 /// Frontend trait — parses engine-specific formats and emits IR.
