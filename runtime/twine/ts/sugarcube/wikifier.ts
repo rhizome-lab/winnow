@@ -799,6 +799,298 @@ Wikifier.Parser.add({
 });
 
 // ---------------------------------------------------------------------------
+// Built-in parsers — Phase 4: macros
+// ---------------------------------------------------------------------------
+
+/** Macro: <<name args>>, block macros <<name>>...body...<</name>>.
+ *  Handles self-closing, block, and widget-fallback macros.
+ */
+Wikifier.Parser.add({
+  name: "macro",
+  match: "<<(?:\\/[A-Za-z][\\w-]*|[A-Za-z][\\w-]*)",
+  handler(w: Wikifier) {
+    const src = w.source;
+    const start = w.matchStart;
+
+    // Check if this is a closing tag (handled by subWikify terminator)
+    if (src[start + 2] === "/") {
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    // Parse macro name from matchText: <<name...
+    const nameMatch = w.matchText.match(/^<<([A-Za-z][\w-]*)/);
+    if (!nameMatch) {
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    const macroName = nameMatch[1];
+
+    // Find closing >> to get the full macro tag
+    let pos = w.nextMatch;
+    let depth = 0;
+    let foundClose = false;
+
+    for (; pos < src.length - 1; pos++) {
+      if (src[pos] === ">" && src[pos + 1] === ">") {
+        if (depth === 0) {
+          foundClose = true;
+          break;
+        }
+        depth--;
+        pos++; // skip second >
+      } else if (src[pos] === "<" && src[pos + 1] === "<") {
+        depth++;
+        pos++; // skip second <
+      }
+    }
+
+    if (!foundClose) {
+      const loc = offsetToLineCol(src, start);
+      console.warn(`[wikifier] unclosed macro <<${macroName}>> at ${loc.line}:${loc.col}`);
+      w.output.appendChild(document.createTextNode(w.matchText));
+      return;
+    }
+
+    // Raw argument string (between name and >>)
+    const rawArgs = src.slice(start + 2 + macroName.length, pos).trim();
+    w.nextMatch = pos + 2; // past >>
+
+    // Look up macro
+    const macroDef = Macro.get(macroName);
+
+    if (macroDef) {
+      // Parse arguments
+      const parsedArgs = macroDef.skipArgs ? [] : parseMacroArgs(rawArgs);
+      (parsedArgs as any).raw = rawArgs;
+      (parsedArgs as any).full = rawArgs;
+
+      // Check if this is a block macro (has tags)
+      const isBlock = macroDef.tags != null && Array.isArray(macroDef.tags);
+      const payload: MacroPayloadEntry[] = [];
+
+      if (isBlock) {
+        collectMacroPayload(w, macroName, macroDef.tags!, payload);
+      }
+
+      // Build macro context
+      const macroOutput = document.createDocumentFragment();
+      const context = {
+        name: macroName,
+        args: parsedArgs,
+        output: macroOutput,
+        payload,
+        error(msg: string): string {
+          const loc = offsetToLineCol(src, start);
+          return `Error in macro <<${macroName}>> at ${loc.line}:${loc.col}: ${msg}`;
+        },
+        addShadow(_varName: string): void {},
+        createShadowWrapper(fn: Function): Function {
+          return fn;
+        },
+        createDebugView(): void {},
+        self: macroDef,
+        parser: w,
+      };
+
+      try {
+        macroDef.handler.call(context);
+      } catch (e) {
+        const loc = offsetToLineCol(src, start);
+        console.error(`[wikifier] error in macro <<${macroName}>> at ${loc.line}:${loc.col}:`, e);
+      }
+
+      w.output.appendChild(macroOutput);
+    } else {
+      // Try widget fallback
+      if (Navigation.has(macroName) || Navigation.has("widget_" + macroName)) {
+        const parsedArgs = parseMacroArgs(rawArgs);
+        Widget.call(macroName, ...parsedArgs);
+      } else {
+        // Unknown macro — output as text with warning
+        const loc = offsetToLineCol(src, start);
+        console.warn(`[wikifier] unknown macro <<${macroName}>> at ${loc.line}:${loc.col}`);
+        w.output.appendChild(document.createTextNode(`<<${macroName}${rawArgs ? " " + rawArgs : ""}>>`));
+      }
+    }
+  },
+});
+
+interface MacroPayloadEntry {
+  name: string;
+  args: any[];
+  contents: string;
+  output: DocumentFragment;
+}
+
+/** Collect macro payload entries (body segments between clause tags). */
+function collectMacroPayload(
+  w: Wikifier,
+  macroName: string,
+  clauseTags: string[],
+  payload: MacroPayloadEntry[],
+): void {
+  const src = w.source;
+  const allClauseTags = new Set(clauseTags);
+
+  // First payload entry is for the main macro body
+  let currentName = macroName;
+  let currentArgs: any[] = [];
+  let bodyStart = w.nextMatch;
+
+  // Scan for clause tags and closing tag
+  const tagRe = new RegExp(
+    `<<(?:(${escapeRegex(macroName)})(\\s(?:(?:.|\\n)*?))?>>"?|` +
+    `(${[...clauseTags.map(escapeRegex), escapeRegex(macroName)].join("|")})(\\s(?:(?:.|\\n)*?))?>>"?|` +
+    `\\/(${escapeRegex(macroName)})>>)`,
+    "gm",
+  );
+
+  let depth = 0;
+
+  while (w.nextMatch < src.length) {
+    tagRe.lastIndex = w.nextMatch;
+    const match = tagRe.exec(src);
+    if (!match) {
+      // No closing tag found — unclosed macro
+      const loc = offsetToLineCol(src, bodyStart);
+      console.warn(
+        `[wikifier] unclosed block macro <<${macroName}>> opened at ${loc.line}:${loc.col}`,
+      );
+      break;
+    }
+
+    // Check what we matched
+    if (match[5]) {
+      // Closing tag: <</name>>
+      if (depth === 0) {
+        // Capture final body segment
+        const bodyEnd = match.index;
+        const bodyContent = src.slice(bodyStart, bodyEnd);
+        const bodyFrag = document.createDocumentFragment();
+        new BodyWikifier(w, bodyFrag, bodyStart, bodyEnd);
+        payload.push({
+          name: currentName,
+          args: currentArgs,
+          contents: bodyContent,
+          output: bodyFrag,
+        });
+        w.nextMatch = match.index + match[0].length;
+        return;
+      }
+      depth--;
+      w.nextMatch = match.index + match[0].length;
+      continue;
+    }
+
+    if (match[1]) {
+      // Opening of a nested same-name macro — increase depth
+      depth++;
+      w.nextMatch = match.index + match[0].length;
+      continue;
+    }
+
+    if (match[3] && depth === 0 && allClauseTags.has(match[3])) {
+      // Clause tag at our depth
+      const bodyEnd = match.index;
+      const bodyContent = src.slice(bodyStart, bodyEnd);
+      const bodyFrag = document.createDocumentFragment();
+      new BodyWikifier(w, bodyFrag, bodyStart, bodyEnd);
+      payload.push({
+        name: currentName,
+        args: currentArgs,
+        contents: bodyContent,
+        output: bodyFrag,
+      });
+
+      // Start new segment
+      currentName = match[3];
+      currentArgs = match[4] ? parseMacroArgs(match[4].trim()) : [];
+      w.nextMatch = match.index + match[0].length;
+      bodyStart = w.nextMatch;
+      continue;
+    }
+
+    // Something else or nested — skip past
+    w.nextMatch = match.index + match[0].length;
+  }
+}
+
+/** Helper to wikify a body segment. Creates a Wikifier that parses a substring. */
+class BodyWikifier {
+  constructor(parentW: Wikifier, output: DocumentFragment, bodyStart: number, bodyEnd: number) {
+    const src = parentW.source;
+    const bodySource = src.slice(bodyStart, bodyEnd);
+    if (bodySource.length > 0) {
+      // Parse the body segment through a new wikifier
+      new Wikifier(output, bodySource);
+    }
+  }
+}
+
+/** Parse macro argument string into an array of values.
+ *  Handles quoted strings, numbers, booleans, null, undefined,
+ *  and bare expressions.
+ */
+function parseMacroArgs(raw: string): any[] {
+  if (!raw) return [];
+
+  const args: any[] = [];
+  const re = /(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\])*)`|\[(?:img)??\[|(?:[^\s"'`\[\]]+))/g;
+  let match;
+
+  while ((match = re.exec(raw)) !== null) {
+    const token = match[0];
+
+    if (match[1] !== undefined) {
+      // Double-quoted string
+      args.push(match[1].replace(/\\(.)/g, "$1"));
+    } else if (match[2] !== undefined) {
+      // Single-quoted string
+      args.push(match[2].replace(/\\(.)/g, "$1"));
+    } else if (match[3] !== undefined) {
+      // Template string — evaluate
+      try {
+        args.push(Wikifier.evalExpression("`" + match[3] + "`"));
+      } catch {
+        args.push(match[3]);
+      }
+    } else if (token === "true") {
+      args.push(true);
+    } else if (token === "false") {
+      args.push(false);
+    } else if (token === "null") {
+      args.push(null);
+    } else if (token === "undefined") {
+      args.push(undefined);
+    } else if (/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(token)) {
+      args.push(Number(token));
+    } else if (token.startsWith("$") || token.startsWith("_")) {
+      // Variable reference — evaluate
+      try {
+        args.push(Wikifier.evalExpression(token));
+      } catch {
+        args.push(token);
+      }
+    } else {
+      // Bare token — try to evaluate as expression, fall back to string
+      try {
+        args.push(Wikifier.evalExpression(token));
+      } catch {
+        args.push(token);
+      }
+    }
+  }
+
+  return args;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ---------------------------------------------------------------------------
 // Built-in parsers — Phase 3: variable interpolation + HTML
 // ---------------------------------------------------------------------------
 
