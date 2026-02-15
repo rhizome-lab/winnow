@@ -917,6 +917,21 @@ causing compile errors if any emitted code calls them.
   `<-`). Variable references (`$var`, `_var`) parsed as expressions; bare
   passage names as string literals. (was 1211 TRC, 62 DoL → 0)
 
+### Open
+
+- [ ] **Dialog.wiki() lacks wikification** — Currently appends raw text. Real
+  SugarCube wikification parses TwineScript markup (links, macros, formatting)
+  into DOM nodes. Needs a markup-to-DOM renderer, possibly sharing the
+  existing SugarCube parser from the frontend. Stories using Dialog.wiki()
+  with markup will display unrendered source text.
+
+- [ ] **Per-concern platform pluggability** — The platform layer is monolithic
+  (`browser.ts` → `index.ts`). Swapping one concern (e.g., save UI) requires
+  replacing the entire platform. Should split into per-concern modules
+  (`platform/persistence.ts`, `platform/audio.ts`, `platform/ui.ts`,
+  `platform/timing.ts`, `platform/input.ts`) so deployers can mix browser
+  persistence with custom save UI, add gamepad input alongside keyboard, etc.
+
 ### Runtime Known Issues
 
 - [x] **Link setter timing** — Fixed. Setter callback functions are now built
