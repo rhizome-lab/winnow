@@ -16,11 +16,11 @@ pub struct Rect {
     pub h: f32,
 }
 
-/// Renderer system trait — handles all visual output.
+/// Graphics system trait — handles all visual output (2D drawing primitives).
 ///
 /// Associated types allow backends to use their own texture/surface representations
 /// (e.g., `wgpu::Texture` for native, `HtmlCanvasElement` for web).
-pub trait Renderer {
+pub trait Graphics {
     type Texture;
     type Surface;
 

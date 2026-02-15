@@ -1,5 +1,5 @@
-/// UI system trait — handles dialogue boxes, menus, and HUD overlays.
-pub trait Ui {
+/// Dialog system trait — handles modal dialogue boxes and alerts.
+pub trait Dialog {
     /// Show a text message (dialogue box, alert, etc.).
     fn show_message(&mut self, text: &str);
 
@@ -12,6 +12,9 @@ pub trait Ui {
     /// Show a numeric input prompt.
     fn show_number_input(&mut self, prompt: &str, default: f64, min: f64, max: f64) -> f64;
 
-    /// Update the UI state (process animations, transitions, etc.).
-    fn update(&mut self);
+    /// Close the current dialog.
+    fn close(&mut self);
+
+    /// Check whether a dialog is currently open.
+    fn is_open(&self) -> bool;
 }

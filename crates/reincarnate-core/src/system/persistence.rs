@@ -1,10 +1,10 @@
 use serde::{de::DeserializeOwned, Serialize};
 
-/// Save/load system trait — handles persistence.
+/// Persistence system trait — handles save/load storage.
 ///
 /// Uses serde for serialization, allowing backends to choose
 /// the storage mechanism (filesystem, localStorage, cloud, etc.).
-pub trait SaveLoad {
+pub trait Persistence {
     type Error: std::error::Error;
 
     fn save<T: Serialize>(&mut self, slot: &str, data: &T) -> Result<(), Self::Error>;
