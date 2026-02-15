@@ -869,25 +869,23 @@ pub fn escape_js_string(s: &str) -> String {
 /// Newlines are preserved literally; backticks and `${` are escaped.
 fn escape_js_template(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => { out.push_str("\\\\"); i += 1; }
-            b'`' => { out.push_str("\\`"); i += 1; }
-            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '`' => out.push_str("\\`"),
+            '$' if chars.peek() == Some(&'{') => {
+                chars.next();
                 out.push_str("\\${");
-                i += 2;
             }
-            b'\r' => {
+            '\r' => {
                 // Normalize \r\n to \n, drop bare \r
-                if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-                    i += 1;
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
                 }
                 out.push('\n');
-                i += 1;
             }
-            _ => { out.push(bytes[i] as char); i += 1; }
+            _ => out.push(ch),
         }
     }
     out
