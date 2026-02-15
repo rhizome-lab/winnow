@@ -68,17 +68,20 @@ function renderPassage(target: string, fn: () => void): void {
   Output.clear();
 
   // Check for nobr tag
-  const tags = passageTags.get(target);
-  if (tags && tags.includes("nobr")) {
+  const tags = passageTags.get(target) || [];
+  if (tags.includes("nobr")) {
     Output.setNobr(true);
   }
 
-  Events.trigger(":passageinit", { passage: target });
+  // Build a passage object matching SugarCube's event data format.
+  const passageObj = { title: target, tags };
+
+  Events.trigger(":passageinit", { passage: passageObj });
 
   // PassageReady runs after :passageinit, before the main passage
   runSpecial("PassageReady");
 
-  Events.trigger(":passagestart", { passage: target });
+  Events.trigger(":passagestart", { passage: passageObj });
 
   // PassageHeader content is prepended before the main passage
   runSpecial("PassageHeader");
@@ -93,7 +96,7 @@ function renderPassage(target: string, fn: () => void): void {
   // PassageFooter content is appended after the main passage
   runSpecial("PassageFooter");
 
-  Events.trigger(":passagerender", { passage: target });
+  Events.trigger(":passagerender", { passage: passageObj });
 
   // PassageDone runs after :passagerender, before flush
   runSpecial("PassageDone");
@@ -101,8 +104,8 @@ function renderPassage(target: string, fn: () => void): void {
   Output.setNobr(false);
   Output.flush();
 
-  Events.trigger(":passageend", { passage: target });
-  Events.trigger(":passagedisplay", { passage: target });
+  Events.trigger(":passageend", { passage: passageObj });
+  Events.trigger(":passagedisplay", { passage: passageObj });
 }
 
 /** Navigate to a passage by name. */

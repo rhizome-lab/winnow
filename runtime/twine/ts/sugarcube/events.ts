@@ -54,11 +54,18 @@ export function trigger(event: string, ...args: any[]): void {
     }
   }
 
-  // Bridge to jQuery event system on $(document)
+  // Bridge to jQuery event system on $(document).
+  // Merge the first arg object into the jQuery event so that user scripts
+  // can access properties like ev.passage directly on the event object
+  // (SugarCube's convention for :passagestart et al).
   const $ = (globalThis as any).jQuery;
   if ($) {
     try {
-      $(document).trigger(event, args);
+      const jqEvent = $.Event(event);
+      if (args.length > 0 && typeof args[0] === "object") {
+        Object.assign(jqEvent, args[0]);
+      }
+      $(document).trigger(jqEvent);
     } catch (e) {
       console.error(`[events] error in jQuery trigger for "${event}":`, e);
     }
