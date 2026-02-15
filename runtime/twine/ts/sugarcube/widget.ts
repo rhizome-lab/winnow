@@ -8,21 +8,19 @@
 
 import * as State from "./state";
 import { pushBuffer, popBuffer } from "./output";
+import { getPassage } from "./navigation";
 
 /** Invoke a widget by name. */
 export function call(name: string, ...args: any[]): void {
   // Set _args temp variable for the widget to access
   State.set("_args", args);
 
-  // Look up widget function in the passage registry
-  import("./navigation").then((nav) => {
-    const fn = nav.getPassage(name);
-    if (fn) {
-      fn();
-    } else {
-      console.warn(`[widget] widget not found: "${name}"`);
-    }
-  });
+  const widgetFn = getPassage(name);
+  if (widgetFn) {
+    widgetFn();
+  } else {
+    console.warn(`[widget] widget not found: "${name}"`);
+  }
 }
 
 /** Start a widget content block (<<widget>> body content). */
