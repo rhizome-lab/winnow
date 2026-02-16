@@ -54,28 +54,25 @@ export function not(val: any): boolean {
 // --- Control flow ---
 
 /** `(stop:)` — signals the current (live:) interval to stop.
- *  Throws a sentinel value caught by the live handler.
+ *  Sets a flag checked after the callback returns so content still
+ *  renders and flushes before the interval is cancelled.
  */
-const STOP_SENTINEL = Symbol("harlowe-stop");
+let stopRequested = false;
 
-export function stop(): never {
-  throw STOP_SENTINEL;
+export function stop(): void {
+  stopRequested = true;
 }
 
 /** `(live: interval)[callback]` — run callback at interval until (stop:). */
 export function live(interval: number, callback: () => void): void {
   const ms = typeof interval === "number" ? interval * 1000 : interval;
   const id = scheduleInterval(() => {
-    try {
-      Output.clear();
-      callback();
-      Output.flush();
-    } catch (e) {
-      if (e === STOP_SENTINEL) {
-        cancelInterval(id);
-      } else {
-        throw e;
-      }
+    Output.clear();
+    callback();
+    Output.flush();
+    if (stopRequested) {
+      cancelInterval(id);
+      stopRequested = false;
     }
   }, ms);
   Output.trackTimer(id);

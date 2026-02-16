@@ -200,7 +200,7 @@ impl<'a> Parser<'a> {
         let macro_end = self.pos;
 
         // Check for attached hook `[...]`
-        let hook = self.try_parse_hook();
+        let hook = self.try_parse_hook(macros::expects_hook(&name));
         let has_hook = hook.is_some();
 
         // For if-chains: collect else-if / else clauses
@@ -276,12 +276,14 @@ impl<'a> Parser<'a> {
     }
 
     /// Try to parse a hook `[...]` immediately after a macro.
-    fn try_parse_hook(&mut self) -> Option<Vec<Node>> {
+    /// When `macro_expects_hook` is true, a leading `[[` inside the hook is
+    /// parsed as a link rather than rejecting the entire bracket as a non-hook.
+    fn try_parse_hook(&mut self, macro_expects_hook: bool) -> Option<Vec<Node>> {
         if self.peek() != Some(b'[') {
             return None;
         }
-        // Don't confuse `[[link]]` with hook
-        if self.peek_at(1) == Some(b'[') {
+        // Don't confuse `[[link]]` with hook — unless a macro that expects a hook precedes us
+        if !macro_expects_hook && self.peek_at(1) == Some(b'[') {
             return None;
         }
         self.pos += 1; // skip `[`
@@ -349,8 +351,8 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
 
-            // Parse hook
-            let body = self.try_parse_hook().unwrap_or_default();
+            // Parse hook — else-if/else always expect a hook
+            let body = self.try_parse_hook(true).unwrap_or_default();
 
             clauses.push(IfClause {
                 kind: name,
@@ -921,5 +923,35 @@ You're at the **entryway**
         } else {
             panic!("expected macro");
         }
+    }
+
+    #[test]
+    fn test_hook_containing_link() {
+        // A macro that expects a hook should parse `[[[link->target]]]` as a hook
+        // containing a link, not reject the `[` because the next char is `[`.
+        let ast = parse("(transition: \"dissolve\")[[[Start game->new game check]]]");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1);
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "transition");
+            let hook = m.hook.as_ref().expect("transition should have a hook");
+            assert_eq!(hook.len(), 1);
+            assert!(
+                matches!(&hook[0].kind, NodeKind::Link(l) if l.text == "Start game" && l.passage == "new game check"),
+                "expected link inside hook, got {:?}",
+                hook[0].kind
+            );
+        } else {
+            panic!("expected macro, got {:?}", ast.body[0].kind);
+        }
+    }
+
+    #[test]
+    fn test_bare_bracket_link_not_hook() {
+        // Without a preceding macro, `[[link]]` should still be parsed as a link, not a hook.
+        let ast = parse("[[Credits]]");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1);
+        assert!(matches!(&ast.body[0].kind, NodeKind::Link(l) if l.passage == "Credits"));
     }
 }

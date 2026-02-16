@@ -122,6 +122,45 @@ function resolveColor(value: string): string {
   return `rgb(${acc[0]}, ${acc[1]}, ${acc[2]})`;
 }
 
+// --- Transition animation support ---
+
+let transitionStylesInjected = false;
+
+/** Inject CSS @keyframes for Harlowe transitions (once). */
+function injectTransitionStyles(): void {
+  if (transitionStylesInjected) return;
+  transitionStylesInjected = true;
+  const style = document.createElement("style");
+  style.textContent = `
+@keyframes tw-dissolve { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tw-slide-left { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes tw-slide-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes tw-slide-up { from { transform: translateY(-100%); } to { transform: translateY(0); } }
+@keyframes tw-slide-down { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes tw-fade-left { from { opacity: 0; transform: translateX(-50%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes tw-fade-right { from { opacity: 0; transform: translateX(50%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes tw-fade-up { from { opacity: 0; transform: translateY(-50%); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tw-fade-down { from { opacity: 0; transform: translateY(50%); } to { opacity: 1; transform: translateY(0); } }
+@keyframes tw-zoom { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes tw-blur { from { filter: blur(10px); opacity: 0; } to { filter: blur(0); opacity: 1; } }
+@keyframes tw-flicker { 0% { opacity: 0; } 5% { opacity: 1; } 10% { opacity: 0; } 15% { opacity: 1; } 20% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 1; } }
+@keyframes tw-shudder { 0% { transform: translateX(-3px); } 25% { transform: translateX(3px); } 50% { transform: translateX(-2px); } 75% { transform: translateX(2px); } 100% { transform: translateX(0); } }
+@keyframes tw-pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+@keyframes tw-rumble { 0% { transform: translate(-2px, 2px); } 25% { transform: translate(2px, -2px); } 50% { transform: translate(-2px, -2px); } 75% { transform: translate(2px, 2px); } 100% { transform: translate(0, 0); } }
+`;
+  document.head.appendChild(style);
+}
+
+/** Apply CSS animation from data-tw_transition attributes. */
+function applyTransition(el: HTMLElement): void {
+  const name = el.dataset.tw_transition || el.dataset.tw_transition_arrive;
+  if (!name) return;
+  injectTransitionStyles();
+  const duration = el.dataset.tw_transition_time || "0.8s";
+  const animName = `tw-${name}`;
+  el.style.animation = `${animName} ${duration} ease-in-out`;
+}
+
 // --- Changer application ---
 
 /** Wrap an element with current changer stack styling. */
@@ -208,6 +247,8 @@ function applyChangers(el: HTMLElement): void {
         break;
     }
   }
+  // After all changers applied, activate any transition animation
+  applyTransition(el);
 }
 
 /** Wrap text/content in a span if changers are active. */
