@@ -755,8 +755,9 @@ impl TranslateCtx {
         let rhs = self.lower_expr(right);
 
         match op {
-            BinaryOp::Add => self.fb.add(lhs, rhs),
-            BinaryOp::Plus => {
+            BinaryOp::Add | BinaryOp::Plus => {
+                // Harlowe's `+` is polymorphic: arithmetic on numbers, composition
+                // on changers/arrays/datamaps. Route through runtime to handle all cases.
                 self.fb
                     .system_call("Harlowe.Engine", "plus", &[lhs, rhs], Type::Dynamic)
             }
