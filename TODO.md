@@ -159,3 +159,20 @@ in runtime.json for any newly referenced but unimplemented functions.
 - [ ] **`(enchant:)` / `(enchant-in:)`** — Apply changers to matching elements
 - [ ] **Named hooks** — `|name>[hook content]` and `?name` hook references
 - [ ] **Complex `'s` possessive chains** — `$obj's (str-nth: $idx)` nested macro in possessive
+
+## AST Pass Design Gaps (from audit)
+
+- [ ] **Unify variable reference counting** — `count_var_refs_in_stmt` (reads only),
+  `stmt_references_var` (reads+writes), and `var_is_reassigned` (writes only) are three
+  near-identical tree walks with subtly different semantics. 5+ bugs from picking the wrong
+  one. Unify into `count_var_refs(stmt, name, mode: ReadOnly | ReadWrite)` or similar.
+- [ ] **Scope-aware flush in linearizer** — `flush_protected` bolts scope-awareness onto
+  `flush_pending_reads` via a HashSet. Could break for any new nested construct (switch
+  cases, loop bodies) that isn't explicitly protected. The flush model needs inherent scope
+  awareness.
+- [ ] **Automatic write cascade on VarDecl removal** — `remove_dead_assigns(body, &name)`
+  is called manually at two sites after VarDecl removal. A third removal path that forgets
+  to call it reintroduces undeclared-variable bugs.
+- [ ] **Prevent redundant cinit emission** — The emitter generates both
+  `static readonly FIELD = value;` and a `static { this.FIELD = value; }` block for the
+  same field, then filters the duplicate after the fact. Prevent dual emission instead.
