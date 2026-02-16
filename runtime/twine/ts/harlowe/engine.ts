@@ -243,82 +243,127 @@ export function math(name: string, ...args: any[]): number {
 
 // --- Collection operations (higher-order) ---
 
-/** Collection operations dispatched by name. */
-export function collection_op(name: string, ...args: any[]): any {
-  switch (name) {
-    case "sorted":
-      return [...args].flat().sort((a, b) => {
-        if (typeof a === "string") return a.localeCompare(b);
-        return Number(a) - Number(b);
-      });
-    case "reversed":
-      return [...args].flat().reverse();
-    case "rotated": {
-      const n = Number(args[0]);
-      const arr = args.slice(1);
-      const len = arr.length;
-      if (len === 0) return [];
-      const shift = ((n % len) + len) % len;
-      return [...arr.slice(shift), ...arr.slice(0, shift)];
-    }
-    case "shuffled": {
-      const arr = [...args];
-      for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }
-      return arr;
-    }
-    case "count": {
-      const arr = Array.isArray(args[0]) ? args[0] : [args[0]];
-      const val = args[1];
-      return arr.filter(x => x === val).length;
-    }
-    case "range": {
-      const start = Number(args[0]);
-      const end = Number(args[1]);
-      const result = [];
-      for (let i = start; i <= end; i++) result.push(i);
-      return result;
-    }
-    case "find": {
-      const arr = Array.isArray(args[0]) ? args[0] : [];
-      const pred = args[1];
-      return typeof pred === "function" ? arr.find(pred) : arr.find(x => x === pred);
-    }
-    case "joined": {
-      const sep = args.length > 1 ? String(args[args.length - 1]) : "";
-      const items = args.length > 1 ? args.slice(0, -1) : args;
-      return items.flat().join(sep);
-    }
-    case "subarray":
-      return Array.isArray(args[0]) ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : [];
-    case "substring":
-      return typeof args[0] === "string" ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : "";
-    case "lowercase":
-      return String(args[0]).toLowerCase();
-    case "uppercase":
-      return String(args[0]).toUpperCase();
-    case "datanames":
-      return args[0] instanceof Map ? Array.from(args[0].keys()) : Object.keys(args[0] || {});
-    case "datavalues":
-      return args[0] instanceof Map ? Array.from(args[0].values()) : Object.values(args[0] || {});
-    case "dataentries":
-      return args[0] instanceof Map ? Array.from(args[0].entries()).map(([k, v]) => ({ name: k, value: v })) : [];
-    case "some-pass":
-    case "all-pass":
-    case "none-pass": {
-      const pred = args[0];
-      const items = args.slice(1);
-      if (typeof pred !== "function") return false;
-      if (name === "some-pass") return items.some(pred);
-      if (name === "all-pass") return items.every(pred);
-      return !items.some(pred);
-    }
-    default:
-      console.warn(`[harlowe] unknown collection op: ${name}`);
-      return undefined;
+function sorted(...args: any[]): any[] {
+  return [...args].flat().sort((a, b) => {
+    if (typeof a === "string") return a.localeCompare(b);
+    return Number(a) - Number(b);
+  });
+}
+
+function reversed(...args: any[]): any[] {
+  return [...args].flat().reverse();
+}
+
+function rotated(...args: any[]): any[] {
+  const n = Number(args[0]);
+  const arr = args.slice(1);
+  const len = arr.length;
+  if (len === 0) return [];
+  const shift = ((n % len) + len) % len;
+  return [...arr.slice(shift), ...arr.slice(0, shift)];
+}
+
+function shuffled(...args: any[]): any[] {
+  const arr = [...args];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
   }
+  return arr;
+}
+
+function count(...args: any[]): number {
+  const arr = Array.isArray(args[0]) ? args[0] : [args[0]];
+  const val = args[1];
+  return arr.filter(x => x === val).length;
+}
+
+function range(...args: any[]): number[] {
+  const start = Number(args[0]);
+  const end = Number(args[1]);
+  const result = [];
+  for (let i = start; i <= end; i++) result.push(i);
+  return result;
+}
+
+function find(...args: any[]): any {
+  const arr = Array.isArray(args[0]) ? args[0] : [];
+  const pred = args[1];
+  return typeof pred === "function" ? arr.find(pred) : arr.find(x => x === pred);
+}
+
+function joined(...args: any[]): string {
+  const sep = args.length > 1 ? String(args[args.length - 1]) : "";
+  const items = args.length > 1 ? args.slice(0, -1) : args;
+  return items.flat().join(sep);
+}
+
+function subarray(...args: any[]): any[] {
+  return Array.isArray(args[0]) ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : [];
+}
+
+function substring(...args: any[]): string {
+  return typeof args[0] === "string" ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : "";
+}
+
+function lowercase(...args: any[]): string {
+  return String(args[0]).toLowerCase();
+}
+
+function uppercase(...args: any[]): string {
+  return String(args[0]).toUpperCase();
+}
+
+function datanames(...args: any[]): any[] {
+  return args[0] instanceof Map ? Array.from(args[0].keys()) : Object.keys(args[0] || {});
+}
+
+function datavalues(...args: any[]): any[] {
+  return args[0] instanceof Map ? Array.from(args[0].values()) : Object.values(args[0] || {});
+}
+
+function dataentries(...args: any[]): any[] {
+  return args[0] instanceof Map ? Array.from(args[0].entries()).map(([k, v]) => ({ name: k, value: v })) : [];
+}
+
+function somePass(...args: any[]): boolean {
+  const pred = args[0];
+  const items = args.slice(1);
+  if (typeof pred !== "function") return false;
+  return items.some(pred);
+}
+
+function allPass(...args: any[]): boolean {
+  const pred = args[0];
+  const items = args.slice(1);
+  if (typeof pred !== "function") return false;
+  return items.every(pred);
+}
+
+function nonePass(...args: any[]): boolean {
+  const pred = args[0];
+  const items = args.slice(1);
+  if (typeof pred !== "function") return false;
+  return !items.some(pred);
+}
+
+export const Collections = {
+  sorted, reversed, rotated, shuffled, count, range,
+  find, joined, subarray, substring, lowercase, uppercase,
+  datanames, datavalues, dataentries,
+  somePass, allPass, nonePass,
+} as const;
+
+/** Collection operations (fallback for unknown ops). */
+export function collection_op(name: string, ...args: any[]): any {
+  const kebabMap: Record<string, string> = {
+    "some-pass": "somePass", "all-pass": "allPass", "none-pass": "nonePass",
+  };
+  const key = kebabMap[name] ?? name;
+  const fn = (Collections as any)[key];
+  if (fn) return fn(...args);
+  console.warn(`[harlowe] unknown collection op: ${name}`);
+  return undefined;
 }
 
 // --- Value macro (standalone) ---

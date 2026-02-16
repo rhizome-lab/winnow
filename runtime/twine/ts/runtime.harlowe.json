@@ -29,7 +29,7 @@
       "path": "harlowe/output"
     },
     {
-      "names": ["Colors"],
+      "names": ["Colors", "Collections"],
       "path": "harlowe/engine"
     }
   ]
