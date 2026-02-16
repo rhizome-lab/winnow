@@ -197,23 +197,20 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
   All Harlowe `+` routed through `Harlowe.Engine.plus()` runtime call
   which dispatches by type (changers, arrays, datamaps, numbers).
 
-- [ ] **`it` in `(set:)` context may be wrong** — `(set: $totalTF to it + 1)`
-  emits `set("totalTF", get_it() + 1)` where `get_it()` returns the last-set
-  value. Harlowe docs suggest `it` inside `(set:)` refers to the target
-  variable's current value (so the author means "increment totalTF"). Needs
-  verification against Harlowe interpreter. 244 `get_it()` calls in
-  arceus-garden.
+- [x] **`it` in `(set:)` context** — Fixed in `5223050`. Confirmed via
+  Harlowe source (`setIt()` calls `.get()` on target VarRef): `it` inside
+  `(set:)` refers to the target variable's current value. `set_target` field
+  on TranslateCtx substitutes `It` with a read of the target variable.
+  arceus-garden: 244 `get_it()` calls → 0.
 
 - [ ] **Missing macros** — `(obviously:)` (1 occurrence), `(forget-undos:)`
   (1 occurrence) emitted as `unknown_macro()` no-ops.
 
 ### Harlowe Output Quality
 
-- [ ] **Text fragmentation** — Adjacent `text()` calls not coalesced.
-  Single-character text calls (`` ` ``, `[`, `X`, `]`) where the emitter could
-  merge them into one call. ~2,974 `text()` calls in arceus-garden, estimated
-  30-40% could be eliminated. Fix: emitter or AST pass should merge adjacent
-  `SystemCall("Harlowe.Output", "text")` ops.
+- [x] **Text coalescing** — Fixed in `66ade45`. New `coalesce_text_calls`
+  AST pass merges adjacent string-literal text() calls into a single call.
+  arceus-garden: 2,974 → 1,874 text() calls (-37%), 16,329 → 15,429 lines.
 
 ### Harlowe Phase 2 (Advanced Features)
 
