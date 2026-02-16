@@ -7,6 +7,7 @@
 //! All other SystemCalls pass through to runtime modules via the printer's
 //! `SystemCall` fallback + auto-import machinery.
 
+mod engine;
 mod harlowe;
 mod sugarcube;
 
@@ -20,6 +21,8 @@ use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'static str] {
     if system == "Harlowe.Output" {
         harlowe::rewrite_introduced_calls(method)
+    } else if system == "Harlowe.Engine" {
+        engine::rewrite_introduced_calls(method)
     } else {
         // SugarCube rewrites produce only built-in JS constructs (new, typeof, etc.)
         // and calls to Math.pow / String — none of which need function-module imports.
@@ -230,6 +233,9 @@ fn try_rewrite_system_call(
 ) -> Option<JsExpr> {
     if system == "Harlowe.Output" {
         return harlowe::try_rewrite(method, args);
+    }
+    if system == "Harlowe.Engine" {
+        return engine::try_rewrite(method, args);
     }
     if system == "SugarCube.Engine" {
         return sugarcube::try_rewrite(method, args, closures);

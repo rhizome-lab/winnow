@@ -210,7 +210,13 @@ export function set_property(obj: any, prop: any, value: any): void {
 
 // --- Math ---
 
-/** Math functions dispatched by name. */
+/** `(lerp: a, b, t)` — standalone so the call site is monomorphic. */
+export function lerp(a: any, b: any, t: any): number {
+  const na = Number(a), nb = Number(b), nt = Number(t);
+  return na + (nb - na) * nt;
+}
+
+/** Math functions dispatched by name (fallback for unknown ops). */
 export function math(name: string, ...args: any[]): number {
   const nums = args.map(Number);
   switch (name) {
@@ -228,7 +234,7 @@ export function math(name: string, ...args: any[]): number {
     case "pow": return Math.pow(nums[0], nums[1]);
     case "sign": return Math.sign(nums[0]);
     case "clamp": return Math.min(Math.max(nums[0], nums[1]), nums[2]);
-    case "lerp": return nums[0] + (nums[1] - nums[0]) * nums[2];
+    case "lerp": return lerp(args[0], args[1], args[2]);
     default:
       console.warn(`[harlowe] unknown math function: ${name}`);
       return NaN;
