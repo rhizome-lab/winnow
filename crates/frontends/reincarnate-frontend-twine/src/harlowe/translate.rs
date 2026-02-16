@@ -49,6 +49,7 @@ pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
         func_name: func_name.clone(),
         callback_count: 0,
         callbacks: Vec::new(),
+        set_target: None,
     };
 
     ctx.lower_nodes(&ast.body);
@@ -68,6 +69,9 @@ struct TranslateCtx {
     func_name: String,
     callback_count: usize,
     callbacks: Vec<Function>,
+    /// Inside `(set: $x to ...)`, holds the target expression so that
+    /// `it` resolves to $x's current value rather than the global `it`.
+    set_target: Option<Expr>,
 }
 
 impl TranslateCtx {
@@ -272,7 +276,11 @@ impl TranslateCtx {
     fn lower_assignment(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Assign { target, value } => {
+                // Harlowe: `it` inside (set:) refers to the target variable's
+                // current value. Set context so lower_expr(It) reads the target.
+                let prev_target = self.set_target.replace(*target.clone());
                 let val = self.lower_expr(value);
+                self.set_target = prev_target;
                 self.store_to_target(target, val);
             }
             _ => {
@@ -684,8 +692,14 @@ impl TranslateCtx {
             ExprKind::Str(s) => self.fb.const_string(s.as_str()),
             ExprKind::Bool(b) => self.fb.const_bool(*b),
             ExprKind::It => {
-                self.fb
-                    .system_call("Harlowe.State", "get_it", &[], Type::Dynamic)
+                // Inside (set:), `it` refers to the target variable's current value.
+                // Outside (set:), `it` is the global it-value (set by comparisons).
+                if let Some(ref target) = self.set_target.clone() {
+                    self.lower_expr(target)
+                } else {
+                    self.fb
+                        .system_call("Harlowe.State", "get_it", &[], Type::Dynamic)
+                }
             }
             ExprKind::StoryVar(name) => {
                 let n = self.fb.const_string(name.as_str());
@@ -1036,5 +1050,30 @@ You're at the **entryway**
         let ast = parser::parse("(live: 2s)[(stop:)]");
         let result = translate_passage("test_live", &ast);
         assert_eq!(result.callbacks.len(), 1);
+    }
+
+    #[test]
+    fn test_it_in_set_reads_target_variable() {
+        use reincarnate_core::ir::inst::Op;
+        // `(set: $x to it + 1)` — `it` should resolve to get("x"), not get_it()
+        let ast = parser::parse("(set: $x to it + 1)");
+        let result = translate_passage("test_it_set", &ast);
+        let func = &result.func;
+        // Verify no get_it() call exists in the IR
+        let has_get_it = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.State" && method == "get_it")
+            })
+        });
+        assert!(!has_get_it, "should not use get_it() inside (set:)");
+        // Verify there's a get("x") call (reading the target variable)
+        let has_get_x = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.State" && method == "get")
+            })
+        });
+        assert!(has_get_x, "should read target variable with get()");
     }
 }
