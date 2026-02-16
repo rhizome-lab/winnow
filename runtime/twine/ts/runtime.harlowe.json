@@ -15,5 +15,18 @@
   "class_preamble": null,
   "type_definitions": {},
   "function_signatures": {},
-  "function_modules": []
+  "function_modules": [
+    {
+      "names": [
+        "color", "background", "textStyle", "font", "align", "opacity",
+        "css", "transition", "transitionTime", "hidden", "textSize",
+        "textRotateZ", "collapse", "nobr", "hoverStyle", "styled",
+        "el", "strong", "em", "del", "sup", "sub",
+        "br", "hr", "img", "voidEl",
+        "link", "linkCb", "live",
+        "printVal", "displayPassage"
+      ],
+      "path": "harlowe/output"
+    }
+  ]
 }

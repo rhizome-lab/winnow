@@ -815,6 +815,184 @@ fn coalesce_text_in_stmt(stmt: &mut JsStmt) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Array string coalescing
+// ---------------------------------------------------------------------------
+
+/// Merge adjacent string literals inside `ArrayInit` nodes.
+/// `["Hello ", "world", br(), "foo", "bar"]` → `["Hello world", br(), "foobar"]`.
+///
+/// Runs after engine-specific rewrites (which convert `content_array` →
+/// `ArrayInit` and `text_node` → identity string) so that the merged strings
+/// appear in the final output.
+pub fn coalesce_array_strings(body: &mut [JsStmt]) {
+    for stmt in body.iter_mut() {
+        coalesce_arrays_in_stmt(stmt);
+    }
+}
+
+fn coalesce_arrays_in_stmt(stmt: &mut JsStmt) {
+    match stmt {
+        JsStmt::VarDecl { init: Some(e), .. }
+        | JsStmt::Assign { value: e, .. }
+        | JsStmt::Expr(e)
+        | JsStmt::Throw(e) => coalesce_arrays_in_expr(e),
+        JsStmt::CompoundAssign { value, .. } => coalesce_arrays_in_expr(value),
+        JsStmt::Return(Some(e)) => coalesce_arrays_in_expr(e),
+        JsStmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            coalesce_arrays_in_expr(cond);
+            coalesce_array_strings(then_body);
+            coalesce_array_strings(else_body);
+        }
+        JsStmt::While { cond, body } => {
+            coalesce_arrays_in_expr(cond);
+            coalesce_array_strings(body);
+        }
+        JsStmt::For {
+            init,
+            cond,
+            update,
+            body,
+        } => {
+            coalesce_array_strings(init);
+            coalesce_arrays_in_expr(cond);
+            coalesce_array_strings(update);
+            coalesce_array_strings(body);
+        }
+        JsStmt::Loop { body } | JsStmt::ForOf { body, .. } => {
+            coalesce_array_strings(body);
+        }
+        JsStmt::Switch {
+            value,
+            cases,
+            default_body,
+        } => {
+            coalesce_arrays_in_expr(value);
+            for (_, case_body) in cases {
+                coalesce_array_strings(case_body);
+            }
+            coalesce_array_strings(default_body);
+        }
+        JsStmt::Dispatch { blocks, .. } => {
+            for (_, block_body) in blocks {
+                coalesce_array_strings(block_body);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn coalesce_arrays_in_expr(expr: &mut JsExpr) {
+    match expr {
+        JsExpr::ArrayInit(items) => {
+            // Recurse into children first.
+            for item in items.iter_mut() {
+                coalesce_arrays_in_expr(item);
+            }
+            // Then merge adjacent string literals.
+            merge_adjacent_strings(items);
+        }
+        JsExpr::Binary { lhs, rhs, .. }
+        | JsExpr::Cmp { lhs, rhs, .. }
+        | JsExpr::LogicalOr { lhs, rhs }
+        | JsExpr::LogicalAnd { lhs, rhs } => {
+            coalesce_arrays_in_expr(lhs);
+            coalesce_arrays_in_expr(rhs);
+        }
+        JsExpr::Unary { expr: inner, .. }
+        | JsExpr::Not(inner)
+        | JsExpr::PostIncrement(inner)
+        | JsExpr::Spread(inner)
+        | JsExpr::TypeOf(inner)
+        | JsExpr::Cast { expr: inner, .. }
+        | JsExpr::TypeCheck { expr: inner, .. }
+        | JsExpr::GeneratorResume(inner) => {
+            coalesce_arrays_in_expr(inner);
+        }
+        JsExpr::Field { object, .. } => coalesce_arrays_in_expr(object),
+        JsExpr::Index { collection, index } => {
+            coalesce_arrays_in_expr(collection);
+            coalesce_arrays_in_expr(index);
+        }
+        JsExpr::Call { callee, args } | JsExpr::New { callee, args } => {
+            coalesce_arrays_in_expr(callee);
+            for arg in args.iter_mut() {
+                coalesce_arrays_in_expr(arg);
+            }
+        }
+        JsExpr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            coalesce_arrays_in_expr(cond);
+            coalesce_arrays_in_expr(then_val);
+            coalesce_arrays_in_expr(else_val);
+        }
+        JsExpr::TupleInit(items) => {
+            for item in items.iter_mut() {
+                coalesce_arrays_in_expr(item);
+            }
+        }
+        JsExpr::ObjectInit(fields) => {
+            for (_, val) in fields.iter_mut() {
+                coalesce_arrays_in_expr(val);
+            }
+        }
+        JsExpr::SystemCall { args, .. }
+        | JsExpr::SuperCall(args)
+        | JsExpr::GeneratorCreate { args, .. }
+        | JsExpr::SuperMethodCall { args, .. } => {
+            for arg in args.iter_mut() {
+                coalesce_arrays_in_expr(arg);
+            }
+        }
+        JsExpr::In { key, object } | JsExpr::Delete { object, key } => {
+            coalesce_arrays_in_expr(key);
+            coalesce_arrays_in_expr(object);
+        }
+        JsExpr::SuperSet { value, .. } => coalesce_arrays_in_expr(value),
+        JsExpr::Yield(Some(inner)) => coalesce_arrays_in_expr(inner),
+        JsExpr::ArrowFunction { body, .. } => coalesce_array_strings(body),
+        _ => {}
+    }
+}
+
+/// Merge runs of adjacent string literals in a Vec of expressions in-place.
+fn merge_adjacent_strings(items: &mut Vec<JsExpr>) {
+    let mut i = 0;
+    while i < items.len() {
+        if let JsExpr::Literal(Constant::String(_)) = &items[i] {
+            let mut j = i + 1;
+            while j < items.len() {
+                if matches!(&items[j], JsExpr::Literal(Constant::String(_))) {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j > i + 1 {
+                // Merge items[i..j] into a single string.
+                let mut merged = String::new();
+                for item in items[i..j].iter() {
+                    if let JsExpr::Literal(Constant::String(s)) = item {
+                        merged.push_str(s);
+                    }
+                }
+                items.splice(
+                    i..j,
+                    std::iter::once(JsExpr::Literal(Constant::String(merged))),
+                );
+            }
+        }
+        i += 1;
+    }
+}
+
 /// Extract the system namespace and string literal from a text call statement.
 fn extract_text_call(stmt: &JsStmt) -> Option<(String, String)> {
     if let JsStmt::Expr(JsExpr::SystemCall {
@@ -929,6 +1107,60 @@ mod tests {
             assert!(matches!(&args[0], JsExpr::Literal(Constant::String(s)) if s == "foobarbaz"));
         } else {
             panic!("expected text call");
+        }
+    }
+
+    #[test]
+    fn test_coalesce_array_strings() {
+        // ["Hello ", "world", br(), "foo", "bar"] → ["Hello world", br(), "foobar"]
+        let mut body = vec![JsStmt::Return(Some(JsExpr::ArrayInit(vec![
+            JsExpr::Literal(Constant::String("Hello ".into())),
+            JsExpr::Literal(Constant::String("world".into())),
+            JsExpr::Call {
+                callee: Box::new(JsExpr::Var("br".into())),
+                args: vec![],
+            },
+            JsExpr::Literal(Constant::String("foo".into())),
+            JsExpr::Literal(Constant::String("bar".into())),
+        ])))];
+
+        coalesce_array_strings(&mut body);
+
+        if let JsStmt::Return(Some(JsExpr::ArrayInit(items))) = &body[0] {
+            assert_eq!(items.len(), 3, "expected 3 items after coalescing, got: {items:?}");
+            assert!(matches!(&items[0], JsExpr::Literal(Constant::String(s)) if s == "Hello world"));
+            assert!(matches!(&items[1], JsExpr::Call { .. }));
+            assert!(matches!(&items[2], JsExpr::Literal(Constant::String(s)) if s == "foobar"));
+        } else {
+            panic!("expected Return(ArrayInit)");
+        }
+    }
+
+    #[test]
+    fn test_coalesce_array_strings_nested() {
+        // color("red", ["a", "b"]) → color("red", ["ab"])
+        let mut body = vec![JsStmt::Return(Some(JsExpr::Call {
+            callee: Box::new(JsExpr::Var("color".into())),
+            args: vec![
+                JsExpr::Literal(Constant::String("red".into())),
+                JsExpr::ArrayInit(vec![
+                    JsExpr::Literal(Constant::String("a".into())),
+                    JsExpr::Literal(Constant::String("b".into())),
+                ]),
+            ],
+        }))];
+
+        coalesce_array_strings(&mut body);
+
+        if let JsStmt::Return(Some(JsExpr::Call { args, .. })) = &body[0] {
+            if let JsExpr::ArrayInit(items) = &args[1] {
+                assert_eq!(items.len(), 1);
+                assert!(matches!(&items[0], JsExpr::Literal(Constant::String(s)) if s == "ab"));
+            } else {
+                panic!("expected ArrayInit");
+            }
+        } else {
+            panic!("expected Return(Call)");
         }
     }
 }
