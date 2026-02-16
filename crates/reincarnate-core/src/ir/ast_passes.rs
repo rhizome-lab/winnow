@@ -170,11 +170,35 @@ fn lower_output_nodes_in_expr(expr: &mut Expr) {
     } = expr
     {
         match method.as_str() {
-            "content_array" => {
+            "content_array" | "new_buffer" => {
                 *expr = Expr::ArrayInit(std::mem::take(args));
             }
             "text_node" if args.len() == 1 => {
                 *expr = args.pop().unwrap();
+            }
+            "push" if system == "Harlowe.Output" && !args.is_empty() => {
+                // push(buf, a, b, ...) → buf.push(a, b, ...)
+                let mut drain = std::mem::take(args);
+                let receiver = drain.remove(0);
+                *expr = Expr::MethodCall {
+                    receiver: Box::new(receiver),
+                    method: "push".into(),
+                    args: drain,
+                };
+            }
+            "push_spread" if system == "Harlowe.Output" && !args.is_empty() => {
+                // push_spread(buf, val) → buf.push(...val)
+                let mut drain = std::mem::take(args);
+                let receiver = drain.remove(0);
+                let spread_args = drain
+                    .into_iter()
+                    .map(|a| Expr::Spread(Box::new(a)))
+                    .collect();
+                *expr = Expr::MethodCall {
+                    receiver: Box::new(receiver),
+                    method: "push".into(),
+                    args: spread_args,
+                };
             }
             _ if system == "Harlowe.Output" => {
                 // All other Harlowe.Output methods (br, em, strong, color,
@@ -6085,5 +6109,76 @@ mod tests {
             matches!(&body[0], Stmt::VarDecl { name, .. } if name == "v0"),
             "v0 should not be inlined into conditional body: {body:?}"
         );
+    }
+
+    #[test]
+    fn lower_output_nodes_new_buffer() {
+        let mut body = vec![Stmt::VarDecl {
+            name: "buf".into(),
+            ty: None,
+            init: Some(Expr::SystemCall {
+                system: "Harlowe.Output".into(),
+                method: "new_buffer".into(),
+                args: vec![],
+            }),
+            mutable: false,
+        }];
+        lower_output_nodes(&mut body);
+        match &body[0] {
+            Stmt::VarDecl {
+                init: Some(Expr::ArrayInit(elems)),
+                ..
+            } => assert!(elems.is_empty()),
+            other => panic!("Expected empty ArrayInit, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_output_nodes_push() {
+        // push(buf, a, b) → buf.push(a, b)
+        let mut body = vec![Stmt::Expr(Expr::SystemCall {
+            system: "Harlowe.Output".into(),
+            method: "push".into(),
+            args: vec![var("buf"), str_lit("a"), str_lit("b")],
+        })];
+        lower_output_nodes(&mut body);
+        match &body[0] {
+            Stmt::Expr(Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            }) => {
+                assert_eq!(**receiver, var("buf"));
+                assert_eq!(method, "push");
+                assert_eq!(args.len(), 2);
+                assert_eq!(args[0], str_lit("a"));
+                assert_eq!(args[1], str_lit("b"));
+            }
+            other => panic!("Expected MethodCall push, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_output_nodes_push_spread() {
+        // push_spread(buf, arr) → buf.push(...arr)
+        let mut body = vec![Stmt::Expr(Expr::SystemCall {
+            system: "Harlowe.Output".into(),
+            method: "push_spread".into(),
+            args: vec![var("buf"), var("arr")],
+        })];
+        lower_output_nodes(&mut body);
+        match &body[0] {
+            Stmt::Expr(Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            }) => {
+                assert_eq!(**receiver, var("buf"));
+                assert_eq!(method, "push");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], Expr::Spread(Box::new(var("arr"))));
+            }
+            other => panic!("Expected MethodCall push with spread, got: {other:?}"),
+        }
     }
 }
