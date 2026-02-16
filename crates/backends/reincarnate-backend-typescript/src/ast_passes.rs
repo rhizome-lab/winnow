@@ -728,6 +728,110 @@ fn infer_expr_type(expr: &JsExpr, var_types: &HashMap<String, Type>) -> Option<T
     }
 }
 
+// ---------------------------------------------------------------------------
+// Text call coalescing
+// ---------------------------------------------------------------------------
+
+/// Merge adjacent `SystemCall("*.Output", "text", [StringLiteral])` statements
+/// into a single call with the concatenated string. Reduces output size for
+/// text-heavy engines like Harlowe where the parser fragments text across
+/// multiple nodes.
+pub fn coalesce_text_calls(body: &mut Vec<JsStmt>) {
+    // Recurse into nested bodies first
+    for stmt in body.iter_mut() {
+        coalesce_text_in_stmt(stmt);
+    }
+
+    // Merge adjacent text calls at this level
+    let mut i = 0;
+    while i < body.len() {
+        if let Some((system, first_text)) = extract_text_call(&body[i]) {
+            let mut merged = first_text;
+            let mut j = i + 1;
+            while j < body.len() {
+                if let Some((sys2, next_text)) = extract_text_call(&body[j]) {
+                    if sys2 == system {
+                        merged.push_str(&next_text);
+                        j += 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+            if j > i + 1 {
+                let replacement = JsStmt::Expr(JsExpr::SystemCall {
+                    system,
+                    method: "text".to_string(),
+                    args: vec![JsExpr::Literal(Constant::String(merged))],
+                });
+                body.splice(i..j, std::iter::once(replacement));
+            }
+        }
+        i += 1;
+    }
+}
+
+fn coalesce_text_in_stmt(stmt: &mut JsStmt) {
+    match stmt {
+        JsStmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            coalesce_text_calls(then_body);
+            coalesce_text_calls(else_body);
+        }
+        JsStmt::While { body, .. }
+        | JsStmt::Loop { body }
+        | JsStmt::ForOf { body, .. } => {
+            coalesce_text_calls(body);
+        }
+        JsStmt::For {
+            init,
+            body,
+            update,
+            ..
+        } => {
+            coalesce_text_calls(init);
+            coalesce_text_calls(body);
+            coalesce_text_calls(update);
+        }
+        JsStmt::Switch {
+            cases,
+            default_body,
+            ..
+        } => {
+            for (_, case_body) in cases {
+                coalesce_text_calls(case_body);
+            }
+            coalesce_text_calls(default_body);
+        }
+        JsStmt::Dispatch { blocks, .. } => {
+            for (_, block_body) in blocks {
+                coalesce_text_calls(block_body);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extract the system namespace and string literal from a text call statement.
+fn extract_text_call(stmt: &JsStmt) -> Option<(String, String)> {
+    if let JsStmt::Expr(JsExpr::SystemCall {
+        system,
+        method,
+        args,
+    }) = stmt
+    {
+        if method == "text" && system.ends_with("_Output") && args.len() == 1 {
+            if let JsExpr::Literal(Constant::String(s)) = &args[0] {
+                return Some((system.clone(), s.clone()));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,6 +886,49 @@ mod tests {
                 );
             }
             other => panic!("Expected Switch, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_coalesce_adjacent_text_calls() {
+        fn text_call(s: &str) -> JsStmt {
+            JsStmt::Expr(JsExpr::SystemCall {
+                system: "Harlowe_Output".to_string(),
+                method: "text".to_string(),
+                args: vec![JsExpr::Literal(Constant::String(s.to_string()))],
+            })
+        }
+
+        let mut body = vec![
+            text_call("Hello "),
+            text_call("world"),
+            // Non-text barrier
+            JsStmt::Expr(JsExpr::SystemCall {
+                system: "Harlowe_Output".to_string(),
+                method: "void_element".to_string(),
+                args: vec![JsExpr::Literal(Constant::String("br".to_string()))],
+            }),
+            text_call("foo"),
+            text_call("bar"),
+            text_call("baz"),
+        ];
+
+        coalesce_text_calls(&mut body);
+
+        assert_eq!(body.len(), 3, "should merge runs but not across barriers");
+        // First: merged "Hello world"
+        if let JsStmt::Expr(JsExpr::SystemCall { args, .. }) = &body[0] {
+            assert!(matches!(&args[0], JsExpr::Literal(Constant::String(s)) if s == "Hello world"));
+        } else {
+            panic!("expected text call");
+        }
+        // Second: barrier (void_element)
+        assert!(matches!(&body[1], JsStmt::Expr(JsExpr::SystemCall { method, .. }) if method == "void_element"));
+        // Third: merged "foobarbaz"
+        if let JsStmt::Expr(JsExpr::SystemCall { args, .. }) = &body[2] {
+            assert!(matches!(&args[0], JsExpr::Literal(Constant::String(s)) if s == "foobarbaz"));
+        } else {
+            panic!("expected text call");
         }
     }
 }
