@@ -183,6 +183,38 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
 - [ ] **SimpleAudio.select()** — AudioRunner returned is a no-op stub.
 - [ ] **Engine.forward()** — No-op (deprecated in SugarCube v2).
 
+### Harlowe Correctness Bugs
+
+- [x] **Backtick verbatim spans not handled in parser** — Fixed in `cfb1796`.
+  Parser now handles backtick-delimited verbatim spans; `]` inside backticks
+  no longer closes hooks. arceus-garden: 203 → 3 unknown_macro calls.
+
+- [x] **`is ... or ...` shorthand not expanded** — Fixed in `d4bcf29`.
+  `maybe_distribute_comparison()` wraps bare values in matching comparison
+  when `or`/`and` follows `is`/`is not`.
+
+- [x] **Changer `+` composition emits JS `+`** — Fixed in `155af06`.
+  All Harlowe `+` routed through `Harlowe.Engine.plus()` runtime call
+  which dispatches by type (changers, arrays, datamaps, numbers).
+
+- [ ] **`it` in `(set:)` context may be wrong** — `(set: $totalTF to it + 1)`
+  emits `set("totalTF", get_it() + 1)` where `get_it()` returns the last-set
+  value. Harlowe docs suggest `it` inside `(set:)` refers to the target
+  variable's current value (so the author means "increment totalTF"). Needs
+  verification against Harlowe interpreter. 244 `get_it()` calls in
+  arceus-garden.
+
+- [ ] **Missing macros** — `(obviously:)` (1 occurrence), `(forget-undos:)`
+  (1 occurrence) emitted as `unknown_macro()` no-ops.
+
+### Harlowe Output Quality
+
+- [ ] **Text fragmentation** — Adjacent `text()` calls not coalesced.
+  Single-character text calls (`` ` ``, `[`, `X`, `]`) where the emitter could
+  merge them into one call. ~2,974 `text()` calls in arceus-garden, estimated
+  30-40% could be eliminated. Fix: emitter or AST pass should merge adjacent
+  `SystemCall("Harlowe.Output", "text")` ops.
+
 ### Harlowe Phase 2 (Advanced Features)
 
 - [ ] **`(for: each _item, ...$arr)[hook]`** — Loop lowering
@@ -191,7 +223,7 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
 - [ ] **Collection constructors** — `(a:)`, `(dm:)`, `(ds:)` (runtime done, parser handles basic cases)
 - [ ] **Collection operators** — `contains`, `is in`, `'s`, `of` with full Harlowe semantics
 - [ ] **Lambda expressions** — `_x where _x > 5` syntax in parser/translator
-- [ ] **Changer composition with `+`** — `(color: red) + (text-style: "bold")`
+- [x] **Changer composition with `+`** — `(color: red) + (text-style: "bold")` (fixed in `155af06`)
 - [ ] **`(save-game:)` / `(load-game:)`** — Save integration (basic runtime done)
 - [ ] **`(replace:)`, `(show:)`, `(hide:)`** — DOM manipulation hooks
 - [ ] **`(meter:)`, `(dialog:)`, `(dropdown:)`** — UI macros
