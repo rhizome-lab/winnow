@@ -10,50 +10,52 @@ use super::inst::{CastKind, CmpKind};
 use super::value::Constant;
 
 // ---------------------------------------------------------------------------
-// Lower content_array to ArrayInit
+// Lower synthetic output SystemCalls to native AST nodes
 // ---------------------------------------------------------------------------
 
-/// Rewrite `SystemCall(_, "content_array", args)` → `ArrayInit(args)`.
+/// Rewrite synthetic `Harlowe.Output` SystemCalls to native AST nodes:
+/// - `content_array(args...)` → `ArrayInit(args)`
+/// - `text_node(s)` → `s` (identity — strings ARE content nodes)
 ///
-/// The Harlowe translator emits `content_array` as a SystemCall at the IR
-/// level (since the IR has no array-literal op). The backend would
-/// eventually rewrite this to `ArrayInit`, but doing it earlier in the
-/// core AST lets optimization passes see it as a pure, variable-free
-/// expression — enabling constant folding and dead variable elimination.
-pub fn lower_content_arrays(body: &mut [Stmt]) {
+/// The Harlowe translator emits these as SystemCalls at the IR level (since
+/// the IR has no array-literal or text-node ops). The backend would
+/// eventually rewrite them, but doing it earlier in the core AST lets
+/// optimization passes see them as pure expressions — enabling constant
+/// folding and dead variable elimination.
+pub fn lower_output_nodes(body: &mut [Stmt]) {
     for stmt in body.iter_mut() {
-        lower_content_arrays_in_stmt(stmt);
+        lower_output_nodes_in_stmt(stmt);
     }
 }
 
-fn lower_content_arrays_in_stmt(stmt: &mut Stmt) {
+fn lower_output_nodes_in_stmt(stmt: &mut Stmt) {
     match stmt {
         Stmt::VarDecl {
             init: Some(e), ..
         } => {
-            lower_content_arrays_in_expr(e);
+            lower_output_nodes_in_expr(e);
         }
         Stmt::Assign { target, value } => {
-            lower_content_arrays_in_expr(target);
-            lower_content_arrays_in_expr(value);
+            lower_output_nodes_in_expr(target);
+            lower_output_nodes_in_expr(value);
         }
         Stmt::CompoundAssign { target, value, .. } => {
-            lower_content_arrays_in_expr(target);
-            lower_content_arrays_in_expr(value);
+            lower_output_nodes_in_expr(target);
+            lower_output_nodes_in_expr(value);
         }
-        Stmt::Expr(e) => lower_content_arrays_in_expr(e),
+        Stmt::Expr(e) => lower_output_nodes_in_expr(e),
         Stmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            lower_content_arrays_in_expr(cond);
-            lower_content_arrays(then_body);
-            lower_content_arrays(else_body);
+            lower_output_nodes_in_expr(cond);
+            lower_output_nodes(then_body);
+            lower_output_nodes(else_body);
         }
         Stmt::While { cond, body } => {
-            lower_content_arrays_in_expr(cond);
-            lower_content_arrays(body);
+            lower_output_nodes_in_expr(cond);
+            lower_output_nodes(body);
         }
         Stmt::For {
             init,
@@ -61,75 +63,75 @@ fn lower_content_arrays_in_stmt(stmt: &mut Stmt) {
             update,
             body,
         } => {
-            lower_content_arrays(init);
-            lower_content_arrays_in_expr(cond);
-            lower_content_arrays(update);
-            lower_content_arrays(body);
+            lower_output_nodes(init);
+            lower_output_nodes_in_expr(cond);
+            lower_output_nodes(update);
+            lower_output_nodes(body);
         }
         Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
-            lower_content_arrays(body);
+            lower_output_nodes(body);
         }
-        Stmt::Return(Some(e)) => lower_content_arrays_in_expr(e),
+        Stmt::Return(Some(e)) => lower_output_nodes_in_expr(e),
         Stmt::Switch {
             value,
             cases,
             default_body,
         } => {
-            lower_content_arrays_in_expr(value);
+            lower_output_nodes_in_expr(value);
             for (_, case_body) in cases {
-                lower_content_arrays(case_body);
+                lower_output_nodes(case_body);
             }
-            lower_content_arrays(default_body);
+            lower_output_nodes(default_body);
         }
         Stmt::Dispatch { blocks, .. } => {
             for (_, block_body) in blocks {
-                lower_content_arrays(block_body);
+                lower_output_nodes(block_body);
             }
         }
         _ => {}
     }
 }
 
-fn lower_content_arrays_in_expr(expr: &mut Expr) {
+fn lower_output_nodes_in_expr(expr: &mut Expr) {
     // Post-order: recurse first, then try to rewrite this node.
     match expr {
         Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            lower_content_arrays_in_expr(lhs);
-            lower_content_arrays_in_expr(rhs);
+            lower_output_nodes_in_expr(lhs);
+            lower_output_nodes_in_expr(rhs);
         }
         Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
-            lower_content_arrays_in_expr(lhs);
-            lower_content_arrays_in_expr(rhs);
+            lower_output_nodes_in_expr(lhs);
+            lower_output_nodes_in_expr(rhs);
         }
         Expr::Unary { expr: inner, .. }
         | Expr::Cast { expr: inner, .. }
         | Expr::TypeCheck { expr: inner, .. }
         | Expr::Not(inner)
         | Expr::Spread(inner) => {
-            lower_content_arrays_in_expr(inner);
+            lower_output_nodes_in_expr(inner);
         }
-        Expr::Field { object, .. } => lower_content_arrays_in_expr(object),
+        Expr::Field { object, .. } => lower_output_nodes_in_expr(object),
         Expr::Index { collection, index } => {
-            lower_content_arrays_in_expr(collection);
-            lower_content_arrays_in_expr(index);
+            lower_output_nodes_in_expr(collection);
+            lower_output_nodes_in_expr(index);
         }
         Expr::Call { args, .. } | Expr::CoroutineCreate { args, .. } => {
             for a in args {
-                lower_content_arrays_in_expr(a);
+                lower_output_nodes_in_expr(a);
             }
         }
         Expr::CallIndirect { callee, args } => {
-            lower_content_arrays_in_expr(callee);
+            lower_output_nodes_in_expr(callee);
             for a in args {
-                lower_content_arrays_in_expr(a);
+                lower_output_nodes_in_expr(a);
             }
         }
         Expr::MethodCall {
             receiver, args, ..
         } => {
-            lower_content_arrays_in_expr(receiver);
+            lower_output_nodes_in_expr(receiver);
             for a in args {
-                lower_content_arrays_in_expr(a);
+                lower_output_nodes_in_expr(a);
             }
         }
         Expr::Ternary {
@@ -137,33 +139,53 @@ fn lower_content_arrays_in_expr(expr: &mut Expr) {
             then_val,
             else_val,
         } => {
-            lower_content_arrays_in_expr(cond);
-            lower_content_arrays_in_expr(then_val);
-            lower_content_arrays_in_expr(else_val);
+            lower_output_nodes_in_expr(cond);
+            lower_output_nodes_in_expr(then_val);
+            lower_output_nodes_in_expr(else_val);
         }
         Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
             for e in elems {
-                lower_content_arrays_in_expr(e);
+                lower_output_nodes_in_expr(e);
             }
         }
         Expr::StructInit { fields, .. } => {
             for (_, v) in fields {
-                lower_content_arrays_in_expr(v);
+                lower_output_nodes_in_expr(v);
             }
         }
         Expr::PostIncrement(inner) | Expr::CoroutineResume(inner) => {
-            lower_content_arrays_in_expr(inner);
+            lower_output_nodes_in_expr(inner);
         }
         Expr::Yield(Some(e)) => {
-            lower_content_arrays_in_expr(e);
+            lower_output_nodes_in_expr(e);
         }
         _ => {} // Literal, Var, GlobalRef — no children
     }
 
     // Now try to rewrite this node.
-    if let Expr::SystemCall { method, args, .. } = expr {
-        if method == "content_array" {
-            *expr = Expr::ArrayInit(std::mem::take(args));
+    if let Expr::SystemCall {
+        system,
+        method,
+        args,
+    } = expr
+    {
+        match method.as_str() {
+            "content_array" => {
+                *expr = Expr::ArrayInit(std::mem::take(args));
+            }
+            "text_node" if args.len() == 1 => {
+                *expr = args.pop().unwrap();
+            }
+            _ if system == "Harlowe.Output" => {
+                // All other Harlowe.Output methods (br, em, strong, color,
+                // link, img, ...) are bare function calls. Lower them to
+                // Call nodes so the const-folding pass can sink them.
+                *expr = Expr::Call {
+                    func: std::mem::take(method),
+                    args: std::mem::take(args),
+                };
+            }
+            _ => {}
         }
     }
 }
@@ -605,12 +627,12 @@ fn try_fold_batch(body: &mut Vec<Stmt>) -> bool {
                     } => init,
                     _ => unreachable!(),
                 };
-                // Pure constant with no variable references (e.g. `[]`, `0`,
-                // `"str"`) can be sunk past any statement safely — evaluation
-                // order doesn't matter.
-                let is_trivial_const =
-                    !expr_has_side_effects(init) && !expr_has_any_var_ref(init);
-                if !is_trivial_const {
+                // An expression with no variable references (e.g. `[]`, `0`,
+                // `"str"`, `br()`, `em(["x"])`) can be sunk past any
+                // statement safely — its result doesn't depend on any
+                // mutable state that intervening statements could modify.
+                let is_sinkable = !expr_has_any_var_ref(init);
+                if !is_sinkable {
                     let can_sink_path = is_stable_path(init)
                         && body[i + 1..use_idx]
                             .iter()
@@ -5498,6 +5520,92 @@ mod tests {
         }
     }
 
+    fn text_node(s: &str) -> Expr {
+        Expr::SystemCall {
+            system: "Harlowe.Output".to_string(),
+            method: "text_node".to_string(),
+            args: vec![Expr::Literal(Constant::String(s.to_string()))],
+        }
+    }
+
+    fn str_lit(s: &str) -> Expr {
+        Expr::Literal(Constant::String(s.to_string()))
+    }
+
+    #[test]
+    fn lower_output_nodes_rewrites_text_node() {
+        let mut body = vec![Stmt::VarDecl {
+            name: "v1".into(),
+            ty: None,
+            init: Some(text_node("hello")),
+            mutable: false,
+        }];
+        lower_output_nodes(&mut body);
+        match &body[0] {
+            Stmt::VarDecl {
+                init: Some(Expr::Literal(Constant::String(s))),
+                ..
+            } => assert_eq!(s, "hello"),
+            other => panic!("Expected string literal init, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_node_strings_inline_into_return_array() {
+        // Simulate real pattern: text_node strings interleaved with br() calls.
+        //   const v1 = text_node("hello");
+        //   const v2 = br();
+        //   const v3 = text_node("world");
+        //   return [v1, v2, v3];
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v1".into(),
+                ty: None,
+                init: Some(text_node("hello")),
+                mutable: false,
+            },
+            Stmt::VarDecl {
+                name: "v2".into(),
+                ty: None,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::VarDecl {
+                name: "v3".into(),
+                ty: None,
+                init: Some(text_node("world")),
+                mutable: false,
+            },
+            Stmt::Return(Some(Expr::ArrayInit(vec![
+                var("v1"),
+                var("v2"),
+                var("v3"),
+            ]))),
+        ];
+
+        // Run the same sequence as the real pipeline.
+        lower_output_nodes(&mut body);
+        fold_single_use_consts(&mut body);
+
+        // v1 and v3 (strings) should be inlined; v2 (br() call) stays.
+        let ret_stmt = body.last().unwrap();
+        match ret_stmt {
+            Stmt::Return(Some(Expr::ArrayInit(elems))) => {
+                assert_eq!(
+                    elems[0],
+                    str_lit("hello"),
+                    "v1 should have been inlined: {body:?}"
+                );
+                assert_eq!(
+                    elems[2],
+                    str_lit("world"),
+                    "v3 should have been inlined: {body:?}"
+                );
+            }
+            _ => panic!("Expected return with array: {body:?}"),
+        }
+    }
+
     #[test]
     fn fold_identical_branch_assigns_hoists_empty_array() {
         // Pattern:
@@ -5618,12 +5726,14 @@ mod tests {
     }
 
     #[test]
-    fn trivial_const_sinks_past_if_stmts() {
+    fn no_var_ref_expr_sinks_past_if_stmts() {
         // Pattern: merge_decl_init has produced:
         //   let v0 = [];
         //   if (cond) { side_effect(); }
         //   const v11 = br();
         //   return [v0, v11];
+        // Both v0 (trivially constant) and v11 (Call with no var refs)
+        // can be sunk past the if statement.
         let mut body = vec![
             Stmt::VarDecl {
                 name: "v0".into(),
@@ -5647,9 +5757,8 @@ mod tests {
 
         fold_single_use_consts(&mut body);
 
-        // v0 should be inlined as [] in the return array.
-        // v11 can't be inlined (call has side effects, intervening if).
-        // Expected: if, const v11 = br(), return [[], v11]
+        // Both should be inlined: v0 as [], v11 as br().
+        // Expected: if, return [[], br()]
         let ret_stmt = body.last().unwrap();
         match ret_stmt {
             Stmt::Return(Some(Expr::ArrayInit(elems))) => {
@@ -5657,6 +5766,11 @@ mod tests {
                     elems[0],
                     empty_array(),
                     "v0 should have been inlined to []: {body:?}"
+                );
+                assert_eq!(
+                    elems[1],
+                    br_call(),
+                    "v11 should have been inlined to br(): {body:?}"
                 );
             }
             _ => panic!("Expected return with array: {body:?}"),
