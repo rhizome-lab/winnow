@@ -286,10 +286,10 @@ function ensureGlobals(): void {
   // --- Scripting ---
   g.Scripting = {
     evalJavaScript(expr: string): any {
-      return new Function("State", "setup", "V", "T", "Config", `return (${expr})`)(g.State, g.setup, g.V, g.T, g.Config);
+      return new Function(`return (${expr})`)();
     },
     evalTwineScript(code: string, _output?: DocumentFragment): void {
-      new Function("State", "setup", "V", "T", "Config", code)(g.State, g.setup, g.V, g.T, g.Config);
+      new Function(code)();
     },
     parse(code: string): string { return code; },
   };
@@ -713,13 +713,13 @@ function evalCode(code: string): void {
   const g = globalThis as any;
   let fn: Function;
   try {
-    fn = new Function("State", "setup", "V", "T", "Config", code);
+    fn = new Function(code);
   } catch (e) {
     console.error("[evalCode] SyntaxError compiling user script (" + code.length + " chars):", e);
     return;
   }
   try {
-    fn(g.State, g.setup, g.V, g.T, g.Config);
+    fn();
   } catch (e) {
     console.error("[evalCode] error executing user script:", e);
   }
