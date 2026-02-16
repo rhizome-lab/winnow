@@ -105,6 +105,17 @@ fn parse_prec(lexer: &mut ExprLexer, min_prec: Prec) -> Expr {
                     _ => Prec::Access,
                 };
                 let right = parse_prec(lexer, next_prec);
+
+                // Harlowe `is`/`is not` distribution: `$x is A or B` means
+                // `($x is A) or ($x is B)`. When or/and follows a comparison
+                // and the RHS is a bare value (not itself a comparison),
+                // distribute the comparison subject.
+                let right = if matches!(bin_op, BinaryOp::Or | BinaryOp::And) {
+                    maybe_distribute_comparison(&left, right)
+                } else {
+                    right
+                };
+
                 let span = Span::new(left.span.start, right.span.end);
                 left = Expr {
                     kind: ExprKind::Binary {
@@ -175,6 +186,46 @@ fn try_parse_possessive(lexer: &mut ExprLexer, mut expr: Expr) -> Expr {
     }
 
     expr
+}
+
+/// Harlowe distributes comparisons across `or`/`and`:
+/// `$x is 0 or ""` → `($x is 0) or ($x is "")`.
+/// When `left` is `(subject IS/ISNOT value)` and `right` is a bare value
+/// (not itself a comparison), wrap `right` in the same comparison.
+fn maybe_distribute_comparison(left: &Expr, right: Expr) -> Expr {
+    if let ExprKind::Binary {
+        op: cmp_op @ (BinaryOp::Is | BinaryOp::IsNot),
+        left: ref subject,
+        ..
+    } = left.kind
+    {
+        // Only distribute if the RHS isn't already a comparison
+        if !matches!(
+            right.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Is
+                    | BinaryOp::IsNot
+                    | BinaryOp::Lt
+                    | BinaryOp::Lte
+                    | BinaryOp::Gt
+                    | BinaryOp::Gte
+                    | BinaryOp::Contains
+                    | BinaryOp::IsIn,
+                ..
+            }
+        ) {
+            let span = Span::new(subject.span.start, right.span.end);
+            return Expr {
+                kind: ExprKind::Binary {
+                    op: cmp_op,
+                    left: subject.clone(),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+    }
+    right
 }
 
 fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
@@ -546,13 +597,49 @@ mod tests {
     }
 
     #[test]
-    fn test_or_chain() {
+    fn test_or_chain_distributes_is() {
+        // `$recover is 0 or ""` → `($recover is 0) or ($recover is "")`
         let expr = parse("$recover is 0 or \"\"");
-        // Should parse as ($recover is 0) or ""
         if let ExprKind::Binary { op, left, right } = &expr.kind {
             assert_eq!(*op, BinaryOp::Or);
+            // Left: $recover is 0
             assert!(matches!(left.kind, ExprKind::Binary { op: BinaryOp::Is, .. }));
-            assert!(matches!(right.kind, ExprKind::Str(ref s) if s.is_empty()));
+            // Right: $recover is "" (distributed)
+            if let ExprKind::Binary {
+                op: right_op,
+                left: right_subject,
+                right: right_value,
+            } = &right.kind
+            {
+                assert_eq!(*right_op, BinaryOp::Is);
+                assert!(matches!(right_subject.kind, ExprKind::StoryVar(ref n) if n == "recover"));
+                assert!(matches!(right_value.kind, ExprKind::Str(ref s) if s.is_empty()));
+            } else {
+                panic!("expected distributed comparison on right");
+            }
+        } else {
+            panic!("expected binary");
+        }
+    }
+
+    #[test]
+    fn test_or_no_distribution_when_rhs_is_comparison() {
+        // `$x is 0 or $y is 1` → no distribution (RHS already has `is`)
+        let expr = parse("$x is 0 or $y is 1");
+        if let ExprKind::Binary { op, right, .. } = &expr.kind {
+            assert_eq!(*op, BinaryOp::Or);
+            // Right should be `$y is 1`, not `$x is ($y is 1)`
+            if let ExprKind::Binary {
+                op: right_op,
+                left: right_subject,
+                ..
+            } = &right.kind
+            {
+                assert_eq!(*right_op, BinaryOp::Is);
+                assert!(matches!(right_subject.kind, ExprKind::StoryVar(ref n) if n == "y"));
+            } else {
+                panic!("expected comparison on right");
+            }
         } else {
             panic!("expected binary");
         }
