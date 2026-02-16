@@ -15,10 +15,6 @@ use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 use crate::runtime::SYSTEM_NAMES;
 use crate::types::ts_type;
 
-fn extract_pass_defaults(rc: Option<&RuntimeConfig>) -> BTreeMap<String, bool> {
-    rc.map(|c| c.pass_defaults.clone()).unwrap_or_default()
-}
-
 /// Which engine's rewrite pass to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EngineKind {
@@ -74,7 +70,6 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     }
 
     let engine = detect_engine(runtime_config);
-    let pass_defaults = extract_pass_defaults(runtime_config);
     emit_runtime_imports(module, &mut out, runtime_config, engine);
     if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
         let _ = writeln!(
@@ -93,14 +88,14 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
     // Single-file mode — globals are in the same scope, no ESM setter rewrite needed.
     let no_mutable_globals = HashSet::new();
     if module.classes.is_empty() {
-        emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &pass_defaults, debug, &mut out)?;
+        emit_functions(module, &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, debug, &mut out)?;
     } else {
         // Single-file mode: no circular imports (all classes in one scope).
         let no_late_bound = HashSet::new();
         let no_short_to_qualified = HashMap::new();
         let (class_groups, free_funcs) = group_by_class(module);
         for group in &class_groups {
-            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, &pass_defaults, debug, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
         }
         let closure_fids: Vec<FuncId> = free_funcs.iter()
             .copied()
@@ -109,7 +104,7 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
         let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
         for &fid in &free_funcs {
             if module.functions[fid].method_kind != MethodKind::Closure {
-                emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &module.sprite_names, &closure_bodies, &pass_defaults, debug, &mut out)?;
+                emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, &mut out)?;
             }
         }
     }
@@ -767,7 +762,6 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         known_classes.extend(rc.type_definitions.keys().cloned());
     }
     let engine = detect_engine(runtime_config);
-    let pass_defaults = extract_pass_defaults(runtime_config);
     let mut barrel_exports: Vec<String> = Vec::new();
 
     // Globals → _globals.ts (at module root).
@@ -888,7 +882,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             validate_member_accesses(&module.functions[fid], Some(&qualified), &class_meta, &registry, &short_to_qualified, type_defs);
         }
 
-        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, &pass_defaults, debug, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
 
         strip_unused_namespace_imports(&mut out);
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -968,7 +962,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
         for &fid in &free_funcs {
             if module.functions[fid].method_kind != MethodKind::Closure {
-                emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, &pass_defaults, debug, &mut out)?;
+                emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, &mut out)?;
             }
         }
         strip_unused_namespace_imports(&mut out);
@@ -2274,7 +2268,6 @@ fn emit_functions(
     mutable_global_names: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
-    pass_defaults: &BTreeMap<String, bool>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2286,7 +2279,7 @@ fn emit_functions(
     let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
     for id in all_ids {
         if module.functions[id].method_kind != MethodKind::Closure {
-            emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, pass_defaults, debug, out)?;
+            emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, out)?;
         }
     }
     Ok(())
@@ -2302,7 +2295,6 @@ fn emit_function(
     engine: EngineKind,
     sprite_names: &[String],
     closure_bodies: &HashMap<String, JsFunction>,
-    pass_defaults: &BTreeMap<String, bool>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2345,12 +2337,6 @@ fn emit_function(
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     crate::ast_passes::recover_switch_statements(&mut js_func.body);
     crate::ast_passes::strip_redundant_casts(&mut js_func);
-    if pass_defaults.get("fold-array-init-push").copied().unwrap_or(false) {
-        crate::ast_passes::fold_array_init_push(&mut js_func.body);
-    }
-    if pass_defaults.get("merge-adjacent-push").copied().unwrap_or(false) {
-        crate::ast_passes::merge_adjacent_push(&mut js_func.body);
-    }
     crate::ast_passes::coalesce_text_calls(&mut js_func.body);
     crate::ast_passes::coalesce_array_strings(&mut js_func.body);
     crate::ast_printer::print_function(&js_func, out);
@@ -2520,7 +2506,6 @@ fn emit_class(
     known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
-    pass_defaults: &BTreeMap<String, bool>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2635,7 +2620,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, pass_defaults, debug, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, debug, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2720,7 +2705,6 @@ fn emit_class_method(
     lowering_config: &LoweringConfig,
     engine: EngineKind,
     sprite_names: &[String],
-    pass_defaults: &BTreeMap<String, bool>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2814,12 +2798,6 @@ fn emit_class_method(
     }
     crate::ast_passes::recover_switch_statements(&mut js_func.body);
     crate::ast_passes::strip_redundant_casts(&mut js_func);
-    if pass_defaults.get("fold-array-init-push").copied().unwrap_or(false) {
-        crate::ast_passes::fold_array_init_push(&mut js_func.body);
-    }
-    if pass_defaults.get("merge-adjacent-push").copied().unwrap_or(false) {
-        crate::ast_passes::merge_adjacent_push(&mut js_func.body);
-    }
     crate::ast_passes::coalesce_text_calls(&mut js_func.body);
     crate::ast_passes::coalesce_array_strings(&mut js_func.body);
     crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, out);
