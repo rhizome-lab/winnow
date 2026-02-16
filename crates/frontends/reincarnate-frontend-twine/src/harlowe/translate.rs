@@ -3,15 +3,13 @@
 //! Translates parsed Harlowe passage AST nodes into reincarnate-core IR
 //! functions using SystemCall-based dispatch to the Harlowe runtime layer.
 //!
-//! Content nodes are IR values (Type::Dynamic returned from SystemCalls).
-//! The backend's SSA inlining produces nested expressions from flat IR
-//! values. Two synthetic SystemCalls are rewritten by the backend:
-//! - `Harlowe.Output.content_array(a, b, c)` → `[a, b, c]` (ArrayInit)
-//! - `Harlowe.Output.text_node(s)` → `s` (identity — strings ARE nodes)
+//! Passage functions receive an `h: HarloweContext` parameter and produce
+//! output via side-effecting `Harlowe.H.*` method calls. No intermediate
+//! content arrays or virtual DOM — `h.text("Hello")`, `h.em(child)`, etc.
 //!
 //! SystemCall namespaces:
 //! - `Harlowe.State`: get/set story and temp variables
-//! - `Harlowe.Output`: content builders (color, strong, br, link, etc.)
+//! - `Harlowe.H`: content emission (text, br, em, strong, link, etc.)
 //! - `Harlowe.Navigation`: goto
 //! - `Harlowe.Engine`: changers, data ops, runtime helpers
 
@@ -43,12 +41,14 @@ pub fn passage_func_name(name: &str) -> String {
 pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
     let func_name = passage_func_name(name);
     let sig = FunctionSig {
-        params: vec![],
-        return_ty: Type::Dynamic,
+        params: vec![Type::Dynamic],
+        return_ty: Type::Void,
         defaults: vec![],
         has_rest_param: false,
     };
-    let fb = FunctionBuilder::new(&func_name, sig, Visibility::Public);
+    let mut fb = FunctionBuilder::new(&func_name, sig, Visibility::Public);
+    let h_param = fb.param(0);
+    fb.name_value(h_param, "h".to_string());
     let mut ctx = TranslateCtx {
         fb,
         temp_vars: HashMap::new(),
@@ -58,8 +58,8 @@ pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
         set_target: None,
     };
 
-    let content = ctx.lower_content_to_buffer(&ast.body);
-    ctx.fb.ret(Some(content));
+    ctx.emit_content(&ast.body);
+    ctx.fb.ret(None);
 
     let callbacks = std::mem::take(&mut ctx.callbacks);
 
@@ -81,146 +81,18 @@ struct TranslateCtx {
 }
 
 impl TranslateCtx {
-    // ── Content array helper ────────────────────────────────────────
+    // ── Content emission (side-effect only) ─────────────────────────
 
-    /// Lower a sequence of nodes into a single content_array value.
-    /// Filters out None results (side-effect-only nodes like `set`).
-    fn lower_content_array(&mut self, nodes: &[Node]) -> ValueId {
-        let vals: Vec<ValueId> = self.lower_nodes_to_structured(nodes);
-        self.fb
-            .system_call("Harlowe.Output", "content_array", &vals, Type::Dynamic)
-    }
-
-    // ── Push-based content emission ────────────────────────────────
-
-    /// Lower a sequence of nodes into a buffer built with push-based emission.
-    /// Used at the passage top level so that control flow (if/unless) doesn't
-    /// force values computed before the branch into temporary variables.
-    fn lower_content_to_buffer(&mut self, nodes: &[Node]) -> ValueId {
-        let buf = self.fb.system_call(
-            "Harlowe.Output",
-            "new_buffer",
-            &[],
-            Type::Dynamic,
-        );
-        self.push_nodes_into_buffer(buf, nodes);
-        buf
-    }
-
-    /// Push each node's value into `buf` in program order.
-    /// Like `lower_nodes_to_structured` but emits push/push_spread calls
-    /// instead of collecting into a Vec<ValueId>.
-    fn push_nodes_into_buffer(&mut self, buf: ValueId, nodes: &[Node]) {
+    /// Emit content nodes as h.* calls in sequence. Side-effect only.
+    fn emit_content(&mut self, nodes: &[Node]) {
         let mut i = 0;
         while i < nodes.len() {
             match &nodes[i].kind {
                 NodeKind::HtmlOpen { tag, attrs } => {
-                    // Consume children until matching HtmlClose — same pairing logic.
                     let tag = tag.clone();
                     let attrs = attrs.clone();
-                    let (children_end, children) =
-                        self.collect_html_children(nodes, i + 1, &tag);
-                    let children_arr = self.fb.system_call(
-                        "Harlowe.Output",
-                        "content_array",
-                        &children,
-                        Type::Dynamic,
-                    );
-                    let tag_val = self.fb.const_string(&tag);
-                    let mut args = vec![tag_val, children_arr];
-                    for (k, v) in &attrs {
-                        args.push(self.fb.const_string(k));
-                        args.push(self.fb.const_string(v));
-                    }
-                    let el = self.fb.system_call(
-                        "Harlowe.Output",
-                        "el",
-                        &args,
-                        Type::Dynamic,
-                    );
-                    self.fb.system_call(
-                        "Harlowe.Output",
-                        "push",
-                        &[buf, el],
-                        Type::Void,
-                    );
-                    i = children_end;
-                }
-                NodeKind::HtmlClose(_) => {
-                    // Stray close tag — skip
-                    i += 1;
-                }
-                NodeKind::Macro(mac) if mac.name == "if" || mac.name == "unless" => {
-                    // if/unless returns a content_array — spread it into buffer
-                    if let Some(val) = self.lower_if(mac) {
-                        self.fb.system_call(
-                            "Harlowe.Output",
-                            "push_spread",
-                            &[buf, val],
-                            Type::Void,
-                        );
-                    }
-                    i += 1;
-                }
-                NodeKind::Hook(children) => {
-                    // Bare hook: spread inline content into buffer
-                    let arr = self.lower_content_array(children);
-                    self.fb.system_call(
-                        "Harlowe.Output",
-                        "push_spread",
-                        &[buf, arr],
-                        Type::Void,
-                    );
-                    i += 1;
-                }
-                _ => {
-                    if let Some(v) = self.lower_node(&nodes[i]) {
-                        self.fb.system_call(
-                            "Harlowe.Output",
-                            "push",
-                            &[buf, v],
-                            Type::Void,
-                        );
-                    }
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    // ── Node lowering ──────────────────────────────────────────────
-
-    /// Lower nodes, pairing HtmlOpen/HtmlClose into structured elements.
-    fn lower_nodes_to_structured(&mut self, nodes: &[Node]) -> Vec<ValueId> {
-        let mut vals = Vec::new();
-        let mut i = 0;
-        while i < nodes.len() {
-            match &nodes[i].kind {
-                NodeKind::HtmlOpen { tag, attrs } => {
-                    // Consume children until matching HtmlClose
-                    let tag = tag.clone();
-                    let attrs = attrs.clone();
-                    let (children_end, children) =
-                        self.collect_html_children(nodes, i + 1, &tag);
-                    let children_arr = self.fb.system_call(
-                        "Harlowe.Output",
-                        "content_array",
-                        &children,
-                        Type::Dynamic,
-                    );
-                    let tag_val = self.fb.const_string(&tag);
-                    let mut args = vec![tag_val, children_arr];
-                    for (k, v) in &attrs {
-                        args.push(self.fb.const_string(k));
-                        args.push(self.fb.const_string(v));
-                    }
-                    let el = self.fb.system_call(
-                        "Harlowe.Output",
-                        "el",
-                        &args,
-                        Type::Dynamic,
-                    );
-                    vals.push(el);
+                    let (children_end, _) =
+                        self.emit_html_element(nodes, i, &tag, &attrs);
                     i = children_end;
                 }
                 NodeKind::HtmlClose(_) => {
@@ -228,19 +100,66 @@ impl TranslateCtx {
                     i += 1;
                 }
                 _ => {
-                    if let Some(v) = self.lower_node(&nodes[i]) {
-                        vals.push(v);
-                    }
+                    self.emit_node(&nodes[i]);
                     i += 1;
                 }
             }
         }
-        vals
     }
 
-    /// Collect children between HtmlOpen and matching HtmlClose.
-    /// Returns (next_index_after_close, children_vals).
-    fn collect_html_children(
+    /// Emit an HTML element: create element with children, append to current container.
+    /// Returns (next_index_after_close, ()).
+    fn emit_html_element(
+        &mut self,
+        nodes: &[Node],
+        open_idx: usize,
+        tag: &str,
+        attrs: &[(String, String)],
+    ) -> (usize, ()) {
+        // Check for shorthand tags (strong, em, del, sup, sub)
+        let method = match tag {
+            "strong" | "em" | "del" | "sup" | "sub" => tag,
+            _ => "el",
+        };
+
+        // Collect children as values (for nesting via arguments)
+        let (children_end, child_vals) =
+            self.collect_html_children_as_values(nodes, open_idx + 1, tag);
+
+        if method == "el" {
+            let tag_val = self.fb.const_string(tag);
+            let mut args = vec![tag_val];
+            args.extend(child_vals);
+            for (k, v) in attrs {
+                args.push(self.fb.const_string(k));
+                args.push(self.fb.const_string(v));
+            }
+            self.fb
+                .system_call("Harlowe.H", "el", &args, Type::Dynamic);
+        } else {
+            let mut args = child_vals;
+            // Shorthand tags shouldn't have extra attrs, but pass them through el() if present
+            if !attrs.is_empty() {
+                let tag_val = self.fb.const_string(tag);
+                args.insert(0, tag_val);
+                for (k, v) in attrs {
+                    args.push(self.fb.const_string(k));
+                    args.push(self.fb.const_string(v));
+                }
+                self.fb
+                    .system_call("Harlowe.H", "el", &args, Type::Dynamic);
+            } else {
+                self.fb
+                    .system_call("Harlowe.H", method, &args, Type::Dynamic);
+            }
+        }
+
+        (children_end, ())
+    }
+
+    /// Collect children between HtmlOpen and matching HtmlClose as ValueIds
+    /// (for use as arguments to element methods).
+    fn collect_html_children_as_values(
         &mut self,
         nodes: &[Node],
         start: usize,
@@ -256,171 +175,167 @@ impl TranslateCtx {
                 NodeKind::HtmlOpen { tag, attrs } => {
                     let tag = tag.clone();
                     let attrs = attrs.clone();
-                    let (end, children) =
-                        self.collect_html_children(nodes, i + 1, &tag);
-                    let children_arr = self.fb.system_call(
-                        "Harlowe.Output",
-                        "content_array",
-                        &children,
-                        Type::Dynamic,
-                    );
-                    let tag_val = self.fb.const_string(&tag);
-                    let mut args = vec![tag_val, children_arr];
-                    for (k, v) in &attrs {
-                        args.push(self.fb.const_string(k));
-                        args.push(self.fb.const_string(v));
-                    }
-                    let el = self.fb.system_call(
-                        "Harlowe.Output",
-                        "el",
-                        &args,
-                        Type::Dynamic,
-                    );
-                    vals.push(el);
-                    i = end;
+                    let val = self.lower_html_element_as_value(nodes, i, &tag, &attrs);
+                    vals.push(val.0);
+                    i = val.1;
                 }
                 NodeKind::HtmlClose(_) => {
                     // Mismatched close tag — stop here
                     return (i + 1, vals);
                 }
                 _ => {
-                    if let Some(v) = self.lower_node(&nodes[i]) {
+                    if let Some(v) = self.lower_node_as_value(&nodes[i]) {
                         vals.push(v);
                     }
                     i += 1;
                 }
             }
         }
-        // Ran out of nodes without finding close tag
         (i, vals)
     }
 
-    fn lower_node(&mut self, node: &Node) -> Option<ValueId> {
+    /// Lower an HTML element as a value (for nesting inside parent elements).
+    /// Returns (value, next_index).
+    fn lower_html_element_as_value(
+        &mut self,
+        nodes: &[Node],
+        open_idx: usize,
+        tag: &str,
+        attrs: &[(String, String)],
+    ) -> (ValueId, usize) {
+        let method = match tag {
+            "strong" | "em" | "del" | "sup" | "sub" => tag,
+            _ => "el",
+        };
+
+        let (children_end, child_vals) =
+            self.collect_html_children_as_values(nodes, open_idx + 1, tag);
+
+        let val = if method != "el" && attrs.is_empty() {
+            // Shorthand (strong, em, etc.) without extra attrs
+            self.fb
+                .system_call("Harlowe.H", method, &child_vals, Type::Dynamic)
+        } else {
+            // Generic el() or shorthand with attrs → fall back to el()
+            let tag_val = self.fb.const_string(tag);
+            let mut args = vec![tag_val];
+            args.extend(child_vals);
+            for (k, v) in attrs {
+                args.push(self.fb.const_string(k));
+                args.push(self.fb.const_string(v));
+            }
+            self.fb
+                .system_call("Harlowe.H", "el", &args, Type::Dynamic)
+        };
+
+        (val, children_end)
+    }
+
+    /// Emit a single node as a side effect (h.* call).
+    fn emit_node(&mut self, node: &Node) {
+        match &node.kind {
+            NodeKind::Text(text) => {
+                if !text.is_empty() {
+                    let s = self.fb.const_string(text);
+                    self.fb
+                        .system_call("Harlowe.H", "text", &[s], Type::Dynamic);
+                }
+            }
+            NodeKind::Macro(mac) => {
+                self.emit_macro(mac);
+            }
+            NodeKind::Hook(nodes) => {
+                // Bare hook: emit content inline
+                self.emit_content(nodes);
+            }
+            NodeKind::Link(link) => {
+                let text = self.fb.const_string(&link.text);
+                let passage = self.fb.const_string(&link.passage);
+                self.fb
+                    .system_call("Harlowe.H", "link", &[text, passage], Type::Dynamic);
+            }
+            NodeKind::VarInterp(name) => {
+                let val = self.load_variable(name);
+                self.fb
+                    .system_call("Harlowe.H", "printVal", &[val], Type::Dynamic);
+            }
+            NodeKind::HtmlOpen { tag, attrs } => {
+                // Standalone open tag without matching close — emit as element
+                self.emit_standalone_element(tag, attrs);
+            }
+            NodeKind::HtmlClose(_) => {}
+            NodeKind::HtmlVoid { tag, attrs } => {
+                self.emit_void_element(tag, attrs);
+            }
+            NodeKind::Markup { tag, body } => {
+                self.emit_markup(tag, body);
+            }
+            NodeKind::ChangerApply { name, hook } => {
+                self.emit_changer_apply(name, hook);
+            }
+            NodeKind::LineBreak => {
+                self.fb
+                    .system_call("Harlowe.H", "br", &[], Type::Dynamic);
+            }
+        }
+    }
+
+    /// Lower a single node as a value (for use as argument to parent element).
+    fn lower_node_as_value(&mut self, node: &Node) -> Option<ValueId> {
         match &node.kind {
             NodeKind::Text(text) => {
                 if text.is_empty() {
                     None
                 } else {
-                    Some(self.emit_text_node(text))
+                    let s = self.fb.const_string(text);
+                    Some(self.fb.system_call("Harlowe.H", "text", &[s], Type::Dynamic))
                 }
             }
-            NodeKind::Macro(mac) => self.lower_macro(mac),
-            NodeKind::Hook(nodes) => Some(self.lower_content_array(nodes)),
-            NodeKind::Link(link) => Some(self.lower_link(link)),
-            NodeKind::VarInterp(name) => Some(self.lower_var_interp(name)),
-            NodeKind::HtmlOpen { tag, attrs } => {
-                // Standalone open tag without matching close — emit as element
-                let tag_val = self.fb.const_string(tag);
-                let empty = self.fb.system_call(
-                    "Harlowe.Output",
-                    "content_array",
-                    &[],
-                    Type::Dynamic,
-                );
-                let mut args = vec![tag_val, empty];
-                for (k, v) in attrs {
-                    args.push(self.fb.const_string(k));
-                    args.push(self.fb.const_string(v));
+            NodeKind::Macro(mac) => self.lower_macro_as_value(mac),
+            NodeKind::Hook(nodes) => {
+                // Emit children inline — each produces its own h.* call
+                for node in nodes {
+                    self.emit_node(node);
                 }
+                None
+            }
+            NodeKind::Link(link) => {
+                let text = self.fb.const_string(&link.text);
+                let passage = self.fb.const_string(&link.passage);
                 Some(
                     self.fb
-                        .system_call("Harlowe.Output", "el", &args, Type::Dynamic),
+                        .system_call("Harlowe.H", "link", &[text, passage], Type::Dynamic),
                 )
             }
-            NodeKind::HtmlClose(_) => None,
-            NodeKind::HtmlVoid { tag, attrs } => Some(self.emit_void_element(tag, attrs)),
-            NodeKind::Markup { tag, body } => {
-                let method = match tag.as_str() {
-                    "strong" | "em" | "del" | "sup" | "sub" => tag.as_str(),
-                    _ => "el",
-                };
-                if method == "el" {
-                    let children = self.lower_content_array(body);
-                    let tag_val = self.fb.const_string(tag);
-                    Some(self.fb.system_call(
-                        "Harlowe.Output",
-                        "el",
-                        &[tag_val, children],
-                        Type::Dynamic,
-                    ))
-                } else {
-                    let children = self.lower_content_array(body);
-                    Some(self.fb.system_call(
-                        "Harlowe.Output",
-                        method,
-                        &[children],
-                        Type::Dynamic,
-                    ))
-                }
-            }
-            NodeKind::ChangerApply { name, hook } => {
-                let changer = if let Some(stripped) = name.strip_prefix('$') {
-                    let n = self.fb.const_string(stripped);
+            NodeKind::VarInterp(name) => {
+                let val = self.load_variable(name);
+                Some(
                     self.fb
-                        .system_call("Harlowe.State", "get", &[n], Type::Dynamic)
-                } else {
-                    let stripped = name.strip_prefix('_').unwrap_or(name);
-                    self.get_or_load_temp(stripped)
-                };
-                let children = self.lower_content_array(hook);
-                Some(self.fb.system_call(
-                    "Harlowe.Output",
-                    "styled",
-                    &[changer, children],
-                    Type::Dynamic,
-                ))
+                        .system_call("Harlowe.H", "printVal", &[val], Type::Dynamic),
+                )
+            }
+            NodeKind::HtmlOpen { tag, attrs } => {
+                Some(self.lower_standalone_element_as_value(tag, attrs))
+            }
+            NodeKind::HtmlClose(_) => None,
+            NodeKind::HtmlVoid { tag, attrs } => Some(self.lower_void_element(tag, attrs)),
+            NodeKind::Markup { tag, body } => Some(self.lower_markup_as_value(tag, body)),
+            NodeKind::ChangerApply { name, hook } => {
+                Some(self.lower_changer_apply_as_value(name, hook))
             }
             NodeKind::LineBreak => {
                 Some(
                     self.fb
-                        .system_call("Harlowe.Output", "br", &[], Type::Dynamic),
+                        .system_call("Harlowe.H", "br", &[], Type::Dynamic),
                 )
             }
         }
     }
 
-    // ── Output helpers ─────────────────────────────────────────────
+    // ── Node helpers ────────────────────────────────────────────────
 
-    /// Create a text_node value (backend rewrites to identity — string IS the node).
-    fn emit_text_node(&mut self, text: &str) -> ValueId {
-        let s = self.fb.const_string(text);
-        self.fb
-            .system_call("Harlowe.Output", "text_node", &[s], Type::Dynamic)
-    }
-
-    fn emit_void_element(&mut self, tag: &str, attrs: &[(String, String)]) -> ValueId {
-        match tag {
-            "br" => self.fb.system_call("Harlowe.Output", "br", &[], Type::Dynamic),
-            "hr" => self.fb.system_call("Harlowe.Output", "hr", &[], Type::Dynamic),
-            "img" => {
-                // Extract src from attrs
-                let src = attrs
-                    .iter()
-                    .find(|(k, _)| k == "src")
-                    .map(|(_, v)| v.as_str())
-                    .unwrap_or("");
-                let src_val = self.fb.const_string(src);
-                self.fb
-                    .system_call("Harlowe.Output", "img", &[src_val], Type::Dynamic)
-            }
-            _ => {
-                let tag_val = self.fb.const_string(tag);
-                let mut args = vec![tag_val];
-                for (k, v) in attrs {
-                    args.push(self.fb.const_string(k));
-                    args.push(self.fb.const_string(v));
-                }
-                self.fb
-                    .system_call("Harlowe.Output", "voidEl", &args, Type::Dynamic)
-            }
-        }
-    }
-
-    // ── Variable interpolation ─────────────────────────────────────
-
-    fn lower_var_interp(&mut self, name: &str) -> ValueId {
-        // `$var` or `_var` in body text → get + printVal
-        let val = if let Some(stripped) = name.strip_prefix('$') {
+    fn load_variable(&mut self, name: &str) -> ValueId {
+        if let Some(stripped) = name.strip_prefix('$') {
             let n = self.fb.const_string(stripped);
             self.fb
                 .system_call("Harlowe.State", "get", &[n], Type::Dynamic)
@@ -430,106 +345,257 @@ impl TranslateCtx {
             let n = self.fb.const_string(name);
             self.fb
                 .system_call("Harlowe.State", "get", &[n], Type::Dynamic)
-        };
-        self.fb
-            .system_call("Harlowe.Output", "printVal", &[val], Type::Dynamic)
+        }
     }
 
-    // ── Macro lowering ─────────────────────────────────────────────
+    fn emit_standalone_element(&mut self, tag: &str, attrs: &[(String, String)]) {
+        let tag_val = self.fb.const_string(tag);
+        let mut args = vec![tag_val];
+        for (k, v) in attrs {
+            args.push(self.fb.const_string(k));
+            args.push(self.fb.const_string(v));
+        }
+        self.fb.system_call("Harlowe.H", "el", &args, Type::Dynamic);
+    }
 
-    fn lower_macro(&mut self, mac: &MacroNode) -> Option<ValueId> {
+    fn lower_standalone_element_as_value(&mut self, tag: &str, attrs: &[(String, String)]) -> ValueId {
+        let tag_val = self.fb.const_string(tag);
+        let mut args = vec![tag_val];
+        for (k, v) in attrs {
+            args.push(self.fb.const_string(k));
+            args.push(self.fb.const_string(v));
+        }
+        self.fb.system_call("Harlowe.H", "el", &args, Type::Dynamic)
+    }
+
+    fn emit_void_element(&mut self, tag: &str, attrs: &[(String, String)]) {
+        self.lower_void_element(tag, attrs);
+    }
+
+    fn lower_void_element(&mut self, tag: &str, attrs: &[(String, String)]) -> ValueId {
+        match tag {
+            "br" => self.fb.system_call("Harlowe.H", "br", &[], Type::Dynamic),
+            "hr" => self.fb.system_call("Harlowe.H", "hr", &[], Type::Dynamic),
+            "img" => {
+                let src = attrs
+                    .iter()
+                    .find(|(k, _)| k == "src")
+                    .map(|(_, v)| v.as_str())
+                    .unwrap_or("");
+                let src_val = self.fb.const_string(src);
+                self.fb
+                    .system_call("Harlowe.H", "img", &[src_val], Type::Dynamic)
+            }
+            _ => {
+                let tag_val = self.fb.const_string(tag);
+                let mut args = vec![tag_val];
+                for (k, v) in attrs {
+                    args.push(self.fb.const_string(k));
+                    args.push(self.fb.const_string(v));
+                }
+                self.fb
+                    .system_call("Harlowe.H", "voidEl", &args, Type::Dynamic)
+            }
+        }
+    }
+
+    fn emit_markup(&mut self, tag: &str, body: &[Node]) {
+        self.lower_markup_as_value(tag, body);
+    }
+
+    fn lower_markup_as_value(&mut self, tag: &str, body: &[Node]) -> ValueId {
+        let method = match tag {
+            "strong" | "em" | "del" | "sup" | "sub" => tag,
+            _ => "el",
+        };
+        let children: Vec<ValueId> = self.lower_children_as_values(body);
+        if method == "el" {
+            let tag_val = self.fb.const_string(tag);
+            let mut args = vec![tag_val];
+            args.extend(children);
+            self.fb.system_call("Harlowe.H", "el", &args, Type::Dynamic)
+        } else {
+            self.fb
+                .system_call("Harlowe.H", method, &children, Type::Dynamic)
+        }
+    }
+
+    fn emit_changer_apply(&mut self, name: &str, hook: &[Node]) {
+        self.lower_changer_apply_as_value(name, hook);
+    }
+
+    fn lower_changer_apply_as_value(&mut self, name: &str, hook: &[Node]) -> ValueId {
+        let changer = if let Some(stripped) = name.strip_prefix('$') {
+            let n = self.fb.const_string(stripped);
+            self.fb
+                .system_call("Harlowe.State", "get", &[n], Type::Dynamic)
+        } else {
+            let stripped = name.strip_prefix('_').unwrap_or(name);
+            self.get_or_load_temp(stripped)
+        };
+        let children: Vec<ValueId> = self.lower_children_as_values(hook);
+        let mut args = vec![changer];
+        args.extend(children);
+        self.fb
+            .system_call("Harlowe.H", "styled", &args, Type::Dynamic)
+    }
+
+    /// Lower children as values (for element method arguments).
+    fn lower_children_as_values(&mut self, nodes: &[Node]) -> Vec<ValueId> {
+        let mut vals = Vec::new();
+        let mut i = 0;
+        while i < nodes.len() {
+            match &nodes[i].kind {
+                NodeKind::HtmlOpen { tag, attrs } => {
+                    let tag = tag.clone();
+                    let attrs = attrs.clone();
+                    let (val, end) =
+                        self.lower_html_element_as_value(nodes, i, &tag, &attrs);
+                    vals.push(val);
+                    i = end;
+                }
+                NodeKind::HtmlClose(_) => {
+                    i += 1;
+                }
+                _ => {
+                    if let Some(v) = self.lower_node_as_value(&nodes[i]) {
+                        vals.push(v);
+                    }
+                    i += 1;
+                }
+            }
+        }
+        vals
+    }
+
+    // ── Macro emission (side-effect context) ────────────────────────
+
+    fn emit_macro(&mut self, mac: &MacroNode) {
         match mac.name.as_str() {
-            // State (side effects — return None)
-            "set" => {
-                self.lower_set(mac);
-                None
-            }
-            "put" => {
-                self.lower_put(mac);
-                None
-            }
+            // State (side effects)
+            "set" => self.lower_set(mac),
+            "put" => self.lower_put(mac),
 
-            // Control flow
-            "if" | "unless" => self.lower_if(mac),
+            // Control flow — emit directly (no value)
+            "if" | "unless" => { self.emit_if(mac); }
 
-            // Navigation (side effect — return None)
-            "goto" | "go-to" => {
-                self.lower_goto(mac);
-                None
-            }
+            // Navigation (side effect)
+            "goto" | "go-to" => self.lower_goto(mac),
 
-            // Display (returns content)
-            "display" => Some(self.lower_display(mac)),
+            // Display (side effect — emits inline)
+            "display" => self.emit_display(mac),
 
-            // Output
-            "print" => Some(self.lower_print(mac)),
+            // Print (side effect — emits text)
+            "print" => self.emit_print(mac),
 
-            // Links (return content)
-            "link" => Some(self.lower_link_macro(mac)),
-            "link-goto" => Some(self.lower_link_goto(mac)),
+            // Links (side effect — emits link element)
+            "link" => { self.emit_link_macro(mac); }
+            "link-goto" => { self.emit_link_goto(mac); }
 
-            // Changers (return content when hook present, otherwise create changer value)
+            // Changers (side effect when hook present, otherwise create changer value)
             "color" | "colour" | "text-colour" | "text-color" | "text-style" | "font"
             | "align" | "transition" | "transition-time" | "transition-arrive"
             | "transition-depart" | "text-rotate-z" | "hover-style" | "css" | "background"
             | "opacity" | "text-size" | "collapse" | "nobr" | "hidden" => {
-                self.lower_changer(mac)
+                self.emit_changer(mac);
             }
 
             // Timed
-            "live" => Some(self.lower_live(mac)),
+            "live" => { self.emit_live(mac); }
             "stop" => {
                 self.fb
                     .system_call("Harlowe.Engine", "stop", &[], Type::Void);
-                None
             }
 
-            // Value macros (used as expressions — already handled by expr lowering
-            // when inside expression context). If they appear standalone, print result.
+            // Value macros — print result
             "str" | "string" | "num" | "number" | "random" | "either" | "a" | "array"
             | "dm" | "datamap" | "ds" | "dataset" => {
-                Some(self.lower_value_macro_standalone(mac))
+                self.emit_value_macro_standalone(mac);
             }
 
             // Save/load (side effects)
-            "save-game" => {
-                self.lower_save_game(mac);
-                None
-            }
-            "load-game" => {
-                self.lower_load_game(mac);
-                None
-            }
+            "save-game" => self.lower_save_game(mac),
+            "load-game" => self.lower_load_game(mac),
 
             // Alert/prompt/confirm (side effects)
-            "alert" => {
-                self.lower_simple_command(mac, "Harlowe.Engine", "alert");
-                None
-            }
-            "prompt" => {
-                self.lower_simple_command(mac, "Harlowe.Engine", "prompt");
-                None
-            }
-            "confirm" => {
-                self.lower_simple_command(mac, "Harlowe.Engine", "confirm");
-                None
-            }
+            "alert" => { self.lower_simple_command(mac, "Harlowe.Engine", "alert"); }
+            "prompt" => { self.lower_simple_command(mac, "Harlowe.Engine", "prompt"); }
+            "confirm" => { self.lower_simple_command(mac, "Harlowe.Engine", "confirm"); }
 
             // DOM manipulation (side effects)
             "replace" | "append" | "prepend" | "show" | "hide" | "rerun" => {
                 self.lower_dom_macro(mac);
-                None
             }
 
             // Click (side effects)
             "click" | "click-replace" | "click-append" | "click-prepend" => {
                 self.lower_click_macro(mac);
+            }
+
+            // Unknown
+            _ => self.lower_unknown_macro(mac),
+        }
+    }
+
+    // ── Macro lowering as value (for nesting inside elements) ───────
+
+    fn lower_macro_as_value(&mut self, mac: &MacroNode) -> Option<ValueId> {
+        match mac.name.as_str() {
+            // State macros don't produce values
+            "set" | "put" => {
+                self.emit_macro(mac);
                 None
             }
 
-            // Unknown → generic widget call
+            // Control flow — not yet supported as value child
+            "if" | "unless" => {
+                self.emit_if(mac);
+                None
+            }
+
+            "goto" | "go-to" => {
+                self.lower_goto(mac);
+                None
+            }
+
+            "display" => {
+                self.emit_display(mac);
+                None
+            }
+
+            "print" => {
+                if let Some(arg) = mac.args.first() {
+                    let val = self.lower_expr(arg);
+                    Some(self.fb.system_call("Harlowe.H", "printVal", &[val], Type::Dynamic))
+                } else {
+                    None
+                }
+            }
+
+            "link" => Some(self.lower_link_macro_as_value(mac)),
+            "link-goto" => Some(self.lower_link_goto_as_value(mac)),
+
+            "color" | "colour" | "text-colour" | "text-color" | "text-style" | "font"
+            | "align" | "transition" | "transition-time" | "transition-arrive"
+            | "transition-depart" | "text-rotate-z" | "hover-style" | "css" | "background"
+            | "opacity" | "text-size" | "collapse" | "nobr" | "hidden" => {
+                self.lower_changer_as_value(mac)
+            }
+
+            "live" => Some(self.lower_live_as_value(mac)),
+
+            "stop" => {
+                self.fb.system_call("Harlowe.Engine", "stop", &[], Type::Void);
+                None
+            }
+
+            "str" | "string" | "num" | "number" | "random" | "either" | "a" | "array"
+            | "dm" | "datamap" | "ds" | "dataset" => {
+                Some(self.lower_value_macro_as_value(mac))
+            }
+
             _ => {
-                self.lower_unknown_macro(mac);
+                self.emit_macro(mac);
                 None
             }
         }
@@ -592,10 +658,9 @@ impl TranslateCtx {
 
     // ── (if:) / (unless:) / (else-if:) / (else:) ──────────────────
 
-    fn lower_if(&mut self, mac: &MacroNode) -> Option<ValueId> {
+    /// Emit if/unless as control flow — no value, just side effects.
+    fn emit_if(&mut self, mac: &MacroNode) {
         let merge_block = self.fb.create_block();
-        let merge_params = self.fb.add_block_params(merge_block, &[Type::Dynamic]);
-        let merge_param = merge_params[0];
 
         // Main condition
         let cond = if mac.args.is_empty() {
@@ -622,44 +687,30 @@ impl TranslateCtx {
 
         // Then body (hook)
         self.fb.switch_to_block(then_block);
-        let then_val = if let Some(ref hook) = mac.hook {
-            self.lower_content_array(hook)
-        } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
-        };
-        self.fb.br(merge_block, &[then_val]);
+        if let Some(ref hook) = mac.hook {
+            self.emit_content(hook);
+        }
+        self.fb.br(merge_block, &[]);
 
         // Else chain
         self.fb.switch_to_block(else_block);
-        self.lower_if_clauses(&mac.clauses, 0, merge_block);
+        self.emit_if_clauses(&mac.clauses, 0, merge_block);
 
         self.fb.switch_to_block(merge_block);
-        Some(merge_param)
     }
 
-    fn lower_if_clauses(&mut self, clauses: &[IfClause], index: usize, merge_block: BlockId) {
+    fn emit_if_clauses(&mut self, clauses: &[IfClause], index: usize, merge_block: BlockId) {
         if index >= clauses.len() {
-            // No else — produce empty array
-            let empty = self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            );
-            self.fb.br(merge_block, &[empty]);
+            // No else — just jump to merge
+            self.fb.br(merge_block, &[]);
             return;
         }
 
         let clause = &clauses[index];
 
         if clause.kind == "else" {
-            let val = self.lower_content_array(&clause.body);
-            self.fb.br(merge_block, &[val]);
+            self.emit_content(&clause.body);
+            self.fb.br(merge_block, &[]);
             return;
         }
 
@@ -677,11 +728,11 @@ impl TranslateCtx {
             .br_if(cond, then_block, &[], next_else, &[]);
 
         self.fb.switch_to_block(then_block);
-        let val = self.lower_content_array(&clause.body);
-        self.fb.br(merge_block, &[val]);
+        self.emit_content(&clause.body);
+        self.fb.br(merge_block, &[]);
 
         self.fb.switch_to_block(next_else);
-        self.lower_if_clauses(clauses, index + 1, merge_block);
+        self.emit_if_clauses(clauses, index + 1, merge_block);
     }
 
     // ── (goto:) ────────────────────────────────────────────────────
@@ -696,45 +747,35 @@ impl TranslateCtx {
 
     // ── (display:) ─────────────────────────────────────────────────
 
-    fn lower_display(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_display(&mut self, mac: &MacroNode) {
         if let Some(arg) = mac.args.first() {
             let target = self.lower_expr(arg);
             self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 "displayPassage",
                 &[target],
-                Type::Dynamic,
-            )
-        } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
+                Type::Void,
+            );
         }
     }
 
     // ── (print:) ───────────────────────────────────────────────────
 
-    fn lower_print(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_print(&mut self, mac: &MacroNode) {
         if let Some(arg) = mac.args.first() {
             let val = self.lower_expr(arg);
             self.fb
-                .system_call("Harlowe.Output", "printVal", &[val], Type::Dynamic)
-        } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
+                .system_call("Harlowe.H", "printVal", &[val], Type::Dynamic);
         }
     }
 
     // ── (link:) ────────────────────────────────────────────────────
 
-    fn lower_link_macro(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_link_macro(&mut self, mac: &MacroNode) {
+        self.lower_link_macro_as_value(mac);
+    }
+
+    fn lower_link_macro_as_value(&mut self, mac: &MacroNode) -> ValueId {
         if let Some(arg) = mac.args.first() {
             let text = self.lower_expr(arg);
 
@@ -742,31 +783,31 @@ impl TranslateCtx {
                 let cb_name = self.make_callback_name("link");
                 let cb_ref = self.build_callback(&cb_name, hook);
                 self.fb.system_call(
-                    "Harlowe.Output",
+                    "Harlowe.H",
                     "linkCb",
                     &[text, cb_ref],
                     Type::Dynamic,
                 )
             } else {
                 self.fb
-                    .system_call("Harlowe.Output", "printVal", &[text], Type::Dynamic)
+                    .system_call("Harlowe.H", "printVal", &[text], Type::Dynamic)
             }
         } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
+            // No args — emit nothing, return a dummy
+            self.fb.const_bool(false)
         }
     }
 
-    fn lower_link_goto(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_link_goto(&mut self, mac: &MacroNode) {
+        self.lower_link_goto_as_value(mac);
+    }
+
+    fn lower_link_goto_as_value(&mut self, mac: &MacroNode) -> ValueId {
         if mac.args.len() >= 2 {
             let text = self.lower_expr(&mac.args[0]);
             let passage = self.lower_expr(&mac.args[1]);
             self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 "link",
                 &[text, passage],
                 Type::Dynamic,
@@ -774,34 +815,23 @@ impl TranslateCtx {
         } else if let Some(arg) = mac.args.first() {
             let text = self.lower_expr(arg);
             self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 "link",
                 &[text, text],
                 Type::Dynamic,
             )
         } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
+            self.fb.const_bool(false)
         }
-    }
-
-    // ── [[link]] ───────────────────────────────────────────────────
-
-    fn lower_link(&mut self, link: &LinkNode) -> ValueId {
-        let text = self.fb.const_string(&link.text);
-        let passage = self.fb.const_string(&link.passage);
-        self.fb
-            .system_call("Harlowe.Output", "link", &[text, passage], Type::Dynamic)
     }
 
     // ── Changers ───────────────────────────────────────────────────
 
-    fn lower_changer(&mut self, mac: &MacroNode) -> Option<ValueId> {
-        // Map changer macro names to output builder function names
+    fn emit_changer(&mut self, mac: &MacroNode) {
+        self.lower_changer_as_value(mac);
+    }
+
+    fn lower_changer_as_value(&mut self, mac: &MacroNode) -> Option<ValueId> {
         let builder_name = match mac.name.as_str() {
             "color" | "colour" | "text-colour" | "text-color" => "color",
             "background" => "background",
@@ -832,11 +862,13 @@ impl TranslateCtx {
                         &changer_args,
                         Type::Dynamic,
                     );
-                    let children = self.lower_content_array(hook);
+                    let children: Vec<ValueId> = self.lower_children_as_values(hook);
+                    let mut styled_args = vec![changer];
+                    styled_args.extend(children);
                     return Some(self.fb.system_call(
-                        "Harlowe.Output",
+                        "Harlowe.H",
                         "styled",
-                        &[changer, children],
+                        &styled_args,
                         Type::Dynamic,
                     ));
                 }
@@ -856,22 +888,21 @@ impl TranslateCtx {
         };
 
         if let Some(ref hook) = mac.hook {
-            // Changer with hook → direct builder call: color("red", [children])
+            // Changer with hook → h.color("red", child1, child2)
             let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
-            let children = self.lower_content_array(hook);
+            let children: Vec<ValueId> = self.lower_children_as_values(hook);
 
-            // Changers that take no value arg (hidden, collapse, nobr)
             let call_args = match builder_name {
-                "hidden" | "collapse" | "nobr" => vec![children],
+                "hidden" | "collapse" | "nobr" => children,
                 _ => {
                     let mut a = args;
-                    a.push(children);
+                    a.extend(children);
                     a
                 }
             };
 
             Some(self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 builder_name,
                 &call_args,
                 Type::Dynamic,
@@ -894,7 +925,11 @@ impl TranslateCtx {
 
     // ── (live:) ────────────────────────────────────────────────────
 
-    fn lower_live(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_live(&mut self, mac: &MacroNode) {
+        self.lower_live_as_value(mac);
+    }
+
+    fn lower_live_as_value(&mut self, mac: &MacroNode) -> ValueId {
         let interval = if let Some(arg) = mac.args.first() {
             self.lower_expr(arg)
         } else {
@@ -905,24 +940,28 @@ impl TranslateCtx {
             let cb_name = self.make_callback_name("live");
             let cb_ref = self.build_callback(&cb_name, hook);
             self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 "live",
                 &[interval, cb_ref],
                 Type::Dynamic,
             )
         } else {
-            self.fb.system_call(
-                "Harlowe.Output",
-                "content_array",
-                &[],
-                Type::Dynamic,
-            )
+            self.fb.const_bool(false)
         }
     }
 
     // ── Value macros (standalone) ──────────────────────────────────
 
-    fn lower_value_macro_standalone(&mut self, mac: &MacroNode) -> ValueId {
+    fn emit_value_macro_standalone(&mut self, mac: &MacroNode) {
+        let val = self.lower_value_macro_as_value(mac);
+        // If it has a hook, the styled call already emitted; otherwise print it
+        if mac.hook.is_none() {
+            self.fb
+                .system_call("Harlowe.H", "printVal", &[val], Type::Dynamic);
+        }
+    }
+
+    fn lower_value_macro_as_value(&mut self, mac: &MacroNode) -> ValueId {
         let name = self.fb.const_string(&mac.name);
         let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
         let mut call_args = vec![name];
@@ -935,17 +974,17 @@ impl TranslateCtx {
         );
         if let Some(ref hook) = mac.hook {
             // Value macro with hook — use styled()
-            let children = self.lower_content_array(hook);
+            let children: Vec<ValueId> = self.lower_children_as_values(hook);
+            let mut styled_args = vec![result];
+            styled_args.extend(children);
             self.fb.system_call(
-                "Harlowe.Output",
+                "Harlowe.H",
                 "styled",
-                &[result, children],
+                &styled_args,
                 Type::Dynamic,
             )
         } else {
-            // Standalone value macro — return as printVal
-            self.fb
-                .system_call("Harlowe.Output", "printVal", &[result], Type::Dynamic)
+            result
         }
     }
 
@@ -1022,10 +1061,7 @@ impl TranslateCtx {
             .system_call("Harlowe.Engine", "unknown_macro", &call_args, Type::Dynamic);
 
         if let Some(ref hook) = mac.hook {
-            // Just lower the hook for side effects; unknown macros can't be content
-            for node in hook {
-                self.lower_node(node);
-            }
+            self.emit_content(hook);
         }
     }
 
@@ -1039,20 +1075,22 @@ impl TranslateCtx {
 
     fn build_callback(&mut self, name: &str, body: &[Node]) -> ValueId {
         let sig = FunctionSig {
-            params: vec![],
-            return_ty: Type::Dynamic,
+            params: vec![Type::Dynamic],
+            return_ty: Type::Void,
             defaults: vec![],
             has_rest_param: false,
         };
         let mut cb_fb = FunctionBuilder::new(name, sig, Visibility::Public);
+        let h_param = cb_fb.param(0);
+        cb_fb.name_value(h_param, "h".to_string());
 
         let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
         let saved_temps = std::mem::take(&mut self.temp_vars);
 
-        let content = self.lower_content_array(body);
-        self.fb.ret(Some(content));
+        self.emit_content(body);
+        self.fb.ret(None);
 
-        cb_fb = std::mem::replace(&mut self.fb, saved_fb);
+        let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
         self.temp_vars = saved_temps;
 
         self.callbacks.push(cb_fb.build());
@@ -1360,12 +1398,29 @@ mod tests {
     use crate::harlowe::parser;
 
     #[test]
-    fn test_plain_text_emits_output() {
+    fn test_plain_text_emits_h_text() {
         let ast = parser::parse("Hello world");
         let result = translate_passage("test", &ast);
         assert_eq!(result.func.name, "passage_test");
-        // Return type should be Dynamic (returns content array)
-        assert_eq!(result.func.sig.return_ty, Type::Dynamic);
+        // Passage takes h param (Dynamic), returns void
+        assert_eq!(result.func.sig.params.len(), 1);
+        assert_eq!(result.func.sig.params[0], Type::Dynamic);
+        assert_eq!(result.func.sig.return_ty, Type::Void);
+    }
+
+    #[test]
+    fn test_h_text_syscall() {
+        use reincarnate_core::ir::inst::Op;
+        let ast = parser::parse("Hello");
+        let result = translate_passage("test_text", &ast);
+        let func = &result.func;
+        let has_h_text = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.H" && method == "text")
+            })
+        });
+        assert!(has_h_text, "should have Harlowe.H.text call");
     }
 
     #[test]
@@ -1385,9 +1440,17 @@ mod tests {
 
     #[test]
     fn test_link_produces_syscall() {
+        use reincarnate_core::ir::inst::Op;
         let ast = parser::parse("[[Start->Begin]]");
         let result = translate_passage("test_link", &ast);
-        assert_eq!(result.func.name, "passage_test_link");
+        let func = &result.func;
+        let has_h_link = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.H" && method == "link")
+            })
+        });
+        assert!(has_h_link, "should have Harlowe.H.link call");
     }
 
     #[test]
@@ -1395,8 +1458,10 @@ mod tests {
         let ast = parser::parse("(link: \"Continue\")[(goto: \"Next\")]");
         let result = translate_passage("test_link_macro", &ast);
         assert_eq!(result.callbacks.len(), 1);
-        // Callback should return Dynamic
-        assert_eq!(result.callbacks[0].sig.return_ty, Type::Dynamic);
+        // Callback takes h param (Dynamic), returns void
+        assert_eq!(result.callbacks[0].sig.params.len(), 1);
+        assert_eq!(result.callbacks[0].sig.params[0], Type::Dynamic);
+        assert_eq!(result.callbacks[0].sig.return_ty, Type::Void);
     }
 
     #[test]
@@ -1408,9 +1473,17 @@ mod tests {
 
     #[test]
     fn test_color_changer() {
+        use reincarnate_core::ir::inst::Op;
         let ast = parser::parse("(color: green)[Hello]");
         let result = translate_passage("test_color", &ast);
-        assert_eq!(result.func.name, "passage_test_color");
+        let func = &result.func;
+        let has_h_color = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.H" && method == "color")
+            })
+        });
+        assert!(has_h_color, "should have Harlowe.H.color call");
     }
 
     #[test]
@@ -1435,6 +1508,9 @@ You're at the **entryway**
         let ast = parser::parse("(live: 2s)[(stop:)]");
         let result = translate_passage("test_live", &ast);
         assert_eq!(result.callbacks.len(), 1);
+        // Callback takes h param (Dynamic)
+        assert_eq!(result.callbacks[0].sig.params.len(), 1);
+        assert_eq!(result.callbacks[0].sig.params[0], Type::Dynamic);
     }
 
     #[test]
@@ -1460,32 +1536,20 @@ You're at the **entryway**
     }
 
     #[test]
-    fn test_content_array_in_ir() {
+    fn test_no_content_array_in_ir() {
         use reincarnate_core::ir::inst::Op;
-        let ast = parser::parse("Hello");
-        let result = translate_passage("test_content", &ast);
+        let ast = parser::parse("Hello **world**");
+        let result = translate_passage("test_no_array", &ast);
         let func = &result.func;
-        // Top-level passage now uses push-based buffer: new_buffer + push + text_node
-        let has_new_buffer = func.blocks.values().any(|block| {
+        // Should NOT have content_array, new_buffer, push, text_node
+        let has_old_output = func.blocks.values().any(|block| {
             block.insts.iter().any(|&inst_id| {
                 matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
-                    if system == "Harlowe.Output" && method == "new_buffer")
+                    if system == "Harlowe.Output"
+                       && (method == "content_array" || method == "new_buffer"
+                           || method == "push" || method == "text_node"))
             })
         });
-        assert!(has_new_buffer, "should have new_buffer call");
-        let has_push = func.blocks.values().any(|block| {
-            block.insts.iter().any(|&inst_id| {
-                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
-                    if system == "Harlowe.Output" && method == "push")
-            })
-        });
-        assert!(has_push, "should have push call");
-        let has_text_node = func.blocks.values().any(|block| {
-            block.insts.iter().any(|&inst_id| {
-                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, .. }
-                    if system == "Harlowe.Output" && method == "text_node")
-            })
-        });
-        assert!(has_text_node, "should have text_node call");
+        assert!(!has_old_output, "should not have any Harlowe.Output array calls");
     }
 }
