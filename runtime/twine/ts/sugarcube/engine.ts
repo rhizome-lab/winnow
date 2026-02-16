@@ -604,7 +604,46 @@ export function resolve(name: string): any {
 export function clone(value: any): any {
   if (value === null || value === undefined) return value;
   if (typeof value !== "object") return value;
-  return JSON.parse(JSON.stringify(value));
+
+  // Defer to the object's own clone method if it has one.
+  if (typeof (value as any).clone === "function") {
+    return (value as any).clone(true);
+  }
+
+  if (value instanceof Array) {
+    const copy = new Array(value.length);
+    for (const key of Object.keys(value)) {
+      (copy as any)[key] = clone((value as any)[key]);
+    }
+    return copy;
+  }
+
+  if (value instanceof Date) {
+    return new Date(value.getTime());
+  }
+
+  if (value instanceof Map) {
+    const copy = new Map();
+    value.forEach((val, key) => copy.set(clone(key), clone(val)));
+    return copy;
+  }
+
+  if (value instanceof RegExp) {
+    return new RegExp(value);
+  }
+
+  if (value instanceof Set) {
+    const copy = new Set();
+    value.forEach((val) => copy.add(clone(val)));
+    return copy;
+  }
+
+  // Generic object — preserve prototype chain.
+  const copy = Object.create(Object.getPrototypeOf(value));
+  for (const key of Object.keys(value)) {
+    copy[key] = clone(value[key]);
+  }
+  return copy;
 }
 
 /** Create an iterator over a collection (for <<for _v range collection>>). */
