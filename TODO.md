@@ -103,8 +103,10 @@ improve output fidelity:
 
 ### Optimizations — Requires control flow analysis
 
-- [ ] **Inline closures** — Filter/map callbacks extracted as named function
-  references instead of being inlined as arrow functions.
+- [ ] **Inline closures** — Some Flash closures still fall back to
+  `this.$closureN` field references when `compile_closures()` fails to
+  compile them (e.g. dynamic features). These should be diagnosed and fixed
+  case-by-case. Twine closures are now fully inlined as of `26ecc6a`.
 - [x] **Loop variable promotion** — Fixed `match_compound_assign` and
   `is_var_update` to look through `AsType` casts. Flash: ~65 additional
   while→for promotions. Remaining while-loops use class fields, parameters,
@@ -129,12 +131,54 @@ improve output fidelity:
 All previously listed functions have been implemented. Check `function_modules`
 in runtime.json for any newly referenced but unimplemented functions.
 
+## IR Architecture
+
+- [ ] **Closure support with variable capture** — The IR has
+  `MethodKind::Closure` for marking closures, and the backend can inline them
+  as `JsExpr::ArrowFunction`, but there's no mechanism for closures to capture
+  variables from the enclosing scope. Currently Twine arrows work because all
+  state is runtime-managed (`State.get`/`State.set`), so there's nothing to
+  capture. Proper closure support would need:
+  - `Op::MakeClosure { func_name, captures: Vec<ValueId> }` — creates a
+    closure binding captured values from the current scope
+  - `Function.captures: Vec<CaptureInfo>` — records which parent values
+    each closure parameter maps to
+  - Backend: when inlining, strip captured params and use parent variable
+    names directly (JS native closures handle the rest)
+  - Touches every transform pass (new Op variant requires match arms)
+
 ## Twine Frontend
 
 - [ ] **Passage rendering strategy** — Implement `passage_rendering`
   manifest option (`auto`/`compiled`/`wikifier`). In `wikifier` mode,
   Rust emitter emits passage source as string constants instead of compiled
   functions. `auto` mode scans scripts for `Wikifier.Parser` references.
+
+### SugarCube Runtime Errors (DOL)
+
+Two runtime errors block DOL (Degrees of Lewdity) from running:
+
+- [ ] **User script eval failure** — The emitted `__user_script_0` is ~45k
+  lines compiled into a single `new Function(...)` call. If this eval fails
+  (SyntaxError or runtime error), all subsequent `window.X = X` assignments
+  inside it are lost. `resolve("allClothesSetup")` returns `undefined` because
+  `allClothesSetup` was defined inside the eval but the eval died before
+  reaching the `window.allClothesSetup = allClothesSetup` assignment. The
+  improved error reporting in `evalCode()` (split SyntaxError vs runtime
+  errors, logged to console) should surface the root cause when run in the
+  browser — **needs testing**.
+  - Cascading failure: `get("NPCNameList")` returns `undefined` in
+    `widget_npcPregnancyUpdater` because StoryInit didn't complete.
+  - Potential fix directions: split user scripts into smaller eval chunks,
+    or identify the specific code pattern that causes the eval to fail.
+
+- [ ] **Un-parenthesized single-param arrow parsing** — The expression
+  parser only handles `(x) => expr` (parenthesized). JavaScript also allows
+  `x => expr` (bare identifier). DOL source likely uses both forms. The
+  un-parenthesized form is silently mis-parsed: `x` becomes an Ident
+  reference and `=> expr` is dropped/garbled. Fix: in the expression parser's
+  Ident handler, peek for `TokenKind::Arrow` after parsing an identifier and
+  produce `ExprKind::Arrow { params: [name], body }`.
 
 ### SugarCube Remaining Stubs
 
