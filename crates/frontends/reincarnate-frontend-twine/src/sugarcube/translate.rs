@@ -29,6 +29,8 @@ pub struct TranslateCtx {
     pub fb: FunctionBuilder,
     /// Map from temp variable name → alloc ValueId.
     temp_vars: HashMap<String, ValueId>,
+    /// Map from parameter name → ValueId (for arrow function parameters).
+    local_params: HashMap<String, ValueId>,
     /// Whether we're inside a `<<nobr>>` / `<<silently>>` block.
     suppress_output: bool,
     /// Whether line breaks are suppressed (inside `<<nobr>>`).
@@ -57,6 +59,7 @@ impl TranslateCtx {
         Self {
             fb,
             temp_vars: HashMap::new(),
+            local_params: HashMap::new(),
             suppress_output: false,
             suppress_line_breaks: false,
             widgets: Vec::new(),
@@ -183,7 +186,11 @@ impl TranslateCtx {
             ExprKind::Literal(lit) => self.lower_literal(lit),
             ExprKind::Str(s) => self.fb.const_string(s.as_str()),
             ExprKind::Ident(name) => {
-                // Bare identifier — could be a global function ref or runtime lookup
+                // Check if identifier is a known local parameter (e.g. arrow function param)
+                if let Some(&param_val) = self.local_params.get(name.as_str()) {
+                    return param_val;
+                }
+                // Bare identifier — global function ref or runtime lookup
                 let n = self.fb.const_string(name.as_str());
                 self.fb
                     .system_call("SugarCube.Engine", "resolve", &[n], Type::Dynamic)
@@ -275,20 +282,24 @@ impl TranslateCtx {
                 };
                 let mut arrow_fb = FunctionBuilder::new(&arrow_name, sig, Visibility::Public);
 
-                // Name each parameter so the emitter produces readable arg names.
+                // Register parameter names so they can be resolved in the body.
+                let mut arrow_params = HashMap::new();
                 for (idx, name) in params.iter().enumerate() {
                     let v = arrow_fb.param(idx);
                     arrow_fb.name_value(v, name.clone());
+                    arrow_params.insert(name.clone(), v);
                 }
 
                 let saved_fb = std::mem::replace(&mut self.fb, arrow_fb);
                 let saved_temps = std::mem::take(&mut self.temp_vars);
+                let saved_params = std::mem::replace(&mut self.local_params, arrow_params);
 
                 let result = self.lower_expr(body);
                 self.fb.ret(Some(result));
 
                 let built = std::mem::replace(&mut self.fb, saved_fb);
                 self.temp_vars = saved_temps;
+                self.local_params = saved_params;
                 self.setter_callbacks.push(built.build());
 
                 self.fb.global_ref(&arrow_name, Type::Dynamic)
@@ -1770,6 +1781,34 @@ mod tests {
         let result = translate_passage("test", &ast);
         assert_eq!(result.widgets.len(), 1);
         assert_eq!(result.widgets[0].0, "myWidget");
+    }
+
+    #[test]
+    fn arrow_params_not_resolved() {
+        // Arrow function parameters should be referenced directly, not via resolve().
+        // e.g. `<<run [1,2].forEach(x => x + 1)>>` should NOT produce resolve("x").
+        let source = "<<run [1,2].forEach(x => x + 1)>>";
+        let ast = parser::parse(source);
+        assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
+        let result = translate_passage("test", &ast);
+
+        // The arrow body is emitted as a separate callback function.
+        // Check that none of the callbacks contain a resolve("x") SystemCall.
+        for cb in &result.setter_callbacks {
+            for block in cb.blocks.values() {
+                for &inst_id in &block.insts {
+                    let inst = &cb.insts[inst_id];
+                    if let reincarnate_core::ir::inst::Op::SystemCall { system, method, .. } =
+                        &inst.op
+                    {
+                        assert!(
+                            !(system == "SugarCube.Engine" && method == "resolve"),
+                            "arrow param 'x' should not produce a resolve() call"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
