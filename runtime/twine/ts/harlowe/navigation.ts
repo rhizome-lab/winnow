@@ -48,15 +48,45 @@ function renderPassage(target: string, fn: PassageFn): void {
   currentPassage = target;
   clear();
 
-  const container = document.getElementById("passages");
-  if (!container) return;
+  const story = document.querySelector("tw-story");
+  if (!story) return;
 
-  const h = new HarloweContext(container);
+  // Create <tw-passage> with tags attribute
+  const passage = document.createElement("tw-passage");
+  const tags = passageTags.get(target);
+  if (tags && tags.length > 0) {
+    passage.setAttribute("tags", tags.join(" "));
+  }
+
+  // Create <tw-sidebar> with undo/redo icons
+  const sidebar = document.createElement("tw-sidebar");
+  const undoIcon = document.createElement("tw-icon");
+  undoIcon.setAttribute("tabindex", "0");
+  undoIcon.setAttribute("title", "Undo");
+  undoIcon.textContent = "\u21A9";
+  undoIcon.addEventListener("click", () => {
+    const title = State.popMoment();
+    if (title) {
+      const pfn = passages.get(title);
+      if (pfn) renderPassage(title, pfn);
+    }
+  });
+  const redoIcon = document.createElement("tw-icon");
+  redoIcon.setAttribute("tabindex", "0");
+  redoIcon.setAttribute("title", "Redo");
+  redoIcon.textContent = "\u21AA";
+  sidebar.appendChild(undoIcon);
+  sidebar.appendChild(redoIcon);
+  passage.appendChild(sidebar);
+
+  story.appendChild(passage);
+
+  const h = new HarloweContext(passage);
   try {
     fn(h);
   } catch (e) {
     console.error(`[harlowe] error in passage "${target}":`, e);
-    container.appendChild(document.createTextNode(`Error in passage "${target}": ${e}`));
+    passage.appendChild(document.createTextNode(`Error in passage "${target}": ${e}`));
   } finally {
     h.closeAll();
   }

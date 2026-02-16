@@ -440,7 +440,7 @@ export function dom_macro(method: string, ...args: any[]): void {
     ? args[args.length - 1] as (h: HarloweContext) => void
     : undefined;
 
-  const container = document.getElementById("passages");
+  const container = document.querySelector("tw-story");
   if (!container) return;
 
   switch (method) {
@@ -507,7 +507,7 @@ export function click_macro(method: string, ...args: any[]): void {
     ? args[args.length - 1] as (h: HarloweContext) => void
     : undefined;
 
-  const container = document.getElementById("passages");
+  const container = document.querySelector("tw-story");
   if (!container) return;
 
   const targets = container.querySelectorAll(selector);

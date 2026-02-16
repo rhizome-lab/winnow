@@ -228,9 +228,9 @@ export function requestStop(): void {
   stopRequested = true;
 }
 
-/** Clear the #passages container and cancel active timers. */
+/** Clear the tw-story container and cancel active timers. */
 export function clear(): void {
-  const container = document.getElementById("passages");
+  const container = document.querySelector("tw-story");
   if (container) {
     while (container.firstChild) {
       container.removeChild(container.firstChild);
