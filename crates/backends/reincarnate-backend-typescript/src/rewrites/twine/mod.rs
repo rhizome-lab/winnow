@@ -1,7 +1,7 @@
 //! Twine-specific JsExpr → JsExpr rewrite pass.
 //!
 //! Shared tree traversal dispatches to engine-specific sub-modules:
-//! - `harlowe` — Harlowe.Output content tree rewrites
+//! - `harlowe` — Harlowe.H method call rewrites (passthrough — lowered in core)
 //! - `sugarcube` — SugarCube.Engine native JS construct rewrites
 //!
 //! All other SystemCalls pass through to runtime modules via the printer's
@@ -19,7 +19,7 @@ use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 /// if any. Used by import generation to emit the correct imports before
 /// the rewrite pass runs.
 pub fn rewrite_introduced_calls(system: &str, method: &str) -> &'static [&'static str] {
-    if system == "Harlowe.Output" {
+    if system == "Harlowe.H" {
         harlowe::rewrite_introduced_calls(method)
     } else if system == "Harlowe.Engine" {
         engine::rewrite_introduced_calls(method)
@@ -231,7 +231,7 @@ fn try_rewrite_system_call(
     args: &mut Vec<JsExpr>,
     closures: &HashMap<String, JsFunction>,
 ) -> Option<JsExpr> {
-    if system == "Harlowe.Output" {
+    if system == "Harlowe.H" {
         return harlowe::try_rewrite(method, args);
     }
     if system == "Harlowe.Engine" {

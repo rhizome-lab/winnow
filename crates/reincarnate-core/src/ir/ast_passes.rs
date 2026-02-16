@@ -13,15 +13,11 @@ use super::value::Constant;
 // Lower synthetic output SystemCalls to native AST nodes
 // ---------------------------------------------------------------------------
 
-/// Rewrite synthetic `Harlowe.Output` SystemCalls to native AST nodes:
-/// - `content_array(args...)` → `ArrayInit(args)`
-/// - `text_node(s)` → `s` (identity — strings ARE content nodes)
+/// Rewrite `Harlowe.H.*` SystemCalls to `MethodCall` on the `h` parameter:
+/// `SystemCall("Harlowe.H", method, args)` → `h.method(args...)`
 ///
-/// The Harlowe translator emits these as SystemCalls at the IR level (since
-/// the IR has no array-literal or text-node ops). The backend would
-/// eventually rewrite them, but doing it earlier in the core AST lets
-/// optimization passes see them as pure expressions — enabling constant
-/// folding and dead variable elimination.
+/// Doing this early in the core AST (before the backend) lets optimization
+/// passes see them as regular method calls.
 pub fn lower_output_nodes(body: &mut [Stmt]) {
     for stmt in body.iter_mut() {
         lower_output_nodes_in_stmt(stmt);
@@ -162,54 +158,19 @@ fn lower_output_nodes_in_expr(expr: &mut Expr) {
         _ => {} // Literal, Var, GlobalRef — no children
     }
 
-    // Now try to rewrite this node.
+    // Rewrite Harlowe.H.* SystemCalls → h.method(args...)
     if let Expr::SystemCall {
         system,
         method,
         args,
     } = expr
     {
-        match method.as_str() {
-            "content_array" | "new_buffer" => {
-                *expr = Expr::ArrayInit(std::mem::take(args));
-            }
-            "text_node" if args.len() == 1 => {
-                *expr = args.pop().unwrap();
-            }
-            "push" if system == "Harlowe.Output" && !args.is_empty() => {
-                // push(buf, a, b, ...) → buf.push(a, b, ...)
-                let mut drain = std::mem::take(args);
-                let receiver = drain.remove(0);
-                *expr = Expr::MethodCall {
-                    receiver: Box::new(receiver),
-                    method: "push".into(),
-                    args: drain,
-                };
-            }
-            "push_spread" if system == "Harlowe.Output" && !args.is_empty() => {
-                // push_spread(buf, val) → buf.push(...val)
-                let mut drain = std::mem::take(args);
-                let receiver = drain.remove(0);
-                let spread_args = drain
-                    .into_iter()
-                    .map(|a| Expr::Spread(Box::new(a)))
-                    .collect();
-                *expr = Expr::MethodCall {
-                    receiver: Box::new(receiver),
-                    method: "push".into(),
-                    args: spread_args,
-                };
-            }
-            _ if system == "Harlowe.Output" => {
-                // All other Harlowe.Output methods (br, em, strong, color,
-                // link, img, ...) are bare function calls. Lower them to
-                // Call nodes so the const-folding pass can sink them.
-                *expr = Expr::Call {
-                    func: std::mem::take(method),
-                    args: std::mem::take(args),
-                };
-            }
-            _ => {}
+        if system == "Harlowe.H" {
+            *expr = Expr::MethodCall {
+                receiver: Box::new(Expr::Var("h".into())),
+                method: std::mem::take(method),
+                args: std::mem::take(args),
+            };
         }
     }
 }
@@ -5752,89 +5713,72 @@ mod tests {
         }
     }
 
-    fn text_node(s: &str) -> Expr {
-        Expr::SystemCall {
-            system: "Harlowe.Output".to_string(),
-            method: "text_node".to_string(),
-            args: vec![Expr::Literal(Constant::String(s.to_string()))],
-        }
-    }
-
     fn str_lit(s: &str) -> Expr {
         Expr::Literal(Constant::String(s.to_string()))
     }
 
     #[test]
-    fn lower_output_nodes_rewrites_text_node() {
-        let mut body = vec![Stmt::VarDecl {
-            name: "v1".into(),
-            ty: None,
-            init: Some(text_node("hello")),
-            mutable: false,
-        }];
+    fn lower_output_nodes_rewrites_harlowe_h() {
+        // Harlowe.H.text("hello") → h.text("hello")
+        let mut body = vec![Stmt::Expr(Expr::SystemCall {
+            system: "Harlowe.H".into(),
+            method: "text".into(),
+            args: vec![str_lit("hello")],
+        })];
         lower_output_nodes(&mut body);
         match &body[0] {
-            Stmt::VarDecl {
-                init: Some(Expr::Literal(Constant::String(s))),
-                ..
-            } => assert_eq!(s, "hello"),
-            other => panic!("Expected string literal init, got: {other:?}"),
+            Stmt::Expr(Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            }) => {
+                assert_eq!(**receiver, var("h"));
+                assert_eq!(method, "text");
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], str_lit("hello"));
+            }
+            other => panic!("Expected MethodCall h.text, got: {other:?}"),
         }
     }
 
     #[test]
-    fn text_node_strings_inline_into_return_array() {
-        // Simulate real pattern: text_node strings interleaved with br() calls.
-        //   const v1 = text_node("hello");
-        //   const v2 = br();
-        //   const v3 = text_node("world");
-        //   return [v1, v2, v3];
-        let mut body = vec![
-            Stmt::VarDecl {
-                name: "v1".into(),
-                ty: None,
-                init: Some(text_node("hello")),
-                mutable: false,
-            },
-            Stmt::VarDecl {
-                name: "v2".into(),
-                ty: None,
-                init: Some(br_call()),
-                mutable: false,
-            },
-            Stmt::VarDecl {
-                name: "v3".into(),
-                ty: None,
-                init: Some(text_node("world")),
-                mutable: false,
-            },
-            Stmt::Return(Some(Expr::ArrayInit(vec![
-                var("v1"),
-                var("v2"),
-                var("v3"),
-            ]))),
-        ];
-
-        // Run the same sequence as the real pipeline.
+    fn lower_output_nodes_harlowe_h_no_args() {
+        // Harlowe.H.br() → h.br()
+        let mut body = vec![Stmt::Expr(Expr::SystemCall {
+            system: "Harlowe.H".into(),
+            method: "br".into(),
+            args: vec![],
+        })];
         lower_output_nodes(&mut body);
-        fold_single_use_consts(&mut body);
-
-        // v1 and v3 (strings) should be inlined; v2 (br() call) stays.
-        let ret_stmt = body.last().unwrap();
-        match ret_stmt {
-            Stmt::Return(Some(Expr::ArrayInit(elems))) => {
-                assert_eq!(
-                    elems[0],
-                    str_lit("hello"),
-                    "v1 should have been inlined: {body:?}"
-                );
-                assert_eq!(
-                    elems[2],
-                    str_lit("world"),
-                    "v3 should have been inlined: {body:?}"
-                );
+        match &body[0] {
+            Stmt::Expr(Expr::MethodCall {
+                receiver,
+                method,
+                args,
+            }) => {
+                assert_eq!(**receiver, var("h"));
+                assert_eq!(method, "br");
+                assert!(args.is_empty());
             }
-            _ => panic!("Expected return with array: {body:?}"),
+            other => panic!("Expected MethodCall h.br, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lower_output_nodes_ignores_other_systems() {
+        // Non-Harlowe.H SystemCalls should pass through unchanged.
+        let mut body = vec![Stmt::Expr(Expr::SystemCall {
+            system: "Harlowe.State".into(),
+            method: "get".into(),
+            args: vec![str_lit("x")],
+        })];
+        lower_output_nodes(&mut body);
+        match &body[0] {
+            Stmt::Expr(Expr::SystemCall { system, method, .. }) => {
+                assert_eq!(system, "Harlowe.State");
+                assert_eq!(method, "get");
+            }
+            other => panic!("Expected SystemCall passthrough, got: {other:?}"),
         }
     }
 
@@ -6111,74 +6055,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lower_output_nodes_new_buffer() {
-        let mut body = vec![Stmt::VarDecl {
-            name: "buf".into(),
-            ty: None,
-            init: Some(Expr::SystemCall {
-                system: "Harlowe.Output".into(),
-                method: "new_buffer".into(),
-                args: vec![],
-            }),
-            mutable: false,
-        }];
-        lower_output_nodes(&mut body);
-        match &body[0] {
-            Stmt::VarDecl {
-                init: Some(Expr::ArrayInit(elems)),
-                ..
-            } => assert!(elems.is_empty()),
-            other => panic!("Expected empty ArrayInit, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lower_output_nodes_push() {
-        // push(buf, a, b) → buf.push(a, b)
-        let mut body = vec![Stmt::Expr(Expr::SystemCall {
-            system: "Harlowe.Output".into(),
-            method: "push".into(),
-            args: vec![var("buf"), str_lit("a"), str_lit("b")],
-        })];
-        lower_output_nodes(&mut body);
-        match &body[0] {
-            Stmt::Expr(Expr::MethodCall {
-                receiver,
-                method,
-                args,
-            }) => {
-                assert_eq!(**receiver, var("buf"));
-                assert_eq!(method, "push");
-                assert_eq!(args.len(), 2);
-                assert_eq!(args[0], str_lit("a"));
-                assert_eq!(args[1], str_lit("b"));
-            }
-            other => panic!("Expected MethodCall push, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lower_output_nodes_push_spread() {
-        // push_spread(buf, arr) → buf.push(...arr)
-        let mut body = vec![Stmt::Expr(Expr::SystemCall {
-            system: "Harlowe.Output".into(),
-            method: "push_spread".into(),
-            args: vec![var("buf"), var("arr")],
-        })];
-        lower_output_nodes(&mut body);
-        match &body[0] {
-            Stmt::Expr(Expr::MethodCall {
-                receiver,
-                method,
-                args,
-            }) => {
-                assert_eq!(**receiver, var("buf"));
-                assert_eq!(method, "push");
-                assert_eq!(args.len(), 1);
-                assert_eq!(args[0], Expr::Spread(Box::new(var("arr"))));
-            }
-            other => panic!("Expected MethodCall push with spread, got: {other:?}"),
-        }
-    }
 }

@@ -1079,8 +1079,8 @@ pub fn lower_function_linear(
     }
 
     // AST-to-AST rewrite passes.
-    // Lower synthetic SystemCalls to native AST nodes before optimization
-    // (e.g. content_array → ArrayInit), so passes see them as pure constants.
+    // Lower Harlowe.H.* SystemCalls to h.method() MethodCall nodes before
+    // optimization, so passes see them as regular method calls.
     ast_passes::lower_output_nodes(&mut full_body);
     // Cleanup first: self-assigns and stubs block ternary detection by adding
     // extra statements to if/else branches.
