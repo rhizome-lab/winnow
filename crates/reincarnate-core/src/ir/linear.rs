@@ -1079,6 +1079,9 @@ pub fn lower_function_linear(
     }
 
     // AST-to-AST rewrite passes.
+    // Lower synthetic SystemCalls to native AST nodes before optimization
+    // (e.g. content_array → ArrayInit), so passes see them as pure constants.
+    ast_passes::lower_content_arrays(&mut full_body);
     // Cleanup first: self-assigns and stubs block ternary detection by adding
     // extra statements to if/else branches.
     ast_passes::eliminate_self_assigns(&mut full_body);
@@ -1104,6 +1107,7 @@ pub fn lower_function_linear(
         }
         ast_passes::simplify_ternary_to_logical(&mut full_body);
         ast_passes::absorb_phi_condition(&mut full_body);
+        ast_passes::fold_identical_branch_assigns(&mut full_body);
         ast_passes::narrow_var_scope(&mut full_body);
         ast_passes::merge_decl_init(&mut full_body);
         ast_passes::fold_single_use_consts(&mut full_body);

@@ -10,6 +10,165 @@ use super::inst::{CastKind, CmpKind};
 use super::value::Constant;
 
 // ---------------------------------------------------------------------------
+// Lower content_array to ArrayInit
+// ---------------------------------------------------------------------------
+
+/// Rewrite `SystemCall(_, "content_array", args)` → `ArrayInit(args)`.
+///
+/// The Harlowe translator emits `content_array` as a SystemCall at the IR
+/// level (since the IR has no array-literal op). The backend would
+/// eventually rewrite this to `ArrayInit`, but doing it earlier in the
+/// core AST lets optimization passes see it as a pure, variable-free
+/// expression — enabling constant folding and dead variable elimination.
+pub fn lower_content_arrays(body: &mut [Stmt]) {
+    for stmt in body.iter_mut() {
+        lower_content_arrays_in_stmt(stmt);
+    }
+}
+
+fn lower_content_arrays_in_stmt(stmt: &mut Stmt) {
+    match stmt {
+        Stmt::VarDecl {
+            init: Some(e), ..
+        } => {
+            lower_content_arrays_in_expr(e);
+        }
+        Stmt::Assign { target, value } => {
+            lower_content_arrays_in_expr(target);
+            lower_content_arrays_in_expr(value);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            lower_content_arrays_in_expr(target);
+            lower_content_arrays_in_expr(value);
+        }
+        Stmt::Expr(e) => lower_content_arrays_in_expr(e),
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            lower_content_arrays_in_expr(cond);
+            lower_content_arrays(then_body);
+            lower_content_arrays(else_body);
+        }
+        Stmt::While { cond, body } => {
+            lower_content_arrays_in_expr(cond);
+            lower_content_arrays(body);
+        }
+        Stmt::For {
+            init,
+            cond,
+            update,
+            body,
+        } => {
+            lower_content_arrays(init);
+            lower_content_arrays_in_expr(cond);
+            lower_content_arrays(update);
+            lower_content_arrays(body);
+        }
+        Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
+            lower_content_arrays(body);
+        }
+        Stmt::Return(Some(e)) => lower_content_arrays_in_expr(e),
+        Stmt::Switch {
+            value,
+            cases,
+            default_body,
+        } => {
+            lower_content_arrays_in_expr(value);
+            for (_, case_body) in cases {
+                lower_content_arrays(case_body);
+            }
+            lower_content_arrays(default_body);
+        }
+        Stmt::Dispatch { blocks, .. } => {
+            for (_, block_body) in blocks {
+                lower_content_arrays(block_body);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn lower_content_arrays_in_expr(expr: &mut Expr) {
+    // Post-order: recurse first, then try to rewrite this node.
+    match expr {
+        Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            lower_content_arrays_in_expr(lhs);
+            lower_content_arrays_in_expr(rhs);
+        }
+        Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
+            lower_content_arrays_in_expr(lhs);
+            lower_content_arrays_in_expr(rhs);
+        }
+        Expr::Unary { expr: inner, .. }
+        | Expr::Cast { expr: inner, .. }
+        | Expr::TypeCheck { expr: inner, .. }
+        | Expr::Not(inner)
+        | Expr::Spread(inner) => {
+            lower_content_arrays_in_expr(inner);
+        }
+        Expr::Field { object, .. } => lower_content_arrays_in_expr(object),
+        Expr::Index { collection, index } => {
+            lower_content_arrays_in_expr(collection);
+            lower_content_arrays_in_expr(index);
+        }
+        Expr::Call { args, .. } | Expr::CoroutineCreate { args, .. } => {
+            for a in args {
+                lower_content_arrays_in_expr(a);
+            }
+        }
+        Expr::CallIndirect { callee, args } => {
+            lower_content_arrays_in_expr(callee);
+            for a in args {
+                lower_content_arrays_in_expr(a);
+            }
+        }
+        Expr::MethodCall {
+            receiver, args, ..
+        } => {
+            lower_content_arrays_in_expr(receiver);
+            for a in args {
+                lower_content_arrays_in_expr(a);
+            }
+        }
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            lower_content_arrays_in_expr(cond);
+            lower_content_arrays_in_expr(then_val);
+            lower_content_arrays_in_expr(else_val);
+        }
+        Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
+            for e in elems {
+                lower_content_arrays_in_expr(e);
+            }
+        }
+        Expr::StructInit { fields, .. } => {
+            for (_, v) in fields {
+                lower_content_arrays_in_expr(v);
+            }
+        }
+        Expr::PostIncrement(inner) | Expr::CoroutineResume(inner) => {
+            lower_content_arrays_in_expr(inner);
+        }
+        Expr::Yield(Some(e)) => {
+            lower_content_arrays_in_expr(e);
+        }
+        _ => {} // Literal, Var, GlobalRef — no children
+    }
+
+    // Now try to rewrite this node.
+    if let Expr::SystemCall { method, args, .. } = expr {
+        if method == "content_array" {
+            *expr = Expr::ArrayInit(std::mem::take(args));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ternary rewrite
 // ---------------------------------------------------------------------------
 
@@ -158,6 +317,138 @@ fn match_minmax(target: &Expr, value: &Expr) -> Option<Stmt> {
             args: vec![then_val.clone(), else_val.clone()],
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Identical branch-assign hoisting
+// ---------------------------------------------------------------------------
+
+/// Hoist identical terminal assigns out of if/else branches.
+///
+/// Matches:
+/// ```text
+/// if (cond) { ...stmts; x = E; } else { ...stmts; x = E; }
+/// ```
+/// and rewrites to:
+/// ```text
+/// if (cond) { ...stmts; } else { ...stmts; }
+/// x = E;
+/// ```
+///
+/// When the resulting else branch is empty, it is cleared (the emitter will
+/// omit it). When *both* branches become empty, the if is replaced by just
+/// the condition as an expression statement (preserving any side effects),
+/// or removed entirely if the condition is pure.
+///
+/// This enables `merge_decl_init` and `fold_single_use_consts` to later
+/// convert the hoisted assign into an inlineable `const`.
+pub fn fold_identical_branch_assigns(body: &mut Vec<Stmt>) {
+    // Process at this level first.
+    let mut i = 0;
+    while i < body.len() {
+        // Recurse into nested bodies first.
+        match &mut body[i] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                fold_identical_branch_assigns(then_body);
+                fold_identical_branch_assigns(else_body);
+            }
+            Stmt::While { body: inner, .. }
+            | Stmt::Loop { body: inner }
+            | Stmt::ForOf { body: inner, .. } => {
+                fold_identical_branch_assigns(inner);
+            }
+            Stmt::For {
+                init,
+                update,
+                body: inner,
+                ..
+            } => {
+                fold_identical_branch_assigns(init);
+                fold_identical_branch_assigns(update);
+                fold_identical_branch_assigns(inner);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    fold_identical_branch_assigns(block_body);
+                }
+            }
+            Stmt::Switch {
+                cases,
+                default_body,
+                ..
+            } => {
+                for (_, case_body) in cases {
+                    fold_identical_branch_assigns(case_body);
+                }
+                fold_identical_branch_assigns(default_body);
+            }
+            _ => {}
+        }
+
+        // Now try to hoist from this if/else.
+        let hoisted = match &mut body[i] {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } if !then_body.is_empty() && !else_body.is_empty() => {
+                match (then_body.last(), else_body.last()) {
+                    (
+                        Some(Stmt::Assign {
+                            target: Expr::Var(t1),
+                            value: v1,
+                        }),
+                        Some(Stmt::Assign {
+                            target: Expr::Var(t2),
+                            value: v2,
+                        }),
+                    ) if t1 == t2 && v1 == v2 => {
+                        // Both branches end with the same assign — hoist it.
+                        let assign = then_body.pop().unwrap();
+                        else_body.pop();
+                        Some(assign)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(assign) = hoisted {
+            // Clean up: if both branches are now empty, remove the if entirely
+            // (or keep the condition as an expr if it has side effects).
+            let remove_if = match &body[i] {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => then_body.is_empty() && else_body.is_empty(),
+                _ => false,
+            };
+
+            if remove_if {
+                let cond = match body.remove(i) {
+                    Stmt::If { cond, .. } => cond,
+                    _ => unreachable!(),
+                };
+                if expr_has_side_effects(&cond) {
+                    body.insert(i, Stmt::Expr(cond));
+                    body.insert(i + 1, assign);
+                } else {
+                    body.insert(i, assign);
+                }
+            } else {
+                body.insert(i + 1, assign);
+                i += 1; // skip past the if
+            }
+        }
+
+        i += 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -314,23 +605,30 @@ fn try_fold_batch(body: &mut Vec<Stmt>) -> bool {
                     } => init,
                     _ => unreachable!(),
                 };
-                let can_sink_path = is_stable_path(init)
-                    && body[i + 1..use_idx]
-                        .iter()
-                        .all(|s| !stmt_assigns_to_prefix_of(s, init));
-                let can_sink_past_locals = !can_sink_path
-                    && body[i + 1..use_idx].iter().all(|s| match s {
-                        Stmt::Assign {
-                            target: Expr::Var(t),
-                            ..
-                        } => !expr_references_var(init, t),
-                        Stmt::VarDecl { name: n, .. } => !expr_references_var(init, n),
-                        Stmt::Expr(_) => true,
-                        _ => false,
-                    });
-                if !can_sink_path && !can_sink_past_locals {
-                    i += 1;
-                    continue;
+                // Pure constant with no variable references (e.g. `[]`, `0`,
+                // `"str"`) can be sunk past any statement safely — evaluation
+                // order doesn't matter.
+                let is_trivial_const =
+                    !expr_has_side_effects(init) && !expr_has_any_var_ref(init);
+                if !is_trivial_const {
+                    let can_sink_path = is_stable_path(init)
+                        && body[i + 1..use_idx]
+                            .iter()
+                            .all(|s| !stmt_assigns_to_prefix_of(s, init));
+                    let can_sink_past_locals = !can_sink_path
+                        && body[i + 1..use_idx].iter().all(|s| match s {
+                            Stmt::Assign {
+                                target: Expr::Var(t),
+                                ..
+                            } => !expr_references_var(init, t),
+                            Stmt::VarDecl { name: n, .. } => !expr_references_var(init, n),
+                            Stmt::Expr(_) => true,
+                            _ => false,
+                        });
+                    if !can_sink_path && !can_sink_past_locals {
+                        i += 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -1940,6 +2238,56 @@ fn stmt_references_var(stmt: &Stmt, name: &str) -> bool {
         }
 
         Stmt::Break | Stmt::Continue | Stmt::LabeledBreak { .. } => false,
+    }
+}
+
+/// Whether an expression contains any variable reference at all.
+///
+/// Used to identify trivially constant expressions (like `[]`, `42`, `"str"`)
+/// that can be freely reordered past any statement.
+fn expr_has_any_var_ref(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(_) => true,
+        Expr::Literal(_) | Expr::GlobalRef(_) => false,
+        Expr::Binary { lhs, rhs, .. }
+        | Expr::Cmp { lhs, rhs, .. }
+        | Expr::LogicalOr { lhs, rhs }
+        | Expr::LogicalAnd { lhs, rhs } => expr_has_any_var_ref(lhs) || expr_has_any_var_ref(rhs),
+        Expr::Unary { expr: inner, .. }
+        | Expr::Cast { expr: inner, .. }
+        | Expr::TypeCheck { expr: inner, .. }
+        | Expr::Not(inner)
+        | Expr::CoroutineResume(inner)
+        | Expr::PostIncrement(inner)
+        | Expr::Spread(inner) => expr_has_any_var_ref(inner),
+        Expr::Field { object, .. } => expr_has_any_var_ref(object),
+        Expr::Index { collection, index } => {
+            expr_has_any_var_ref(collection) || expr_has_any_var_ref(index)
+        }
+        Expr::Call { args, .. } | Expr::CoroutineCreate { args, .. } => {
+            args.iter().any(expr_has_any_var_ref)
+        }
+        Expr::CallIndirect { callee, args } => {
+            expr_has_any_var_ref(callee) || args.iter().any(expr_has_any_var_ref)
+        }
+        Expr::SystemCall { args, .. } => args.iter().any(expr_has_any_var_ref),
+        Expr::MethodCall {
+            receiver, args, ..
+        } => expr_has_any_var_ref(receiver) || args.iter().any(expr_has_any_var_ref),
+        Expr::Ternary {
+            cond,
+            then_val,
+            else_val,
+        } => {
+            expr_has_any_var_ref(cond)
+                || expr_has_any_var_ref(then_val)
+                || expr_has_any_var_ref(else_val)
+        }
+        Expr::ArrayInit(elems) | Expr::TupleInit(elems) => {
+            elems.iter().any(expr_has_any_var_ref)
+        }
+        Expr::StructInit { fields, .. } => fields.iter().any(|(_, v)| expr_has_any_var_ref(v)),
+        Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_has_any_var_ref(e)),
     }
 }
 
@@ -5130,5 +5478,188 @@ mod tests {
         assert!(matches!(&body[0], Stmt::VarDecl { name, .. } if name == "v620"));
         assert!(matches!(&body[1], Stmt::If { .. }));
         assert!(matches!(&body[2], Stmt::If { cond, .. } if *cond == var("v620")));
+    }
+
+    fn empty_array() -> Expr {
+        Expr::ArrayInit(vec![])
+    }
+
+    fn side_effect_call() -> Stmt {
+        Stmt::Expr(Expr::Call {
+            func: "side_effect".to_string(),
+            args: vec![],
+        })
+    }
+
+    fn br_call() -> Expr {
+        Expr::Call {
+            func: "br".to_string(),
+            args: vec![],
+        }
+    }
+
+    #[test]
+    fn fold_identical_branch_assigns_hoists_empty_array() {
+        // Pattern:
+        //   let v0;
+        //   if (cond) { side_effect(); v0 = []; } else { v0 = []; }
+        //   return [v0];
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v0".into(),
+                ty: None,
+                init: None,
+                mutable: true,
+            },
+            Stmt::If {
+                cond: var("cond"),
+                then_body: vec![side_effect_call(), assign(var("v0"), empty_array())],
+                else_body: vec![assign(var("v0"), empty_array())],
+            },
+            Stmt::Return(Some(Expr::ArrayInit(vec![var("v0")]))),
+        ];
+
+        fold_identical_branch_assigns(&mut body);
+
+        // After hoist: if (cond) { side_effect(); } then v0 = [];
+        assert_eq!(body.len(), 4);
+        assert!(matches!(&body[0], Stmt::VarDecl { name, init: None, .. } if name == "v0"));
+        assert!(matches!(&body[1], Stmt::If { then_body, else_body, .. }
+            if then_body.len() == 1 && else_body.is_empty()));
+        assert!(matches!(&body[2], Stmt::Assign { target: Expr::Var(n), value }
+            if n == "v0" && *value == empty_array()));
+    }
+
+    #[test]
+    fn fold_identical_branch_assigns_removes_empty_if() {
+        // Pattern: if (pure_cond) { v0 = []; } else { v0 = []; }
+        let mut body = vec![Stmt::If {
+            cond: int(1),
+            then_body: vec![assign(var("v0"), empty_array())],
+            else_body: vec![assign(var("v0"), empty_array())],
+        }];
+
+        fold_identical_branch_assigns(&mut body);
+
+        // Both branches empty after hoist, cond is pure → if removed, just assign.
+        assert_eq!(body.len(), 1);
+        assert!(matches!(&body[0], Stmt::Assign { target: Expr::Var(n), .. } if n == "v0"));
+    }
+
+    #[test]
+    fn fold_identical_branch_then_inline_full_pipeline() {
+        // Simulate the real Harlowe pattern: multiple identical-branch ifs
+        // followed by a return array referencing all the variables.
+        //
+        //   let v0;  let v12;
+        //   if (c1) { se(); v0 = []; } else { v0 = []; }
+        //   const v11 = br();
+        //   if (c2) { se(); v12 = []; } else { v12 = []; }
+        //   return [v0, v11, v12];
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v0".into(),
+                ty: None,
+                init: None,
+                mutable: true,
+            },
+            Stmt::VarDecl {
+                name: "v12".into(),
+                ty: None,
+                init: None,
+                mutable: true,
+            },
+            Stmt::If {
+                cond: var("c1"),
+                then_body: vec![side_effect_call(), assign(var("v0"), empty_array())],
+                else_body: vec![assign(var("v0"), empty_array())],
+            },
+            Stmt::VarDecl {
+                name: "v11".into(),
+                ty: None,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::If {
+                cond: var("c2"),
+                then_body: vec![side_effect_call(), assign(var("v12"), empty_array())],
+                else_body: vec![assign(var("v12"), empty_array())],
+            },
+            Stmt::Return(Some(Expr::ArrayInit(vec![
+                var("v0"),
+                var("v11"),
+                var("v12"),
+            ]))),
+        ];
+
+        // Run the full pipeline sequence that linear.rs uses:
+        fold_identical_branch_assigns(&mut body);
+        narrow_var_scope(&mut body);
+        merge_decl_init(&mut body);
+        fold_single_use_consts(&mut body);
+
+        // Both v0 and v12 should be inlined as [] in the return.
+        let ret_stmt = body.last().unwrap();
+        match ret_stmt {
+            Stmt::Return(Some(Expr::ArrayInit(elems))) => {
+                assert_eq!(
+                    elems[0],
+                    empty_array(),
+                    "v0 should have been inlined to []: {body:?}"
+                );
+                assert_eq!(
+                    elems[2],
+                    empty_array(),
+                    "v12 should have been inlined to []: {body:?}"
+                );
+            }
+            _ => panic!("Expected return with array: {body:?}"),
+        }
+    }
+
+    #[test]
+    fn trivial_const_sinks_past_if_stmts() {
+        // Pattern: merge_decl_init has produced:
+        //   let v0 = [];
+        //   if (cond) { side_effect(); }
+        //   const v11 = br();
+        //   return [v0, v11];
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v0".into(),
+                ty: None,
+                init: Some(empty_array()),
+                mutable: true,
+            },
+            Stmt::If {
+                cond: var("cond"),
+                then_body: vec![side_effect_call()],
+                else_body: vec![],
+            },
+            Stmt::VarDecl {
+                name: "v11".into(),
+                ty: None,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::Return(Some(Expr::ArrayInit(vec![var("v0"), var("v11")]))),
+        ];
+
+        fold_single_use_consts(&mut body);
+
+        // v0 should be inlined as [] in the return array.
+        // v11 can't be inlined (call has side effects, intervening if).
+        // Expected: if, const v11 = br(), return [[], v11]
+        let ret_stmt = body.last().unwrap();
+        match ret_stmt {
+            Stmt::Return(Some(Expr::ArrayInit(elems))) => {
+                assert_eq!(
+                    elems[0],
+                    empty_array(),
+                    "v0 should have been inlined to []: {body:?}"
+                );
+            }
+            _ => panic!("Expected return with array: {body:?}"),
+        }
     }
 }
