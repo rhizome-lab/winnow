@@ -711,11 +711,17 @@ export { evalCode as eval };
 function evalCode(code: string): void {
   ensureGlobals();
   const g = globalThis as any;
-  const fn = new Function("State", "setup", "V", "T", "Config", code);
+  let fn: Function;
+  try {
+    fn = new Function("State", "setup", "V", "T", "Config", code);
+  } catch (e) {
+    console.error("[evalCode] SyntaxError compiling user script (" + code.length + " chars):", e);
+    return;
+  }
   try {
     fn(g.State, g.setup, g.V, g.T, g.Config);
   } catch (e) {
-    console.error("[evalCode] error in user script:", e);
+    console.error("[evalCode] error executing user script:", e);
   }
 }
 
