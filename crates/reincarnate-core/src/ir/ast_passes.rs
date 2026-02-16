@@ -2380,11 +2380,13 @@ fn try_absorb_phi_condition(body: &mut Vec<Stmt>) -> bool {
         // vN must not appear between the decl and the outer if (ensures it's
         // a dedicated phi variable, not a general-purpose variable with earlier
         // assignments like `dodged = 1.0; ... if (x) { dodged = 4.0; }`).
-        let refs_before: usize = body[decl_idx + 1..i]
+        // Use stmt_references_var (reads AND writes) — a bare write like
+        // `vN = initialValue;` between decl and if means vN carries a value
+        // on the else path that absorption would discard.
+        let has_refs_before = body[decl_idx + 1..i]
             .iter()
-            .map(|s| count_var_refs_in_stmt(s, &var_name))
-            .sum();
-        if refs_before > 0 {
+            .any(|s| stmt_references_var(s, &var_name));
+        if has_refs_before {
             continue;
         }
 
@@ -2416,12 +2418,11 @@ fn try_absorb_phi_condition(body: &mut Vec<Stmt>) -> bool {
             continue;
         }
 
-        // No refs to vN anywhere after body[i+1].
-        let refs_after: usize = body[i + 2..]
+        // No refs to vN anywhere after body[i+1] (reads or writes).
+        let has_refs_after = body[i + 2..]
             .iter()
-            .map(|s| count_var_refs_in_stmt(s, &var_name))
-            .sum();
-        if refs_after != 0 {
+            .any(|s| stmt_references_var(s, &var_name));
+        if has_refs_after {
             continue;
         }
 
