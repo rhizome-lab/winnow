@@ -1847,6 +1847,43 @@ mod tests {
     }
 
     #[test]
+    fn arrow_bare_param_not_resolved() {
+        // Un-parenthesized arrow: `x => x + 1` (no parens around param)
+        let source = "<<run [1,2].forEach(x => x + 1)>>";
+        let ast = parser::parse(source);
+        assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
+        let result = translate_passage("test", &ast);
+
+        // Should produce a Closure callback, same as parenthesized form.
+        let arrow_cbs: Vec<_> = result
+            .setter_callbacks
+            .iter()
+            .filter(|f| f.method_kind == MethodKind::Closure)
+            .collect();
+        assert!(
+            !arrow_cbs.is_empty(),
+            "bare-param arrow should produce a Closure callback"
+        );
+
+        // No resolve("x") in the closure body.
+        for cb in &arrow_cbs {
+            for block in cb.blocks.values() {
+                for &inst_id in &block.insts {
+                    let inst = &cb.insts[inst_id];
+                    if let reincarnate_core::ir::inst::Op::SystemCall { system, method, .. } =
+                        &inst.op
+                    {
+                        assert!(
+                            !(system == "SugarCube.Engine" && method == "resolve"),
+                            "bare-param arrow should not produce resolve() for param"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn passage_func_name_sanitization() {
         assert_eq!(passage_func_name("Start"), "passage_Start");
         assert_eq!(passage_func_name("My Passage"), "passage_My_Passage");

@@ -366,10 +366,26 @@ fn parse_prefix(lexer: &mut ExprLexer<'_>) -> Expr {
             kind: ExprKind::TempVar(name),
             span: tok.span,
         },
-        TokenKind::Ident(name) => Expr {
-            kind: ExprKind::Ident(name),
-            span: tok.span,
-        },
+        TokenKind::Ident(name) => {
+            // Un-parenthesized single-param arrow: `x => expr`
+            if lexer.peek().kind == TokenKind::Arrow {
+                lexer.next_tok(); // consume =>
+                let body = parse_bp(lexer, BP_ASSIGN.0);
+                let span = Span::new(start, body.span.end);
+                Expr {
+                    kind: ExprKind::Arrow {
+                        params: vec![name],
+                        body: Box::new(body),
+                    },
+                    span,
+                }
+            } else {
+                Expr {
+                    kind: ExprKind::Ident(name),
+                    span: tok.span,
+                }
+            }
+        }
 
         // Parenthesized expression or arrow function
         TokenKind::LParen => {
@@ -1150,6 +1166,39 @@ mod tests {
         assert!(matches!(e.kind, ExprKind::Arrow { .. }));
         if let ExprKind::Arrow { params, .. } = &e.kind {
             assert_eq!(params, &["e"]);
+        }
+    }
+
+    #[test]
+    fn arrow_function_bare_param() {
+        let e = parse("x => x + 1");
+        assert!(matches!(e.kind, ExprKind::Arrow { .. }));
+        if let ExprKind::Arrow { params, body } = &e.kind {
+            assert_eq!(params, &["x"]);
+            assert!(matches!(body.kind, ExprKind::Binary { op: BinaryOp::Add, .. }));
+        }
+    }
+
+    #[test]
+    fn arrow_function_bare_in_call() {
+        // Common pattern: arr.forEach(x => x.prop)
+        let e = parse("arr.forEach(x => x.prop)");
+        assert!(matches!(e.kind, ExprKind::Call { .. }));
+        if let ExprKind::Call { args, .. } = &e.kind {
+            assert_eq!(args.len(), 1);
+            assert!(matches!(args[0].kind, ExprKind::Arrow { .. }));
+            if let ExprKind::Arrow { params, .. } = &args[0].kind {
+                assert_eq!(params, &["x"]);
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_multi_param() {
+        let e = parse("(x, i) => x + i");
+        assert!(matches!(e.kind, ExprKind::Arrow { .. }));
+        if let ExprKind::Arrow { params, .. } = &e.kind {
+            assert_eq!(params, &["x", "i"]);
         }
     }
 
