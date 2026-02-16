@@ -76,37 +76,11 @@ function resolveColor(value: string): string {
 }
 
 // --- Transition animation support ---
-
-let transitionStylesInjected = false;
-
-function injectTransitionStyles(): void {
-  if (transitionStylesInjected) return;
-  transitionStylesInjected = true;
-  const style = document.createElement("style");
-  style.textContent = `
-@keyframes tw-dissolve { from { opacity: 0; } to { opacity: 1; } }
-@keyframes tw-slide-left { from { transform: translateX(-100%); } to { transform: translateX(0); } }
-@keyframes tw-slide-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
-@keyframes tw-slide-up { from { transform: translateY(-100%); } to { transform: translateY(0); } }
-@keyframes tw-slide-down { from { transform: translateY(100%); } to { transform: translateY(0); } }
-@keyframes tw-fade-left { from { opacity: 0; transform: translateX(-50%); } to { opacity: 1; transform: translateX(0); } }
-@keyframes tw-fade-right { from { opacity: 0; transform: translateX(50%); } to { opacity: 1; transform: translateX(0); } }
-@keyframes tw-fade-up { from { opacity: 0; transform: translateY(-50%); } to { opacity: 1; transform: translateY(0); } }
-@keyframes tw-fade-down { from { opacity: 0; transform: translateY(50%); } to { opacity: 1; transform: translateY(0); } }
-@keyframes tw-zoom { from { transform: scale(0); } to { transform: scale(1); } }
-@keyframes tw-blur { from { filter: blur(10px); opacity: 0; } to { filter: blur(0); opacity: 1; } }
-@keyframes tw-flicker { 0% { opacity: 0; } 5% { opacity: 1; } 10% { opacity: 0; } 15% { opacity: 1; } 20% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 1; } }
-@keyframes tw-shudder { 0% { transform: translateX(-3px); } 25% { transform: translateX(3px); } 50% { transform: translateX(-2px); } 75% { transform: translateX(2px); } 100% { transform: translateX(0); } }
-@keyframes tw-pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
-@keyframes tw-rumble { 0% { transform: translate(-2px, 2px); } 25% { transform: translate(2px, -2px); } 50% { transform: translate(-2px, -2px); } 75% { transform: translate(2px, 2px); } 100% { transform: translate(0, 0); } }
-`;
-  document.head.appendChild(style);
-}
+// Keyframe definitions are in the extracted format CSS (format_harlowe.css).
 
 function applyTransition(el: HTMLElement): void {
   const name = el.dataset.tw_transition || el.dataset.tw_transition_arrive;
   if (!name) return;
-  injectTransitionStyles();
   const duration = el.dataset.tw_transition_time || "0.8s";
   const animName = `tw-${name}`;
   el.style.animation = `${animName} ${duration} ease-in-out`;
@@ -246,6 +220,7 @@ export function clear(): void {
 
 export class HarloweContext {
   private containerStack: (Element | DocumentFragment)[];
+  private prevBr = false;
 
   constructor(container: Element | DocumentFragment) {
     this.containerStack = [container];
@@ -298,13 +273,20 @@ export class HarloweContext {
   text(s: string): Node {
     const node = document.createTextNode(s);
     this.current().appendChild(node);
+    this.prevBr = false;
     return node;
   }
 
-  /** Create and append a <br>. */
+  /** Create and append a <br> or <tw-consecutive-br>. */
   br(): Node {
+    if (this.prevBr) {
+      const el = document.createElement("tw-consecutive-br");
+      this.current().appendChild(el);
+      return el;
+    }
     const el = document.createElement("br");
     this.current().appendChild(el);
+    this.prevBr = true;
     return el;
   }
 
@@ -338,6 +320,7 @@ export class HarloweContext {
     const el = document.createElement(tag);
     this.appendChildren(el, children);
     this.current().appendChild(el);
+    this.prevBr = false;
     return el;
   }
 
@@ -370,24 +353,24 @@ export class HarloweContext {
 
   /** Passage navigation link. */
   link(text: string, passage: string): Node {
-    const a = document.createElement("a");
-    a.textContent = text;
-    a.className = "tw-link";
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
-      Navigation.goto(passage);
+    const el = document.createElement("tw-link") as HTMLElement;
+    el.setAttribute("tabindex", "0");
+    el.textContent = text;
+    el.addEventListener("click", () => Navigation.goto(passage));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") Navigation.goto(passage);
     });
-    this.current().appendChild(a);
-    return a;
+    this.current().appendChild(el);
+    this.prevBr = false;
+    return el;
   }
 
   /** Link with callback (replaces itself with callback output). */
   linkCb(text: string, cb: (h: HarloweContext) => void): Node {
-    const a = document.createElement("a");
-    a.textContent = text;
-    a.className = "tw-link";
-    a.addEventListener("click", (e) => {
-      e.preventDefault();
+    const el = document.createElement("tw-link") as HTMLElement;
+    el.setAttribute("tabindex", "0");
+    el.textContent = text;
+    const handler = () => {
       const frag = document.createDocumentFragment();
       const subH = new HarloweContext(frag);
       try {
@@ -395,21 +378,30 @@ export class HarloweContext {
       } finally {
         subH.closeAll();
       }
-      a.replaceWith(frag);
+      el.replaceWith(frag);
+    };
+    el.addEventListener("click", handler);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") handler();
     });
-    this.current().appendChild(a);
-    return a;
+    this.current().appendChild(el);
+    this.prevBr = false;
+    return el;
   }
 
   /** Timed content — runs callback at interval, replacing content each time. */
   live(interval: number, cb: (h: HarloweContext) => void): Node {
-    const container = document.createElement("span");
-    container.className = "tw-live";
-    this.current().appendChild(container);
+    const expr = document.createElement("tw-expression") as HTMLElement;
+    expr.setAttribute("type", "macro");
+    expr.setAttribute("name", "live");
+    const hook = document.createElement("tw-hook");
+    expr.appendChild(hook);
+    this.current().appendChild(expr);
+    this.prevBr = false;
     const ms = interval * 1000;
     const id = scheduleInterval(() => {
-      container.innerHTML = "";
-      const subH = new HarloweContext(container);
+      hook.innerHTML = "";
+      const subH = new HarloweContext(hook);
       try {
         cb(subH);
       } finally {
@@ -421,7 +413,7 @@ export class HarloweContext {
       }
     }, ms);
     activeTimers.push(id);
-    return container;
+    return expr;
   }
 
   /** Print a value as text. */
@@ -433,18 +425,25 @@ export class HarloweContext {
 
   /** Display (embed) another passage inline. */
   displayPassage(name: string): void {
-    Navigation.display(name, this);
+    const include = document.createElement("tw-include") as HTMLElement;
+    include.setAttribute("passage", name);
+    this.current().appendChild(include);
+    this.prevBr = false;
+    const subH = new HarloweContext(include);
+    Navigation.display(name, subH);
+    subH.closeAll();
   }
 
   // --- Styled content ---
 
-  /** Apply a changer (or changer array) to a span wrapping children. */
+  /** Apply a changer (or changer array) to a tw-hook wrapping children. */
   styled(changer: Changer | Changer[], ...children: Child[]): Node {
-    const span = document.createElement("span");
-    applyChangers(span, changer);
-    this.appendChildren(span, children);
-    this.current().appendChild(span);
-    return span;
+    const hook = document.createElement("tw-hook") as HTMLElement;
+    applyChangers(hook, changer);
+    this.appendChildren(hook, children);
+    this.current().appendChild(hook);
+    this.prevBr = false;
+    return hook;
   }
 
   /** Shorthand changer+content methods. */
