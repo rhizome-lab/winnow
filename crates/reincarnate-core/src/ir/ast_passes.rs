@@ -541,25 +541,24 @@ pub fn fold_single_use_consts(body: &mut Vec<Stmt>) {
 }
 
 // ---------------------------------------------------------------------------
-// Inline single-use variables into trailing expression (order-preserving)
+// Order-preserving inline of single-use variables
 // ---------------------------------------------------------------------------
 
-/// Inline single-use `VarDecl`s into the body's trailing expression
-/// (typically a `Return`) in declaration order.
+/// Inline single-use `VarDecl`s at their use sites in declaration order.
 ///
 /// Unlike `fold_single_use_consts` which sinks expressions past intervening
 /// statements (and must refuse when that would reorder calls), this pass
-/// substitutes variables into the trailing expression in forward
-/// (declaration) order. Since JS evaluates sub-expressions left-to-right,
-/// the relative call order is preserved by construction — no sinking
-/// safety checks needed.
+/// substitutes variables in forward (declaration) order — preserving
+/// relative call order by construction.
 ///
 /// A variable qualifies if:
-/// 1. It has exactly one read, in the trailing statement.
-/// 2. It is not reassigned anywhere after the declaration.
-pub fn inline_into_trailing_expr(body: &mut Vec<Stmt>) {
-    // Fold at this level first, then recurse.
-    try_inline_trailing(body);
+/// 1. It has exactly one read after the declaration.
+/// 2. That read is in an **unconditional** position (not inside an
+///    if/loop body) — otherwise an unconditional call would become
+///    conditional.
+/// 3. It is not reassigned anywhere after the declaration.
+pub fn inline_ordered_single_use(body: &mut Vec<Stmt>) {
+    try_inline_ordered(body);
 
     for stmt in body.iter_mut() {
         match stmt {
@@ -568,11 +567,11 @@ pub fn inline_into_trailing_expr(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                inline_into_trailing_expr(then_body);
-                inline_into_trailing_expr(else_body);
+                inline_ordered_single_use(then_body);
+                inline_ordered_single_use(else_body);
             }
             Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
-                inline_into_trailing_expr(body);
+                inline_ordered_single_use(body);
             }
             Stmt::For {
                 init,
@@ -580,13 +579,13 @@ pub fn inline_into_trailing_expr(body: &mut Vec<Stmt>) {
                 body,
                 ..
             } => {
-                inline_into_trailing_expr(init);
-                inline_into_trailing_expr(update);
-                inline_into_trailing_expr(body);
+                inline_ordered_single_use(init);
+                inline_ordered_single_use(update);
+                inline_ordered_single_use(body);
             }
             Stmt::Dispatch { blocks, .. } => {
                 for (_, block_body) in blocks {
-                    inline_into_trailing_expr(block_body);
+                    inline_ordered_single_use(block_body);
                 }
             }
             Stmt::Switch {
@@ -595,27 +594,24 @@ pub fn inline_into_trailing_expr(body: &mut Vec<Stmt>) {
                 ..
             } => {
                 for (_, case_body) in cases {
-                    inline_into_trailing_expr(case_body);
+                    inline_ordered_single_use(case_body);
                 }
-                inline_into_trailing_expr(default_body);
+                inline_ordered_single_use(default_body);
             }
             _ => {}
         }
     }
 }
 
-fn try_inline_trailing(body: &mut Vec<Stmt>) {
+fn try_inline_ordered(body: &mut Vec<Stmt>) {
     if body.len() < 2 {
         return;
     }
 
-    // Precompute read counts once for the whole body.
     let counts = precompute_var_read_counts(body);
 
     let mut i = 0;
-    while i < body.len().saturating_sub(1) {
-        let trailing_idx = body.len() - 1;
-
+    while i < body.len() {
         let name = match &body[i] {
             Stmt::VarDecl {
                 name,
@@ -629,26 +625,38 @@ fn try_inline_trailing(body: &mut Vec<Stmt>) {
         };
 
         // Total reads includes the VarDecl name itself (1).
-        // We need exactly 1 additional read (in the trailing stmt).
+        // We need exactly 1 additional read.
         let total = counts.get(name.as_str()).copied().unwrap_or(0);
         if total != 2 {
             i += 1;
             continue;
         }
 
-        // The single read must be in the trailing statement.
-        if count_var_reads_in_stmt(&body[trailing_idx], &name) != 1 {
+        // Find the statement containing the single use.
+        let use_idx = match (i + 1..body.len())
+            .find(|&j| count_var_reads_in_stmt(&body[j], &name) > 0)
+        {
+            Some(idx) => idx,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+
+        // The read must be in an unconditional position within that
+        // statement — not inside an if/loop body where it would make
+        // an unconditional call conditional.
+        if count_unconditional_reads(&body[use_idx], &name) != 1 {
             i += 1;
             continue;
         }
 
-        // Must not be reassigned.
         if var_is_reassigned(&body[i + 1..], &name) {
             i += 1;
             continue;
         }
 
-        // Inline: remove VarDecl, substitute into trailing stmt.
+        // Inline: remove VarDecl, substitute at use site.
         let init_expr = match body.remove(i) {
             Stmt::VarDecl {
                 init: Some(expr), ..
@@ -656,10 +664,51 @@ fn try_inline_trailing(body: &mut Vec<Stmt>) {
             _ => unreachable!(),
         };
 
-        let trailing = body.len() - 1;
         let mut replacement = Some(init_expr);
-        substitute_var_in_stmt(&mut body[trailing], &name, &mut replacement);
+        substitute_var_in_stmt(&mut body[use_idx - 1], &name, &mut replacement);
         // Don't increment i — next statement shifted down.
+    }
+}
+
+/// Count reads of `name` that are in **unconditional** (guaranteed-to-execute)
+/// positions within a statement. Reads inside if/loop/switch bodies are
+/// conditional and not counted.
+fn count_unconditional_reads(stmt: &Stmt, name: &str) -> usize {
+    match stmt {
+        Stmt::VarDecl {
+            name: n, init, ..
+        } => {
+            usize::from(n == name)
+                + init
+                    .as_ref()
+                    .map_or(0, |e| count_var_reads_in_expr(e, name))
+        }
+        Stmt::Assign { target, value } => {
+            let t = if matches!(target, Expr::Var(_)) {
+                0
+            } else {
+                count_var_reads_in_expr(target, name)
+            };
+            t + count_var_reads_in_expr(value, name)
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            count_var_reads_in_expr(target, name) + count_var_reads_in_expr(value, name)
+        }
+        Stmt::Expr(e) => count_var_reads_in_expr(e, name),
+        Stmt::Return(e) => e.as_ref().map_or(0, |e| count_var_reads_in_expr(e, name)),
+        // Only the condition is unconditional; bodies are conditional.
+        Stmt::If { cond, .. } => count_var_reads_in_expr(cond, name),
+        Stmt::While { cond, .. } => count_var_reads_in_expr(cond, name),
+        Stmt::For { init, cond, .. } => {
+            init.iter()
+                .map(|s| count_unconditional_reads(s, name))
+                .sum::<usize>()
+                + count_var_reads_in_expr(cond, name)
+        }
+        Stmt::ForOf { iterable, .. } => count_var_reads_in_expr(iterable, name),
+        Stmt::Switch { value, .. } => count_var_reads_in_expr(value, name),
+        Stmt::Loop { .. } | Stmt::Dispatch { .. } => 0,
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak { .. } => 0,
     }
 }
 
@@ -5849,17 +5898,10 @@ mod tests {
     }
 
     #[test]
-    fn inline_trailing_preserves_call_order() {
-        // Pattern: const declarations with calls, then if block, then return.
-        //   const v0 = br();
-        //   const v6 = em(["x"]);
-        //   if (cond) { side_effect(); }
-        //   return [v0, v6];
-        //
-        // fold_single_use_consts can't sink br()/em() past the if block
-        // (would rearrange calls). inline_into_trailing_expr handles this
-        // by substituting in declaration order — left-to-right evaluation
-        // in the return preserves relative call order.
+    fn inline_ordered_into_return() {
+        // const v0 = br(); const v6 = em(["x"]);
+        // if (cond) { side_effect(); }
+        // return [v0, v6];
         let mut body = vec![
             Stmt::VarDecl {
                 name: "v0".into(),
@@ -5884,28 +5926,81 @@ mod tests {
             Stmt::Return(Some(Expr::ArrayInit(vec![var("v0"), var("v6")]))),
         ];
 
-        inline_into_trailing_expr(&mut body);
+        inline_ordered_single_use(&mut body);
 
-        // Both should be inlined into the return, preserving order.
-        // Expected: if, return [br(), em(["x"])]
         let ret_stmt = body.last().unwrap();
         match ret_stmt {
             Stmt::Return(Some(Expr::ArrayInit(elems))) => {
-                assert_eq!(
-                    elems[0],
-                    br_call(),
-                    "v0 should have been inlined to br(): {body:?}"
-                );
+                assert_eq!(elems[0], br_call(), "v0 inlined: {body:?}");
                 assert_eq!(
                     elems[1],
                     Expr::Call {
                         func: "em".into(),
                         args: vec![Expr::ArrayInit(vec![str_lit("x")])],
                     },
-                    "v6 should have been inlined to em([\"x\"]): {body:?}"
+                    "v6 inlined: {body:?}"
                 );
             }
             _ => panic!("Expected return with array: {body:?}"),
         }
+    }
+
+    #[test]
+    fn inline_ordered_into_if_condition() {
+        // const v0 = br();
+        // if (v0) { side_effect(); }
+        // → if (br()) { side_effect(); }
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v0".into(),
+                ty: None,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::If {
+                cond: var("v0"),
+                then_body: vec![side_effect_call()],
+                else_body: vec![],
+            },
+        ];
+
+        inline_ordered_single_use(&mut body);
+
+        assert_eq!(body.len(), 1, "VarDecl should be removed: {body:?}");
+        match &body[0] {
+            Stmt::If { cond, .. } => {
+                assert_eq!(*cond, br_call(), "v0 inlined into condition: {body:?}");
+            }
+            _ => panic!("Expected if: {body:?}"),
+        }
+    }
+
+    #[test]
+    fn inline_ordered_refuses_conditional_use() {
+        // const v0 = br();
+        // if (cond) { return [v0]; } else { return []; }
+        // v0 is used inside the if body (conditional) — must NOT inline.
+        let mut body = vec![
+            Stmt::VarDecl {
+                name: "v0".into(),
+                ty: None,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::If {
+                cond: var("cond"),
+                then_body: vec![Stmt::Return(Some(Expr::ArrayInit(vec![var("v0")])))],
+                else_body: vec![Stmt::Return(Some(empty_array()))],
+            },
+        ];
+
+        inline_ordered_single_use(&mut body);
+
+        // v0 should NOT be inlined — still a VarDecl.
+        assert_eq!(body.len(), 2, "VarDecl should remain: {body:?}");
+        assert!(
+            matches!(&body[0], Stmt::VarDecl { name, .. } if name == "v0"),
+            "v0 should not be inlined into conditional body: {body:?}"
+        );
     }
 }
