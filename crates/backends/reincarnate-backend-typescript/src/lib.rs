@@ -25,7 +25,7 @@ impl Backend for TypeScriptBackend {
         fs::create_dir_all(&input.output_dir)?;
 
         if let Some(ref runtime_pkg) = input.runtime {
-            runtime::emit_runtime(&input.output_dir, &runtime_pkg.source_dir)?;
+            runtime::emit_runtime(&input.output_dir, &runtime_pkg.source_dir, &runtime_pkg.config)?;
         }
 
         let runtime_config = input.runtime.as_ref().map(|p| &p.config);

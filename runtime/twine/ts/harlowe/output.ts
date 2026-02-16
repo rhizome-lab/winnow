@@ -17,19 +17,25 @@ interface Changer {
 }
 
 const changerStack: Changer[] = [];
+const changerFrames: number[] = [];
 
-/** Push a changer onto the stack (affects all output until popped). */
+/** Push a changer onto the stack (affects all output until popped).
+ *  Composed changers (arrays from `+` operator) push multiple items
+ *  but are tracked as a single frame so pop_changer removes them all. */
 export function push_changer(changer: Changer | Changer[]): void {
   if (Array.isArray(changer)) {
     for (const c of changer) changerStack.push(c);
+    changerFrames.push(changer.length);
   } else {
     changerStack.push(changer);
+    changerFrames.push(1);
   }
 }
 
-/** Pop the top changer from the stack. */
+/** Pop the most recently pushed changer (or composed changer group). */
 export function pop_changer(): void {
-  changerStack.pop();
+  const count = changerFrames.pop() || 1;
+  for (let i = 0; i < count; i++) changerStack.pop();
 }
 
 // --- Buffer stack ---
@@ -170,6 +176,23 @@ function applyTransition(el: HTMLElement): void {
   el.style.animation = `${animName} ${duration} ease-in-out`;
 }
 
+// --- Alignment resolution ---
+
+/** Translate Harlowe alignment arrow notation to CSS text-align.
+ *  "=><=" → center, "=>" → right, "<=" → left, "<=>" → justify.
+ *  Proportional forms like "==>" or "===>" map to right (the exact
+ *  percentage offset isn't expressible with text-align alone). */
+function resolveAlign(value: string): string {
+  const s = value.trim();
+  if (s === "=><=" || s === "=><=") return "center";
+  if (s === "<=>") return "justify";
+  if (s.endsWith("<=") && !s.startsWith("<=")) return "center";
+  if (/^=+>$/.test(s)) return "right";
+  if (/^<=+$/.test(s)) return "left";
+  // Already a CSS value (left, center, right, justify)
+  return s;
+}
+
 // --- Changer application ---
 
 /** Wrap an element with current changer stack styling. */
@@ -220,8 +243,11 @@ function applyChangers(el: HTMLElement): void {
         el.style.fontSize = String(changer.args[0]);
         break;
       case "align": {
-        const align = String(changer.args[0]);
+        const align = resolveAlign(String(changer.args[0]));
         el.style.textAlign = align;
+        if (align === "center" || align === "right") {
+          el.style.display = "block";
+        }
         break;
       }
       case "opacity":
@@ -365,6 +391,7 @@ export function clear(): void {
   activeTimers.length = 0;
   bufferStack.length = 0;
   changerStack.length = 0;
+  changerFrames.length = 0;
   elementStack.length = 0;
 }
 
