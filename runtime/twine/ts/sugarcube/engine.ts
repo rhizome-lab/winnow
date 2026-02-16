@@ -348,6 +348,26 @@ function ensureGlobals(): void {
     })(),
   };
 
+  // --- Browser (user-agent detection) ---
+  const ua = navigator.userAgent.toLowerCase();
+  g.Browser = Object.freeze({
+    userAgent: ua,
+    isMobile: Object.freeze({
+      Android: /android/.test(ua),
+      BlackBerry: /blackberry/.test(ua),
+      iOS: /iphone|ipad|ipod/.test(ua),
+      Opera: /opera mini/.test(ua),
+      Windows: /iemobile/.test(ua),
+      any() { return this.Android || this.BlackBerry || this.iOS || this.Opera || this.Windows; },
+    }),
+    isGecko: /gecko\/\d/.test(ua),
+    isIE: false,
+    ieVersion: null,
+    isOpera: /(?:^opera|\bopr\/)/.test(ua),
+    operaVersion: null,
+    isVivaldi: /vivaldi/.test(ua),
+  });
+
   // --- LoadScreen ---
   let loadScreenLockId = 0;
   const loadScreenLocks = new Set<number>();
