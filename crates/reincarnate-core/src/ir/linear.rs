@@ -1116,6 +1116,11 @@ pub fn lower_function_linear(
         }
     }
 
+    // Order-preserving inline: substitute single-use vars into trailing
+    // expressions (e.g. return arrays) in declaration order — no call
+    // reordering since left-to-right evaluation matches declaration order.
+    ast_passes::inline_into_trailing_expr(&mut full_body);
+
     ast_passes::rewrite_foreach_loops(&mut full_body);
     // Clean up dead variables left by the foreach rewrite
     // (e.g., the index register decl, single-use collection var).

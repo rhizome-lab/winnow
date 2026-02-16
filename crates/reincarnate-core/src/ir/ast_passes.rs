@@ -540,6 +540,129 @@ pub fn fold_single_use_consts(body: &mut Vec<Stmt>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Inline single-use variables into trailing expression (order-preserving)
+// ---------------------------------------------------------------------------
+
+/// Inline single-use `VarDecl`s into the body's trailing expression
+/// (typically a `Return`) in declaration order.
+///
+/// Unlike `fold_single_use_consts` which sinks expressions past intervening
+/// statements (and must refuse when that would reorder calls), this pass
+/// substitutes variables into the trailing expression in forward
+/// (declaration) order. Since JS evaluates sub-expressions left-to-right,
+/// the relative call order is preserved by construction — no sinking
+/// safety checks needed.
+///
+/// A variable qualifies if:
+/// 1. It has exactly one read, in the trailing statement.
+/// 2. It is not reassigned anywhere after the declaration.
+pub fn inline_into_trailing_expr(body: &mut Vec<Stmt>) {
+    // Fold at this level first, then recurse.
+    try_inline_trailing(body);
+
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                inline_into_trailing_expr(then_body);
+                inline_into_trailing_expr(else_body);
+            }
+            Stmt::While { body, .. } | Stmt::Loop { body } | Stmt::ForOf { body, .. } => {
+                inline_into_trailing_expr(body);
+            }
+            Stmt::For {
+                init,
+                update,
+                body,
+                ..
+            } => {
+                inline_into_trailing_expr(init);
+                inline_into_trailing_expr(update);
+                inline_into_trailing_expr(body);
+            }
+            Stmt::Dispatch { blocks, .. } => {
+                for (_, block_body) in blocks {
+                    inline_into_trailing_expr(block_body);
+                }
+            }
+            Stmt::Switch {
+                cases,
+                default_body,
+                ..
+            } => {
+                for (_, case_body) in cases {
+                    inline_into_trailing_expr(case_body);
+                }
+                inline_into_trailing_expr(default_body);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn try_inline_trailing(body: &mut Vec<Stmt>) {
+    if body.len() < 2 {
+        return;
+    }
+
+    // Precompute read counts once for the whole body.
+    let counts = precompute_var_read_counts(body);
+
+    let mut i = 0;
+    while i < body.len().saturating_sub(1) {
+        let trailing_idx = body.len() - 1;
+
+        let name = match &body[i] {
+            Stmt::VarDecl {
+                name,
+                init: Some(_),
+                ..
+            } => name.clone(),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+
+        // Total reads includes the VarDecl name itself (1).
+        // We need exactly 1 additional read (in the trailing stmt).
+        let total = counts.get(name.as_str()).copied().unwrap_or(0);
+        if total != 2 {
+            i += 1;
+            continue;
+        }
+
+        // The single read must be in the trailing statement.
+        if count_var_reads_in_stmt(&body[trailing_idx], &name) != 1 {
+            i += 1;
+            continue;
+        }
+
+        // Must not be reassigned.
+        if var_is_reassigned(&body[i + 1..], &name) {
+            i += 1;
+            continue;
+        }
+
+        // Inline: remove VarDecl, substitute into trailing stmt.
+        let init_expr = match body.remove(i) {
+            Stmt::VarDecl {
+                init: Some(expr), ..
+            } => expr,
+            _ => unreachable!(),
+        };
+
+        let trailing = body.len() - 1;
+        let mut replacement = Some(init_expr);
+        substitute_var_in_stmt(&mut body[trailing], &name, &mut replacement);
+        // Don't increment i — next statement shifted down.
+    }
+}
+
 /// Batch version: precompute all variable read counts once, then process all
 /// VarDecl candidates in a single forward pass. O(n) per call instead of O(n²).
 fn try_fold_batch(body: &mut Vec<Stmt>) -> bool {
@@ -627,12 +750,12 @@ fn try_fold_batch(body: &mut Vec<Stmt>) -> bool {
                     } => init,
                     _ => unreachable!(),
                 };
-                // An expression with no variable references (e.g. `[]`, `0`,
-                // `"str"`, `br()`, `em(["x"])`) can be sunk past any
-                // statement safely — its result doesn't depend on any
-                // mutable state that intervening statements could modify.
-                let is_sinkable = !expr_has_any_var_ref(init);
-                if !is_sinkable {
+                // Pure constant with no variable references (e.g. `[]`, `0`,
+                // `"str"`) can be sunk past any statement safely —
+                // evaluation order doesn't matter.
+                let is_trivial_const =
+                    !expr_has_side_effects(init) && !expr_has_any_var_ref(init);
+                if !is_trivial_const {
                     let can_sink_path = is_stable_path(init)
                         && body[i + 1..use_idx]
                             .iter()
@@ -5726,51 +5849,60 @@ mod tests {
     }
 
     #[test]
-    fn no_var_ref_expr_sinks_past_if_stmts() {
-        // Pattern: merge_decl_init has produced:
-        //   let v0 = [];
+    fn inline_trailing_preserves_call_order() {
+        // Pattern: const declarations with calls, then if block, then return.
+        //   const v0 = br();
+        //   const v6 = em(["x"]);
         //   if (cond) { side_effect(); }
-        //   const v11 = br();
-        //   return [v0, v11];
-        // Both v0 (trivially constant) and v11 (Call with no var refs)
-        // can be sunk past the if statement.
+        //   return [v0, v6];
+        //
+        // fold_single_use_consts can't sink br()/em() past the if block
+        // (would rearrange calls). inline_into_trailing_expr handles this
+        // by substituting in declaration order — left-to-right evaluation
+        // in the return preserves relative call order.
         let mut body = vec![
             Stmt::VarDecl {
                 name: "v0".into(),
                 ty: None,
-                init: Some(empty_array()),
-                mutable: true,
+                init: Some(br_call()),
+                mutable: false,
+            },
+            Stmt::VarDecl {
+                name: "v6".into(),
+                ty: None,
+                init: Some(Expr::Call {
+                    func: "em".into(),
+                    args: vec![Expr::ArrayInit(vec![str_lit("x")])],
+                }),
+                mutable: false,
             },
             Stmt::If {
                 cond: var("cond"),
                 then_body: vec![side_effect_call()],
                 else_body: vec![],
             },
-            Stmt::VarDecl {
-                name: "v11".into(),
-                ty: None,
-                init: Some(br_call()),
-                mutable: false,
-            },
-            Stmt::Return(Some(Expr::ArrayInit(vec![var("v0"), var("v11")]))),
+            Stmt::Return(Some(Expr::ArrayInit(vec![var("v0"), var("v6")]))),
         ];
 
-        fold_single_use_consts(&mut body);
+        inline_into_trailing_expr(&mut body);
 
-        // Both should be inlined: v0 as [], v11 as br().
-        // Expected: if, return [[], br()]
+        // Both should be inlined into the return, preserving order.
+        // Expected: if, return [br(), em(["x"])]
         let ret_stmt = body.last().unwrap();
         match ret_stmt {
             Stmt::Return(Some(Expr::ArrayInit(elems))) => {
                 assert_eq!(
                     elems[0],
-                    empty_array(),
-                    "v0 should have been inlined to []: {body:?}"
+                    br_call(),
+                    "v0 should have been inlined to br(): {body:?}"
                 );
                 assert_eq!(
                     elems[1],
-                    br_call(),
-                    "v11 should have been inlined to br(): {body:?}"
+                    Expr::Call {
+                        func: "em".into(),
+                        args: vec![Expr::ArrayInit(vec![str_lit("x")])],
+                    },
+                    "v6 should have been inlined to em([\"x\"]): {body:?}"
                 );
             }
             _ => panic!("Expected return with array: {body:?}"),
