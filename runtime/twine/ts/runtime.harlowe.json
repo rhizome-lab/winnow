@@ -1,7 +1,7 @@
 {
   "system_modules": {
     "Harlowe.State": { "path": "harlowe/state" },
-    "Harlowe.Output": { "path": "harlowe/output" },
+    "Harlowe.H": { "path": "harlowe/context" },
     "Harlowe.Navigation": { "path": "harlowe/navigation" },
     "Harlowe.Engine": { "path": "harlowe/engine" }
   },
@@ -17,24 +17,8 @@
   "function_signatures": {},
   "function_modules": [
     {
-      "names": [
-        "color", "background", "textStyle", "font", "align", "opacity",
-        "css", "transition", "transitionTime", "hidden", "textSize",
-        "textRotateZ", "collapse", "nobr", "hoverStyle", "styled",
-        "el", "strong", "em", "del", "sup", "sub",
-        "br", "hr", "img", "voidEl",
-        "link", "linkCb", "live",
-        "printVal", "displayPassage"
-      ],
-      "path": "harlowe/output"
-    },
-    {
       "names": ["Colors", "Collections"],
       "path": "harlowe/engine"
     }
-  ],
-  "pass_defaults": {
-    "fold-array-init-push": true,
-    "merge-adjacent-push": true
-  }
+  ]
 }

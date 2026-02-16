@@ -4,8 +4,7 @@
  * the compiled passage code.
  */
 
-import type { Changer, ContentNode } from "./output";
-import * as Output from "./output";
+import { type Changer, HarloweContext, requestStop } from "./context";
 import * as State from "./state";
 import * as Navigation from "./navigation";
 
@@ -50,7 +49,7 @@ export function not(val: any): boolean {
 
 /** `(stop:)` — signals the current (live:) interval to stop. */
 export function stop(): void {
-  Output.requestStop();
+  requestStop();
 }
 
 // --- Save/load ---
@@ -438,7 +437,7 @@ export function color_op(name: string, ...args: any[]): string {
 export function dom_macro(method: string, ...args: any[]): void {
   const selector = args.length > 0 ? String(args[0]) : "";
   const callback = args.length > 1 && typeof args[args.length - 1] === "function"
-    ? args[args.length - 1] as () => ContentNode[]
+    ? args[args.length - 1] as (h: HarloweContext) => void
     : undefined;
 
   const container = document.getElementById("passages");
@@ -450,8 +449,8 @@ export function dom_macro(method: string, ...args: any[]): void {
       targets.forEach(el => {
         el.innerHTML = "";
         if (callback) {
-          const nodes = callback();
-          Output.render(el, nodes);
+          const h = new HarloweContext(el);
+          try { callback(h); } finally { h.closeAll(); }
         }
       });
       break;
@@ -460,8 +459,8 @@ export function dom_macro(method: string, ...args: any[]): void {
       const targets = container.querySelectorAll(selector);
       targets.forEach(el => {
         if (callback) {
-          const nodes = callback();
-          Output.render(el, nodes);
+          const h = new HarloweContext(el);
+          try { callback(h); } finally { h.closeAll(); }
         }
       });
       break;
@@ -470,9 +469,9 @@ export function dom_macro(method: string, ...args: any[]): void {
       const targets = container.querySelectorAll(selector);
       targets.forEach(el => {
         if (callback) {
-          const nodes = callback();
           const frag = document.createDocumentFragment();
-          Output.render(frag as any, nodes);
+          const h = new HarloweContext(frag);
+          try { callback(h); } finally { h.closeAll(); }
           el.insertBefore(frag, el.firstChild);
         }
       });
@@ -489,7 +488,10 @@ export function dom_macro(method: string, ...args: any[]): void {
       break;
     }
     case "rerun":
-      if (callback) callback();
+      if (callback) {
+        const h = new HarloweContext(container);
+        try { callback(h); } finally { h.closeAll(); }
+      }
       break;
     default:
       console.warn(`[harlowe] unknown DOM macro: ${method}`);
@@ -502,7 +504,7 @@ export function dom_macro(method: string, ...args: any[]): void {
 export function click_macro(method: string, ...args: any[]): void {
   const selector = args.length > 0 ? String(args[0]) : "";
   const callback = args.length > 1 && typeof args[args.length - 1] === "function"
-    ? args[args.length - 1] as () => ContentNode[]
+    ? args[args.length - 1] as (h: HarloweContext) => void
     : undefined;
 
   const container = document.getElementById("passages");
@@ -513,19 +515,22 @@ export function click_macro(method: string, ...args: any[]): void {
     (el as HTMLElement).style.cursor = "pointer";
     el.addEventListener("click", () => {
       if (!callback) return;
-      const nodes = callback();
       if (method === "click-replace") {
         el.innerHTML = "";
-        Output.render(el, nodes);
+        const h = new HarloweContext(el);
+        try { callback(h); } finally { h.closeAll(); }
       } else if (method === "click-append") {
-        Output.render(el, nodes);
+        const h = new HarloweContext(el);
+        try { callback(h); } finally { h.closeAll(); }
       } else if (method === "click-prepend") {
         const frag = document.createDocumentFragment();
-        Output.render(frag as any, nodes);
+        const h = new HarloweContext(frag);
+        try { callback(h); } finally { h.closeAll(); }
         el.insertBefore(frag, el.firstChild);
       } else {
         // plain click — render inline
-        Output.render(el, nodes);
+        const h = new HarloweContext(el);
+        try { callback(h); } finally { h.closeAll(); }
       }
     }, { once: true });
   });
