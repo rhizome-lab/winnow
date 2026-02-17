@@ -122,23 +122,24 @@ export class HarloweState implements SaveableState {
   // --- SaveableState implementation ---
 
   serialize(): string {
+    const top = this.history[this.history.length - 1];
     return JSON.stringify({
-      history: this.history,
+      title: top?.title,
       variables: this.storyVars,
     });
   }
 
   deserialize(data: string): string | undefined {
     const parsed = JSON.parse(data);
-    this.history.length = 0;
-    for (const moment of parsed.history) {
-      this.history.push(moment);
-    }
     for (const key of Object.keys(this.storyVars)) {
       delete this.storyVars[key];
     }
     Object.assign(this.storyVars, parsed.variables);
-    const top = this.history[this.history.length - 1];
-    return top?.title;
+    // Reset history — a loaded save starts a fresh history from the restored passage
+    this.history.length = 0;
+    if (parsed.title) {
+      this.pushMoment(parsed.title);
+    }
+    return parsed.title;
   }
 }
