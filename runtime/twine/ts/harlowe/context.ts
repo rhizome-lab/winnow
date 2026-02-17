@@ -79,13 +79,24 @@ function resolveColor(value: string): string {
 // --- Transition animation support ---
 // Keyframe definitions are in the extracted format CSS (format_harlowe.css).
 
+/** Normalize a transition name to match Harlowe's CSS selectors (strip hyphens/underscores, lowercase). */
+function normalizeT8n(name: string): string {
+  return name.toLowerCase().replace(/[-_]/g, "");
+}
+
+/** Ensure a duration value has a CSS time unit (defaults to seconds). */
+function normalizeDuration(d: string): string {
+  if (/^[\d.]+$/.test(d)) return d + "s";
+  return d;
+}
+
 /** Create a <tw-transition-container> wrapping the given element's children. */
 function wrapInTransitionContainer(parent: HTMLElement, name: string, duration?: string, doc: DocumentFactory = document): void {
   const container = doc.createElement("tw-transition-container") as HTMLElement;
-  container.setAttribute("data-t8n", name);
+  container.setAttribute("data-t8n", normalizeT8n(name));
   container.classList.add("transition-in");
   if (duration) {
-    container.style.animationDuration = duration;
+    container.style.animationDuration = normalizeDuration(duration);
   }
   // Move all children into the transition container
   while (parent.firstChild) {
@@ -250,9 +261,9 @@ export function departOldPassage(story: Element, depart?: { name: string; durati
   const oldPassages = story.querySelectorAll(":scope > tw-passage");
   for (const passage of oldPassages) {
     const container = doc.createElement("tw-transition-container") as HTMLElement;
-    container.setAttribute("data-t8n", depart.name);
+    container.setAttribute("data-t8n", normalizeT8n(depart.name));
     container.classList.add("transition-out");
-    if (depart.duration) container.style.animationDuration = depart.duration;
+    if (depart.duration) container.style.animationDuration = normalizeDuration(depart.duration);
     story.insertBefore(container, passage);
     container.appendChild(passage);
     container.addEventListener("animationend", () => container.remove(), { once: true });
@@ -571,6 +582,10 @@ export class HarloweContext {
 
   transition(v: string, ...children: Child[]): Node {
     return this.styled({ name: "transition", args: [v] }, ...children);
+  }
+
+  transitionDepart(v: string, ...children: Child[]): Node {
+    return this.styled({ name: "transition-depart", args: [v] }, ...children);
   }
 
   transitionTime(v: number, ...children: Child[]): Node {
