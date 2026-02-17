@@ -171,15 +171,56 @@ fn extract_tagged_blocks(html: &str, id: &str) -> Vec<String> {
     blocks
 }
 
-/// Decode common HTML entities in passage source.
+/// Decode HTML entities in passage source.
+///
+/// Handles named entities, decimal numeric (`&#NNN;`), and hex (`&#xHH;`).
 fn decode_html_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&#x27;", "'")
-        .replace("&#x2F;", "/")
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(semi) = s[i..].find(';') {
+                let entity = &s[i + 1..i + semi];
+                if let Some(decoded) = decode_entity(entity) {
+                    result.push(decoded);
+                    i += semi + 1;
+                    continue;
+                }
+            }
+        }
+        // Non-entity byte — copy as-is
+        let ch = s[i..].chars().next().unwrap();
+        result.push(ch);
+        i += ch.len_utf8();
+    }
+
+    result
+}
+
+/// Decode a single HTML entity (without the `&` prefix and `;` suffix).
+fn decode_entity(entity: &str) -> Option<char> {
+    // Named entities
+    match entity {
+        "amp" => return Some('&'),
+        "lt" => return Some('<'),
+        "gt" => return Some('>'),
+        "quot" => return Some('"'),
+        "apos" => return Some('\''),
+        "nbsp" => return Some('\u{00A0}'),
+        _ => {}
+    }
+    // Decimal numeric: &#NNN;
+    if let Some(digits) = entity.strip_prefix('#') {
+        if let Some(hex) = digits.strip_prefix('x').or_else(|| digits.strip_prefix('X')) {
+            // Hex: &#xHH;
+            return u32::from_str_radix(hex, 16).ok().and_then(char::from_u32);
+        }
+        // Decimal: &#NNN;
+        return digits.parse::<u32>().ok().and_then(char::from_u32);
+    }
+    None
 }
 
 #[derive(Debug)]

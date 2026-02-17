@@ -111,28 +111,45 @@ pub fn preprocess(src: &str) -> Preprocessed {
 
         // Check for keyword at word boundary
         if ch.is_ascii_alphabetic() {
-            // Don't replace after `.` (property access)
+            // Don't replace when part of a larger identifier (`_is`, `$toString`)
+            // — check the character immediately before in the source.
+            // Also don't replace after `.` (property access) — check with
+            // whitespace skipping since `obj . is` is still property access.
+            let part_of_identifier = i > 0 && {
+                let prev = bytes[i - 1];
+                prev == b'_' || prev == b'$' || prev.is_ascii_alphanumeric()
+            };
             let after_dot = {
                 let mut j = out.len();
-                // Skip whitespace backwards in output
                 while j > 0 && matches!(out.as_bytes()[j - 1], b' ' | b'\t') {
                     j -= 1;
                 }
                 j > 0 && out.as_bytes()[j - 1] == b'.'
             };
+            let skip_keyword = part_of_identifier || after_dot;
 
-            if !after_dot {
+            if !skip_keyword {
                 if let Some((replacement, keyword_len, kind)) = try_match_keyword(bytes, i, len) {
-                    let pos = out.len();
-                    out.push_str(replacement);
-                    match kind {
-                        KeywordKind::Def => def_positions.push(pos),
-                        KeywordKind::Ndef => ndef_positions.push(pos),
-                        KeywordKind::Clone => clone_positions.push(pos),
-                        KeywordKind::Normal => {}
+                    // Don't replace keywords used as object property names (followed by `:`)
+                    let before_colon = {
+                        let mut j = i + keyword_len;
+                        while j < len && matches!(bytes[j], b' ' | b'\t') {
+                            j += 1;
+                        }
+                        j < len && bytes[j] == b':'
+                    };
+                    if !before_colon {
+                        let pos = out.len();
+                        out.push_str(replacement);
+                        match kind {
+                            KeywordKind::Def => def_positions.push(pos),
+                            KeywordKind::Ndef => ndef_positions.push(pos),
+                            KeywordKind::Clone => clone_positions.push(pos),
+                            KeywordKind::Normal => {}
+                        }
+                        i += keyword_len;
+                        continue;
                     }
-                    i += keyword_len;
-                    continue;
                 }
             }
 
@@ -320,6 +337,23 @@ mod tests {
     #[test]
     fn block_comment_not_replaced() {
         assert_eq!(pp("$x /* is comment */ + 1"), "$x /* is comment */ + 1");
+    }
+
+    #[test]
+    fn object_property_not_replaced() {
+        assert_eq!(pp("{ from: 0, to: 200 }"), "{ from: 0, to: 200 }");
+        assert_eq!(pp("{ is: true }"), "{ is: true }");
+        assert_eq!(pp("{ or: 1 }"), "{ or: 1 }");
+    }
+
+    #[test]
+    fn identifier_suffix_not_replaced() {
+        // `_is` is an identifier, not `_` + keyword `is`
+        assert_eq!(pp("_is"), "_is");
+        assert_eq!(pp("_to"), "_to");
+        assert_eq!(pp("_or"), "_or");
+        assert_eq!(pp("$isReady"), "$isReady");
+        assert_eq!(pp("count"), "count"); // not `co` + `not` somehow
     }
 
     #[test]
