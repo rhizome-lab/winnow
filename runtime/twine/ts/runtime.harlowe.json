@@ -1,12 +1,16 @@
 {
   "system_modules": {
-    "Harlowe.State": { "path": "harlowe/state" },
+    "Harlowe.State": { "path": "harlowe/state", "stateful": true },
     "Harlowe.H": { "path": "harlowe/context" },
-    "Harlowe.Navigation": { "path": "harlowe/navigation" },
-    "Harlowe.Engine": { "path": "harlowe/engine" }
+    "Harlowe.Navigation": { "path": "harlowe/navigation", "stateful": true },
+    "Harlowe.Engine": { "path": "harlowe/engine", "stateful": true }
+  },
+  "runtime_type": {
+    "name": "HarloweRuntime",
+    "path": "harlowe/runtime"
   },
   "scaffold": {
-    "imports": [{ "names": ["createHarloweRuntime"], "path": "harlowe/navigation" }],
+    "imports": [{ "names": ["createHarloweRuntime"], "path": "harlowe/runtime" }],
     "entry": "{userScripts}\ncreateHarloweRuntime().start({passages}, {startPassage}, {passageTags});",
     "dependencies": {
       "keybinds": "github:pterror/keybinds"

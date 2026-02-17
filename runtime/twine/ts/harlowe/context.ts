@@ -13,8 +13,7 @@
  * - String children: `h.em("hello")` — shorthand for text node.
  */
 
-import * as State from "./state";
-import * as Navigation from "./navigation";
+import type { HarloweRuntime } from "./runtime";
 import { scheduleInterval, cancelInterval } from "../platform";
 import type { DocumentFactory } from "../../../shared/ts/render-root";
 
@@ -27,7 +26,7 @@ export interface Changer {
 /** A child argument to an element method. */
 type Child = Node | string | (() => void);
 
-// --- Color resolution (moved from output.ts) ---
+// --- Color resolution ---
 
 const HARLOWE_COLORS: Record<string, [number, number, number]> = {
   red: [0xe6, 0x19, 0x19],
@@ -77,7 +76,6 @@ function resolveColor(value: string): string {
 }
 
 // --- Transition animation support ---
-// Keyframe definitions are in the extracted format CSS (format_harlowe.css).
 
 /** Normalize a transition name to match Harlowe's CSS selectors (strip hyphens/underscores, lowercase). */
 function normalizeT8n(name: string): string {
@@ -98,12 +96,10 @@ function wrapInTransitionContainer(parent: HTMLElement, name: string, duration?:
   if (duration) {
     container.style.animationDuration = normalizeDuration(duration);
   }
-  // Move all children into the transition container
   while (parent.firstChild) {
     container.appendChild(parent.firstChild);
   }
   parent.appendChild(container);
-  // Remove the container once the animation finishes, promoting children back up
   container.addEventListener("animationend", () => {
     while (container.firstChild) {
       parent.insertBefore(container.firstChild, container);
@@ -198,7 +194,6 @@ function applyChanger(el: HTMLElement, changer: Changer, doc: DocumentFactory = 
       const hoverChanger = changer.args[0] as Changer;
       const saved = new Map<string, string>();
       el.addEventListener("mouseenter", () => {
-        // Save current values before applying hover styles
         const probe = doc.createElement("span");
         applyChanger(probe, hoverChanger, doc);
         for (let i = 0; i < probe.style.length; i++) {
@@ -239,17 +234,14 @@ function applyChangers(el: HTMLElement, changers: Changer | Changer[], populate?
   return t;
 }
 
-// --- Timer tracking ---
+// --- Timer management ---
 
-const activeTimers: number[] = [];
-
-
-/** Cancel all active (live:) timers. */
-export function cancelTimers(): void {
-  for (const id of activeTimers) {
+/** Cancel all active (live:) timers in the given timer list. */
+export function cancelTimers(timers: number[]): void {
+  for (const id of timers) {
     cancelInterval(id);
   }
-  activeTimers.length = 0;
+  timers.length = 0;
 }
 
 /** Animate out old passages with the given depart transition, or remove immediately. */
@@ -271,14 +263,14 @@ export function departOldPassage(story: Element, depart?: { name: string; durati
 }
 
 /** Clear the tw-story container and cancel active timers. */
-export function clear(container?: Element | ShadowRoot | null): void {
+export function clear(container?: Element | ShadowRoot | null, timers?: number[]): void {
   const target = container ?? document.querySelector("tw-story");
   if (target) {
     while (target.firstChild) {
       target.removeChild(target.firstChild);
     }
   }
-  cancelTimers();
+  if (timers) cancelTimers(timers);
 }
 
 // --- HarloweContext ---
@@ -286,6 +278,7 @@ export function clear(container?: Element | ShadowRoot | null): void {
 export class HarloweContext {
   private containerStack: (Element | DocumentFragment)[];
   private prevBr = false;
+  private rt: HarloweRuntime;
 
   /** Document-like factory for creating DOM nodes. */
   doc: DocumentFactory;
@@ -296,8 +289,9 @@ export class HarloweContext {
   /** When true, signals the enclosing (live:) interval to stop. */
   stopLive = false;
 
-  constructor(container: Element | DocumentFragment, doc?: DocumentFactory) {
+  constructor(container: Element | DocumentFragment, rt: HarloweRuntime, doc?: DocumentFactory) {
     this.containerStack = [container];
+    this.rt = rt;
     this.doc = doc ?? (container instanceof Element ? container.ownerDocument : document);
   }
 
@@ -400,35 +394,21 @@ export class HarloweContext {
   }
 
   /** <strong> */
-  strong(...children: Child[]): Node {
-    return this.el("strong", ...children);
-  }
-
+  strong(...children: Child[]): Node { return this.el("strong", ...children); }
   /** <em> */
-  em(...children: Child[]): Node {
-    return this.el("em", ...children);
-  }
-
+  em(...children: Child[]): Node { return this.el("em", ...children); }
   /** <del> */
-  del(...children: Child[]): Node {
-    return this.el("del", ...children);
-  }
-
+  del(...children: Child[]): Node { return this.el("del", ...children); }
   /** <sup> */
-  sup(...children: Child[]): Node {
-    return this.el("sup", ...children);
-  }
-
+  sup(...children: Child[]): Node { return this.el("sup", ...children); }
   /** <sub> */
-  sub(...children: Child[]): Node {
-    return this.el("sub", ...children);
-  }
+  sub(...children: Child[]): Node { return this.el("sub", ...children); }
 
   // --- Interactive elements ---
 
   /** Passage navigation link (or broken link if passage doesn't exist). */
   link(text: string, passage: string): Node {
-    if (!Navigation.has(passage)) {
+    if (!this.rt.Navigation.has(passage)) {
       const el = this.doc.createElement("tw-broken-link") as HTMLElement;
       el.textContent = text;
       el.setAttribute("passage-name", passage);
@@ -439,9 +419,9 @@ export class HarloweContext {
     const el = this.doc.createElement("tw-link") as HTMLElement;
     el.setAttribute("tabindex", "0");
     el.textContent = text;
-    el.addEventListener("click", () => Navigation.goto(passage));
+    el.addEventListener("click", () => this.rt.Navigation.goto(passage));
     el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") Navigation.goto(passage);
+      if (e.key === "Enter") this.rt.Navigation.goto(passage);
     });
     this.current().appendChild(el);
     this.prevBr = false;
@@ -454,9 +434,10 @@ export class HarloweContext {
     el.setAttribute("tabindex", "0");
     el.textContent = text;
     const doc = this.doc;
+    const rt = this.rt;
     const handler = () => {
       const frag = doc.createDocumentFragment();
-      const subH = new HarloweContext(frag, doc);
+      const subH = new HarloweContext(frag, rt, doc);
       try {
         cb(subH);
       } finally {
@@ -484,9 +465,11 @@ export class HarloweContext {
     this.prevBr = false;
     const ms = interval * 1000;
     const doc = this.doc;
+    const rt = this.rt;
+    const timers = rt.Navigation.activeTimers;
     const id = scheduleInterval(() => {
       hook.innerHTML = "";
-      const subH = new HarloweContext(hook, doc);
+      const subH = new HarloweContext(hook, rt, doc);
       try {
         cb(subH);
       } finally {
@@ -496,7 +479,7 @@ export class HarloweContext {
         cancelInterval(id);
       }
     }, ms);
-    activeTimers.push(id);
+    timers.push(id);
     return expr;
   }
 
@@ -528,8 +511,8 @@ export class HarloweContext {
     include.setAttribute("passage", name);
     this.current().appendChild(include);
     this.prevBr = false;
-    const subH = new HarloweContext(include, this.doc);
-    Navigation.display(name, subH);
+    const subH = new HarloweContext(include, this.rt, this.doc);
+    this.rt.Navigation.display(name, subH);
     subH.closeAll();
   }
 
@@ -549,19 +532,15 @@ export class HarloweContext {
   color(v: string, ...children: Child[]): Node {
     return this.styled({ name: "color", args: [v] }, ...children);
   }
-
   background(v: string, ...children: Child[]): Node {
     return this.styled({ name: "background", args: [v] }, ...children);
   }
-
   textStyle(v: string, ...children: Child[]): Node {
     return this.styled({ name: "text-style", args: [v] }, ...children);
   }
-
   font(v: string, ...children: Child[]): Node {
     return this.styled({ name: "font", args: [v] }, ...children);
   }
-
   align(v: string, ...children: Child[]): Node {
     const el = this.doc.createElement("tw-align") as HTMLElement;
     const a = resolveAlign(v);
@@ -571,39 +550,30 @@ export class HarloweContext {
     this.prevBr = false;
     return el;
   }
-
   opacity(v: number, ...children: Child[]): Node {
     return this.styled({ name: "opacity", args: [v] }, ...children);
   }
-
   css(v: string, ...children: Child[]): Node {
     return this.styled({ name: "css", args: [v] }, ...children);
   }
-
   transition(v: string, ...children: Child[]): Node {
     return this.styled({ name: "transition", args: [v] }, ...children);
   }
-
   transitionDepart(v: string, ...children: Child[]): Node {
     return this.styled({ name: "transition-depart", args: [v] }, ...children);
   }
-
   transitionTime(v: number, ...children: Child[]): Node {
     return this.styled({ name: "transition-time", args: [v] }, ...children);
   }
-
   hidden(...children: Child[]): Node {
     return this.styled({ name: "hidden", args: [true] }, ...children);
   }
-
   textSize(v: string, ...children: Child[]): Node {
     return this.styled({ name: "text-size", args: [v] }, ...children);
   }
-
   textRotateZ(v: number, ...children: Child[]): Node {
     return this.styled({ name: "text-rotate-z", args: [v] }, ...children);
   }
-
   collapse(...children: Child[]): Node {
     const el = this.doc.createElement("tw-collapsed") as HTMLElement;
     this.appendChildren(el, children);
@@ -611,11 +581,9 @@ export class HarloweContext {
     this.prevBr = false;
     return el;
   }
-
   nobr(...children: Child[]): Node {
     return this.styled({ name: "nobr", args: [true] }, ...children);
   }
-
   verbatim(...children: Child[]): Node {
     const el = this.doc.createElement("tw-verbatim") as HTMLElement;
     this.appendChildren(el, children);
@@ -623,7 +591,6 @@ export class HarloweContext {
     this.prevBr = false;
     return el;
   }
-
   hoverStyle(v: any, ...children: Child[]): Node {
     return this.styled({ name: "hover-style", args: [v] }, ...children);
   }
@@ -632,13 +599,10 @@ export class HarloweContext {
 
   /** Signal a `(column:)` break — pops up to the tw-columns parent, starts a new tw-column. */
   columnBreak(): void {
-    // Walk up the container stack to find the tw-columns element
     for (let i = this.containerStack.length - 1; i >= 0; i--) {
       const el = this.containerStack[i];
       if (el instanceof HTMLElement && el.tagName.toLowerCase() === "tw-columns") {
-        // Pop back to tw-columns level
         while (this.containerStack.length > i + 1) this.containerStack.pop();
-        // Create a new tw-column inside the tw-columns
         const col = this.doc.createElement("tw-column") as HTMLElement;
         col.style.flex = "1";
         el.appendChild(col);
@@ -646,24 +610,23 @@ export class HarloweContext {
         return;
       }
     }
-    // Not inside a tw-columns — no-op
   }
 
   // --- State ---
 
   /** Get a story variable. */
   get(name: string): any {
-    return State.get(name);
+    return this.rt.State.get(name);
   }
 
   /** Set a story variable. */
   set(name: string, value: any): void {
-    State.set(name, value);
+    this.rt.State.set(name, value);
   }
 
   /** Get the `it` keyword value. */
   get_it(): any {
-    return State.get_it();
+    return this.rt.State.get_it();
   }
 
   // --- Control flow ---
@@ -677,6 +640,6 @@ export class HarloweContext {
 
   /** Navigate to a passage. */
   goto(target: string): void {
-    Navigation.goto(target);
+    this.rt.Navigation.goto(target);
   }
 }

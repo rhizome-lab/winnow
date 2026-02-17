@@ -5,35 +5,563 @@
  */
 
 import { type Changer, HarloweContext } from "./context";
-import * as State from "./state";
-import * as Navigation from "./navigation";
-import { nav } from "./navigation";
+import type { HarloweRuntime } from "./runtime";
+import type { DocumentFactory } from "../../../shared/ts/render-root";
 
-// --- DOM helpers ---
+export class HarloweEngine {
+  private rt: HarloweRuntime;
 
-/** Get the document factory (from nav.doc or global document). */
-function doc() { return nav.doc; }
-
-/** Get the tw-story container (from nav.container or querySelector). */
-function story() { return nav.container ?? story(); }
-
-/** Get the current tw-passage or tw-story. */
-function passage() {
-  const s = story();
-  if (s && (s as Element).querySelector) {
-    return (s as Element).querySelector("tw-passage") ?? s;
+  constructor(rt: HarloweRuntime) {
+    this.rt = rt;
   }
-  return s;
+
+  // --- DOM helpers ---
+
+  /** Get the document factory. */
+  private doc() { return this.rt.Navigation.doc; }
+
+  /** Get the tw-story container. */
+  private story() { return this.rt.Navigation.container ?? document.querySelector("tw-story"); }
+
+  /** Get the current tw-passage or tw-story. */
+  private passage() {
+    const s = this.story();
+    if (s && (s as Element).querySelector) {
+      return (s as Element).querySelector("tw-passage") ?? s;
+    }
+    return s;
+  }
+
+  // --- Changers ---
+
+  /** Create a changer value from a macro name and arguments. */
+  create_changer(name: string, ...args: any[]): Changer {
+    return { name, args };
+  }
+
+  // --- Changer composition ---
+
+  /** Harlowe `+` operator — composes changers, concatenates arrays/maps/sets,
+   *  or falls back to JS `+` for other types. */
+  plus(a: any, b: any): any {
+    if (isChanger(a) && isChanger(b)) return composeChangers(a, b);
+    if (Array.isArray(a) && isChanger(b)) return composeChangers(a as any, b);
+    if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
+    if (a instanceof Map && b instanceof Map) return new Map([...a, ...b]);
+    if (a instanceof Set && b instanceof Set) return new Set([...a, ...b]);
+    return a + b;
+  }
+
+  // --- Boolean/logic ---
+
+  /** Harlowe `not` operator. */
+  not(val: any): boolean {
+    return !val;
+  }
+
+  // --- Save/load ---
+
+  /** `(save-game: slot)` — save current game state. Returns true on success. */
+  save_game(slot: any): boolean {
+    return this.rt.State.saveSlot(String(slot));
+  }
+
+  /** `(load-game: slot)` — load game state and navigate to saved passage. */
+  load_game(slot: any): void {
+    const title = this.rt.State.loadSlot(String(slot));
+    if (title) {
+      this.rt.Navigation.goto(title);
+    }
+  }
+
+  // --- Dialogs ---
+
+  /** `(alert: message)` */
+  alert(message: any): void {
+    window.alert(String(message));
+  }
+
+  /** `(prompt: message, default?)` */
+  prompt(message: any, defaultValue?: any): string | null {
+    return window.prompt(String(message), defaultValue != null ? String(defaultValue) : undefined);
+  }
+
+  /** `(confirm: message)` */
+  confirm(message: any): boolean {
+    return window.confirm(String(message));
+  }
+
+  // --- Collection operations ---
+
+  /** `contains` operator: checks if a collection contains a value. */
+  contains(collection: any, value: any): boolean {
+    return contains(collection, value);
+  }
+
+  /** `is in` operator: checks if a value is in a collection. */
+  is_in(value: any, collection: any): boolean {
+    return contains(collection, value);
+  }
+
+  // --- Value macros ---
+
+  /** `(random: min, max)` */
+  random(...args: any[]): number {
+    if (args.length >= 2) {
+      const min = Math.floor(Number(args[0]));
+      const max = Math.floor(Number(args[1]));
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+    if (args.length === 1) {
+      return Math.floor(Math.random() * Math.floor(Number(args[0])));
+    }
+    return Math.random();
+  }
+
+  /** `(either: ...values)` — pick one at random. */
+  either(...args: any[]): any {
+    return args[Math.floor(Math.random() * args.length)];
+  }
+
+  /** `(str: value)` / `(string: value)` */
+  str(...args: any[]): string {
+    return args.map(String).join("");
+  }
+
+  /** `(num: value)` / `(number: value)` */
+  num(value: any): number {
+    return Number(value);
+  }
+
+  /** `(a: ...values)` / `(array: ...values)` */
+  array(...args: any[]): any[] {
+    return [...args];
+  }
+
+  /** `(dm: key, value, ...)` / `(datamap: key, value, ...)` */
+  datamap(...args: any[]): Map<any, any> {
+    const m = new Map();
+    for (let i = 0; i + 1 < args.length; i += 2) {
+      m.set(args[i], args[i + 1]);
+    }
+    return m;
+  }
+
+  /** `(ds: ...values)` / `(dataset: ...values)` */
+  dataset(...args: any[]): Set<any> {
+    return new Set(args);
+  }
+
+  // --- Property access ---
+
+  /** `$var's property` or `(nth: n) of $arr` */
+  get_property(obj: any, prop: any): any {
+    return get_property(obj, prop);
+  }
+
+  /** `$var's property to value` */
+  set_property(obj: any, prop: any, value: any): void {
+    set_property(obj, prop, value);
+  }
+
+  // --- Math ---
+
+  /** `(lerp: a, b, t)` */
+  lerp(a: any, b: any, t: any): number {
+    const na = Number(a), nb = Number(b), nt = Number(t);
+    return na + (nb - na) * nt;
+  }
+
+  /** Math functions dispatched by name (fallback for unknown ops). */
+  math(name: string, ...args: any[]): number {
+    const nums = args.map(Number);
+    switch (name) {
+      case "round": return Math.round(nums[0]);
+      case "floor": return Math.floor(nums[0]);
+      case "ceil": return Math.ceil(nums[0]);
+      case "abs": return Math.abs(nums[0]);
+      case "min": return Math.min(...nums);
+      case "max": return Math.max(...nums);
+      case "sqrt": return Math.sqrt(nums[0]);
+      case "sin": return Math.sin(nums[0]);
+      case "cos": return Math.cos(nums[0]);
+      case "tan": return Math.tan(nums[0]);
+      case "log": return Math.log(nums[0]);
+      case "pow": return Math.pow(nums[0], nums[1]);
+      case "sign": return Math.sign(nums[0]);
+      case "clamp": return Math.min(Math.max(nums[0], nums[1]), nums[2]);
+      case "lerp": return this.lerp(args[0], args[1], args[2]);
+      default:
+        console.warn(`[harlowe] unknown math function: ${name}`);
+        return NaN;
+    }
+  }
+
+  /** Collection operations (fallback for unknown ops). */
+  collection_op(name: string, ...args: any[]): any {
+    const kebabMap: Record<string, string> = {
+      "some-pass": "somePass", "all-pass": "allPass", "none-pass": "nonePass",
+    };
+    const key = kebabMap[name] ?? name;
+    const fn = (Collections as any)[key];
+    if (fn) return fn(...args);
+    console.warn(`[harlowe] unknown collection op: ${name}`);
+    return undefined;
+  }
+
+  /** Generic value macro dispatcher. */
+  value_macro(name: string, ...args: any[]): any {
+    switch (name) {
+      case "str": case "string": return this.str(...args);
+      case "num": case "number": return this.num(args[0]);
+      case "random": return this.random(...args);
+      case "either": return this.either(...args);
+      case "a": case "array": return this.array(...args);
+      case "dm": case "datamap": return this.datamap(...args);
+      case "ds": case "dataset": return this.dataset(...args);
+      default:
+        console.warn(`[harlowe] unknown value macro: ${name}`);
+        return undefined;
+    }
+  }
+
+  // --- Save game queries ---
+
+  /** `(saved-games:)` — returns a datamap of slot -> boolean. */
+  saved_games(): Map<string, boolean> {
+    const m = new Map<string, boolean>();
+    for (let i = 0; i < 8; i++) {
+      m.set(String(i), this.rt.State.hasSlot(String(i)));
+    }
+    return m;
+  }
+
+  /** `(passage:)` — returns the current passage name. */
+  current_passage(): string {
+    return this.rt.Navigation.current();
+  }
+
+  // --- Meta queries ---
+
+  /** `(visits:)`, `(turns:)`, `(time:)`, `(history:)` */
+  meta(name: string): any {
+    switch (name) {
+      case "visits": return this.rt.State.historyLength();
+      case "turns": return this.rt.State.historyLength();
+      case "time": return 0; // TODO: track elapsed time
+      case "history": return this.rt.State.historyTitles();
+      default:
+        console.warn(`[harlowe] unknown meta query: ${name}`);
+        return undefined;
+    }
+  }
+
+  /** Color manipulation functions (fallback for unknown ops). */
+  color_op(name: string, ...args: any[]): string {
+    const fn = (Colors as any)[name];
+    if (fn) return fn(...args);
+    console.warn(`[harlowe] unknown color op: ${name}`);
+    return String(args[0] ?? "");
+  }
+
+  // --- DOM macros ---
+
+  /** `(replace:)`, `(append:)`, `(prepend:)`, `(show:)`, `(hide:)`, `(rerun:)` */
+  dom_macro(method: string, ...args: any[]): void {
+    const selector = args.length > 0 ? String(args[0]) : "";
+    const callback = args.length > 1 && typeof args[args.length - 1] === "function"
+      ? args[args.length - 1] as (h: HarloweContext) => void
+      : undefined;
+
+    const container = this.story();
+    if (!container) return;
+    const doc = this.doc();
+
+    switch (method) {
+      case "replace": {
+        const targets = container.querySelectorAll(selector);
+        targets.forEach(el => {
+          el.innerHTML = "";
+          if (callback) {
+            const h = new HarloweContext(el, this.rt, doc);
+            try { callback(h); } finally { h.closeAll(); }
+          }
+        });
+        break;
+      }
+      case "append": {
+        const targets = container.querySelectorAll(selector);
+        targets.forEach(el => {
+          if (callback) {
+            const h = new HarloweContext(el, this.rt, doc);
+            try { callback(h); } finally { h.closeAll(); }
+          }
+        });
+        break;
+      }
+      case "prepend": {
+        const targets = container.querySelectorAll(selector);
+        targets.forEach(el => {
+          if (callback) {
+            const frag = doc.createDocumentFragment();
+            const h = new HarloweContext(frag, this.rt, doc);
+            try { callback(h); } finally { h.closeAll(); }
+            el.insertBefore(frag, el.firstChild);
+          }
+        });
+        break;
+      }
+      case "show": {
+        const targets = container.querySelectorAll(selector);
+        targets.forEach(el => (el as HTMLElement).style.display = "");
+        break;
+      }
+      case "hide": {
+        const targets = container.querySelectorAll(selector);
+        targets.forEach(el => (el as HTMLElement).style.display = "none");
+        break;
+      }
+      case "rerun":
+        if (callback) {
+          const h = new HarloweContext(container as Element, this.rt, doc);
+          try { callback(h); } finally { h.closeAll(); }
+        }
+        break;
+      default:
+        console.warn(`[harlowe] unknown DOM macro: ${method}`);
+    }
+  }
+
+  // --- Click macros ---
+
+  /** `(click:)`, `(click-replace:)`, `(click-append:)`, `(click-prepend:)` */
+  click_macro(method: string, ...args: any[]): void {
+    const selector = args.length > 0 ? String(args[0]) : "";
+    const callback = args.length > 1 && typeof args[args.length - 1] === "function"
+      ? args[args.length - 1] as (h: HarloweContext) => void
+      : undefined;
+
+    const container = this.story();
+    if (!container) return;
+    const doc = this.doc();
+
+    const targets = container.querySelectorAll(selector);
+    targets.forEach(el => {
+      (el as HTMLElement).style.cursor = "pointer";
+      el.addEventListener("click", () => {
+        if (!callback) return;
+        if (method === "click-replace") {
+          el.innerHTML = "";
+          const h = new HarloweContext(el, this.rt, doc);
+          try { callback(h); } finally { h.closeAll(); }
+        } else if (method === "click-append") {
+          const h = new HarloweContext(el, this.rt, doc);
+          try { callback(h); } finally { h.closeAll(); }
+        } else if (method === "click-prepend") {
+          const frag = doc.createDocumentFragment();
+          const h = new HarloweContext(frag, this.rt, doc);
+          try { callback(h); } finally { h.closeAll(); }
+          el.insertBefore(frag, el.firstChild);
+        } else {
+          // plain click — render inline
+          const h = new HarloweContext(el, this.rt, doc);
+          try { callback(h); } finally { h.closeAll(); }
+        }
+      }, { once: true });
+    });
+  }
+
+  // --- State management ---
+
+  /** `(forget-undos: n)` — forget the n most recent undos. -1 forgets all. */
+  forget_undos(n: any): void {
+    this.rt.State.forgetUndos(Number(n));
+  }
+
+  /** `(forget-visits:)` — clear visit history. */
+  forget_visits(): void {
+    this.rt.State.forgetVisits();
+  }
+
+  // --- Meter ---
+
+  /** `(meter: $var, max, label, color)` — progress meter element. */
+  meter_macro(value: any, max: any, label?: any, color?: any): void {
+    const container = this.passage();
+    if (!container) return;
+    const doc = this.doc();
+
+    const numValue = Number(value);
+    const numMax = Number(max);
+    const pct = numMax > 0 ? Math.min(100, Math.max(0, (numValue / numMax) * 100)) : 0;
+
+    const meter = doc.createElement("tw-meter") as HTMLElement;
+    meter.style.display = "block";
+    meter.style.position = "relative";
+    meter.style.height = "1.5em";
+    meter.style.border = "1px solid #fff";
+    meter.style.marginBottom = "0.5em";
+
+    const bar = doc.createElement("div");
+    bar.style.height = "100%";
+    bar.style.width = `${pct}%`;
+    bar.style.backgroundColor = color ? String(color) : "green";
+    bar.style.transition = "width 0.3s";
+    meter.appendChild(bar);
+
+    if (label != null) {
+      const labelEl = doc.createElement("span");
+      labelEl.textContent = String(label);
+      labelEl.style.position = "absolute";
+      labelEl.style.left = "50%";
+      labelEl.style.top = "50%";
+      labelEl.style.transform = "translate(-50%, -50%)";
+      meter.appendChild(labelEl);
+    }
+
+    container.appendChild(meter);
+  }
+
+  // --- Enchant ---
+
+  /** `(enchant: selector, changer)` — wraps matching elements in tw-enchantment. */
+  enchant(selector: any, changer: any): void {
+    const storyEl = this.story();
+    if (!storyEl) return;
+    const css = resolveHookSelector(selector);
+    enchantElements(storyEl as Element, css, changer as Changer | Changer[], this.doc());
+  }
+
+  /** `(enchant-in: selector, changer)` — like enchant but scoped to current passage. */
+  enchant_in(selector: any, changer: any): void {
+    const passageEl = this.passage();
+    if (!passageEl) return;
+    const css = resolveHookSelector(selector);
+    enchantElements(passageEl as Element, css, changer as Changer | Changer[], this.doc());
+  }
+
+  // --- Dialog ---
+
+  /** `(dialog: title, closeLabel)[hook]` — modal dialog. */
+  dialog_macro(...args: any[]): void {
+    const callback = args.length > 0 && typeof args[args.length - 1] === "function"
+      ? args.pop() as (h: HarloweContext) => void
+      : undefined;
+    const title = args.length > 0 ? String(args[0]) : "";
+    const closeLabel = args.length > 1 ? String(args[1]) : "Close";
+
+    const storyEl = this.story();
+    if (!storyEl || !callback) return;
+    const doc = this.doc();
+
+    const backdrop = doc.createElement("tw-backdrop") as HTMLElement;
+    backdrop.style.position = "fixed";
+    backdrop.style.inset = "0";
+    backdrop.style.zIndex = "999996";
+    backdrop.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
+    backdrop.style.display = "flex";
+    backdrop.style.alignItems = "center";
+    backdrop.style.justifyContent = "center";
+
+    const dialog = doc.createElement("tw-dialog") as HTMLElement;
+    dialog.style.zIndex = "999997";
+    dialog.style.border = "#fff solid 2px";
+    dialog.style.padding = "2em";
+    dialog.style.backgroundColor = "#000";
+    dialog.style.color = "#fff";
+    dialog.style.maxWidth = "80vw";
+    dialog.style.maxHeight = "80vh";
+    dialog.style.overflow = "auto";
+    backdrop.appendChild(dialog);
+
+    if (title) {
+      const heading = doc.createElement("h2");
+      heading.textContent = title;
+      dialog.appendChild(heading);
+    }
+
+    const h = new HarloweContext(dialog, this.rt, doc);
+    try {
+      callback(h);
+    } finally {
+      h.closeAll();
+    }
+
+    const links = doc.createElement("tw-dialog-links") as HTMLElement;
+    links.style.display = "block";
+    links.style.marginTop = "1em";
+    links.style.textAlign = "right";
+    const closeLink = doc.createElement("tw-link") as HTMLElement;
+    closeLink.setAttribute("tabindex", "0");
+    closeLink.textContent = closeLabel;
+    closeLink.addEventListener("click", () => backdrop.remove());
+    closeLink.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") backdrop.remove();
+    });
+    links.appendChild(closeLink);
+    dialog.appendChild(links);
+
+    storyEl.appendChild(backdrop);
+  }
+
+  // --- Columns ---
+
+  /** `(columns: "1fr", "2fr", ...)[hook]` — flex row with column widths. */
+  columns_macro(...args: any[]): void {
+    const callback = args.length > 0 && typeof args[args.length - 1] === "function"
+      ? args.pop() as (h: HarloweContext) => void
+      : undefined;
+    const widths = args.map(String);
+
+    const container = this.passage();
+    if (!container || !callback) return;
+    const doc = this.doc();
+
+    const columns = doc.createElement("tw-columns") as HTMLElement;
+    columns.style.display = "flex";
+    columns.style.flexDirection = "row";
+    columns.style.justifyContent = "space-between";
+    container.appendChild(columns);
+
+    // Create the first column
+    const firstCol = doc.createElement("tw-column") as HTMLElement;
+    firstCol.style.flex = widths.length > 0 ? widths[0] : "1";
+    columns.appendChild(firstCol);
+
+    const h = new HarloweContext(columns, this.rt, doc);
+    // Push the first column as the current container
+    (h as any).containerStack = [columns, firstCol];
+    try {
+      callback(h);
+    } finally {
+      h.closeAll();
+    }
+
+    // Apply widths to columns after callback has run (column breaks create new columns)
+    const cols = columns.querySelectorAll(":scope > tw-column");
+    cols.forEach((col, i) => {
+      (col as HTMLElement).style.flex = i < widths.length ? widths[i] : "1";
+    });
+  }
+
+  // --- Unknown macro fallback ---
+
+  /** Handle unknown macros gracefully. */
+  unknown_macro(name: string, ...args: any[]): any {
+    console.warn(`[harlowe] unknown macro: (${name}:)`, args);
+    return undefined;
+  }
+
+  // --- Generic call fallback ---
+
+  /** Handle unknown function calls in expressions. */
+  call(name: string, ...args: any[]): any {
+    console.warn(`[harlowe] unknown function call: ${name}`, args);
+    return undefined;
+  }
 }
 
-// --- Changers ---
-
-/** Create a changer value from a macro name and arguments. */
-export function create_changer(name: string, ...args: any[]): Changer {
-  return { name, args };
-}
-
-// --- Changer composition ---
+// --- Pure utility functions (no state) ---
 
 /** Check if a value is a Changer object. */
 function isChanger(v: any): v is Changer {
@@ -45,171 +573,49 @@ function composeChangers(a: Changer | Changer[], b: Changer): Changer[] {
   return Array.isArray(a) ? [...a, b] : [a, b];
 }
 
-/** Harlowe `+` operator — composes changers, concatenates arrays/maps/sets,
- *  or falls back to JS `+` for other types. */
-export function plus(a: any, b: any): any {
-  if (isChanger(a) && isChanger(b)) return composeChangers(a, b);
-  if (Array.isArray(a) && isChanger(b)) return composeChangers(a as any, b);
-  if (Array.isArray(a) && Array.isArray(b)) return [...a, ...b];
-  if (a instanceof Map && b instanceof Map) return new Map([...a, ...b]);
-  if (a instanceof Set && b instanceof Set) return new Set([...a, ...b]);
-  return a + b;
-}
-
-// --- Boolean/logic ---
-
-/** Harlowe `not` operator. */
-export function not(val: any): boolean {
-  return !val;
-}
-
-// --- Save/load ---
-
-/** `(save-game: slot)` — save current game state. Returns true on success. */
-export function save_game(slot: any): boolean {
-  return State.saveSlot(String(slot));
-}
-
-/** `(load-game: slot)` — load game state and navigate to saved passage. */
-export function load_game(slot: any): void {
-  const title = State.loadSlot(String(slot));
-  if (title) {
-    Navigation.goto(title);
-  }
-}
-
-// --- Dialogs ---
-
-/** `(alert: message)` */
-export function alert(message: any): void {
-  window.alert(String(message));
-}
-
-/** `(prompt: message, default?)` */
-export function prompt(message: any, defaultValue?: any): string | null {
-  return window.prompt(String(message), defaultValue != null ? String(defaultValue) : undefined);
-}
-
-/** `(confirm: message)` */
-export function confirm(message: any): boolean {
-  return window.confirm(String(message));
-}
-
-// --- Collection operations ---
-
 /** `contains` operator: checks if a collection contains a value. */
-export function contains(collection: any, value: any): boolean {
-  if (typeof collection === "string") {
-    return collection.includes(String(value));
-  }
-  if (Array.isArray(collection)) {
-    return collection.includes(value);
-  }
-  if (collection instanceof Set) {
-    return collection.has(value);
-  }
-  if (collection instanceof Map) {
-    return collection.has(value);
-  }
-  if (typeof collection === "object" && collection !== null) {
-    return value in collection;
-  }
+function contains(collection: any, value: any): boolean {
+  if (typeof collection === "string") return collection.includes(String(value));
+  if (Array.isArray(collection)) return collection.includes(value);
+  if (collection instanceof Set) return collection.has(value);
+  if (collection instanceof Map) return collection.has(value);
+  if (typeof collection === "object" && collection !== null) return value in collection;
   return false;
 }
 
-/** `is in` operator: checks if a value is in a collection. */
-export function is_in(value: any, collection: any): boolean {
-  return contains(collection, value);
-}
-
-// --- Value macros ---
-
-/** `(random: min, max)` */
-export function random(...args: any[]): number {
-  if (args.length >= 2) {
-    const min = Math.floor(Number(args[0]));
-    const max = Math.floor(Number(args[1]));
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-  }
-  if (args.length === 1) {
-    return Math.floor(Math.random() * Math.floor(Number(args[0])));
-  }
-  return Math.random();
-}
-
-/** `(either: ...values)` — pick one at random. */
-export function either(...args: any[]): any {
-  return args[Math.floor(Math.random() * args.length)];
-}
-
-/** `(str: value)` / `(string: value)` */
-export function str(...args: any[]): string {
-  return args.map(String).join("");
-}
-
-/** `(num: value)` / `(number: value)` */
-export function num(value: any): number {
-  return Number(value);
-}
-
-/** `(a: ...values)` / `(array: ...values)` */
-export function array(...args: any[]): any[] {
-  return [...args];
-}
-
-/** `(dm: key, value, ...)` / `(datamap: key, value, ...)` */
-export function datamap(...args: any[]): Map<any, any> {
-  const m = new Map();
-  for (let i = 0; i + 1 < args.length; i += 2) {
-    m.set(args[i], args[i + 1]);
-  }
-  return m;
-}
-
-/** `(ds: ...values)` / `(dataset: ...values)` */
-export function dataset(...args: any[]): Set<any> {
-  return new Set(args);
-}
-
-// --- Property access ---
-
 /** `$var's property` or `(nth: n) of $arr` */
-export function get_property(obj: any, prop: any): any {
-  if (obj instanceof Map) {
-    return obj.get(prop);
-  }
+function get_property(obj: any, prop: any): any {
+  if (obj instanceof Map) return obj.get(prop);
   if (obj instanceof Set) {
     const arr = Array.from(obj);
-    if (typeof prop === "number") return arr[prop - 1]; // 1-indexed
+    if (typeof prop === "number") return arr[prop - 1];
     if (prop === "length") return arr.length;
     if (prop === "last") return arr[arr.length - 1];
     return undefined;
   }
   if (Array.isArray(obj)) {
-    if (typeof prop === "number") return obj[prop - 1]; // 1-indexed
+    if (typeof prop === "number") return obj[prop - 1];
     if (prop === "length") return obj.length;
     if (prop === "last") return obj[obj.length - 1];
     return obj[prop];
   }
   if (typeof obj === "string") {
-    if (typeof prop === "number") return obj[prop - 1]; // 1-indexed
+    if (typeof prop === "number") return obj[prop - 1];
     if (prop === "length") return obj.length;
     if (prop === "last") return obj[obj.length - 1];
     return undefined;
   }
-  if (typeof obj === "object" && obj !== null) {
-    return obj[prop];
-  }
+  if (typeof obj === "object" && obj !== null) return obj[prop];
   return undefined;
 }
 
 /** `$var's property to value` */
-export function set_property(obj: any, prop: any, value: any): void {
+function set_property(obj: any, prop: any, value: any): void {
   if (obj instanceof Map) {
     obj.set(prop, value);
   } else if (Array.isArray(obj)) {
     if (typeof prop === "number") {
-      obj[prop - 1] = value; // 1-indexed
+      obj[prop - 1] = value;
     } else {
       obj[prop] = value;
     }
@@ -218,40 +624,7 @@ export function set_property(obj: any, prop: any, value: any): void {
   }
 }
 
-// --- Math ---
-
-/** `(lerp: a, b, t)` — standalone so the call site is monomorphic. */
-export function lerp(a: any, b: any, t: any): number {
-  const na = Number(a), nb = Number(b), nt = Number(t);
-  return na + (nb - na) * nt;
-}
-
-/** Math functions dispatched by name (fallback for unknown ops). */
-export function math(name: string, ...args: any[]): number {
-  const nums = args.map(Number);
-  switch (name) {
-    case "round": return Math.round(nums[0]);
-    case "floor": return Math.floor(nums[0]);
-    case "ceil": return Math.ceil(nums[0]);
-    case "abs": return Math.abs(nums[0]);
-    case "min": return Math.min(...nums);
-    case "max": return Math.max(...nums);
-    case "sqrt": return Math.sqrt(nums[0]);
-    case "sin": return Math.sin(nums[0]);
-    case "cos": return Math.cos(nums[0]);
-    case "tan": return Math.tan(nums[0]);
-    case "log": return Math.log(nums[0]);
-    case "pow": return Math.pow(nums[0], nums[1]);
-    case "sign": return Math.sign(nums[0]);
-    case "clamp": return Math.min(Math.max(nums[0], nums[1]), nums[2]);
-    case "lerp": return lerp(args[0], args[1], args[2]);
-    default:
-      console.warn(`[harlowe] unknown math function: ${name}`);
-      return NaN;
-  }
-}
-
-// --- Collection operations (higher-order) ---
+// --- Collection operations (pure) ---
 
 function sorted(...args: any[]): any[] {
   return [...args].flat().sort((a, b) => {
@@ -259,11 +632,7 @@ function sorted(...args: any[]): any[] {
     return Number(a) - Number(b);
   });
 }
-
-function reversed(...args: any[]): any[] {
-  return [...args].flat().reverse();
-}
-
+function reversed(...args: any[]): any[] { return [...args].flat().reverse(); }
 function rotated(...args: any[]): any[] {
   const n = Number(args[0]);
   const arr = args.slice(1);
@@ -272,7 +641,6 @@ function rotated(...args: any[]): any[] {
   const shift = ((n % len) + len) % len;
   return [...arr.slice(shift), ...arr.slice(0, shift)];
 }
-
 function shuffled(...args: any[]): any[] {
   const arr = [...args];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -281,13 +649,11 @@ function shuffled(...args: any[]): any[] {
   }
   return arr;
 }
-
 function count(...args: any[]): number {
   const arr = Array.isArray(args[0]) ? args[0] : [args[0]];
   const val = args[1];
   return arr.filter(x => x === val).length;
 }
-
 function range(...args: any[]): number[] {
   const start = Number(args[0]);
   const end = Number(args[1]);
@@ -295,64 +661,45 @@ function range(...args: any[]): number[] {
   for (let i = start; i <= end; i++) result.push(i);
   return result;
 }
-
 function find(...args: any[]): any {
   const arr = Array.isArray(args[0]) ? args[0] : [];
   const pred = args[1];
   return typeof pred === "function" ? arr.find(pred) : arr.find(x => x === pred);
 }
-
 function joined(...args: any[]): string {
   const sep = args.length > 1 ? String(args[args.length - 1]) : "";
   const items = args.length > 1 ? args.slice(0, -1) : args;
   return items.flat().join(sep);
 }
-
 function subarray(...args: any[]): any[] {
   return Array.isArray(args[0]) ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : [];
 }
-
 function substring(...args: any[]): string {
   return typeof args[0] === "string" ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : "";
 }
-
-function lowercase(...args: any[]): string {
-  return String(args[0]).toLowerCase();
-}
-
-function uppercase(...args: any[]): string {
-  return String(args[0]).toUpperCase();
-}
-
+function lowercase(...args: any[]): string { return String(args[0]).toLowerCase(); }
+function uppercase(...args: any[]): string { return String(args[0]).toUpperCase(); }
 function datanames(...args: any[]): any[] {
   return args[0] instanceof Map ? Array.from(args[0].keys()) : Object.keys(args[0] || {});
 }
-
 function datavalues(...args: any[]): any[] {
   return args[0] instanceof Map ? Array.from(args[0].values()) : Object.values(args[0] || {});
 }
-
 function dataentries(...args: any[]): any[] {
   return args[0] instanceof Map ? Array.from(args[0].entries()).map(([k, v]) => ({ name: k, value: v })) : [];
 }
-
 function somePass(...args: any[]): boolean {
-  const pred = args[0];
-  const items = args.slice(1);
+  const pred = args[0]; const items = args.slice(1);
   if (typeof pred !== "function") return false;
   return items.some(pred);
 }
-
 function allPass(...args: any[]): boolean {
-  const pred = args[0];
-  const items = args.slice(1);
+  const pred = args[0]; const items = args.slice(1);
   if (typeof pred !== "function") return false;
   return items.every(pred);
 }
-
 function nonePass(...args: any[]): boolean {
-  const pred = args[0];
-  const items = args.slice(1);
+  const pred = args[0]; const items = args.slice(1);
   if (typeof pred !== "function") return false;
   return !items.some(pred);
 }
@@ -364,68 +711,7 @@ export const Collections = {
   somePass, allPass, nonePass,
 } as const;
 
-/** Collection operations (fallback for unknown ops). */
-export function collection_op(name: string, ...args: any[]): any {
-  const kebabMap: Record<string, string> = {
-    "some-pass": "somePass", "all-pass": "allPass", "none-pass": "nonePass",
-  };
-  const key = kebabMap[name] ?? name;
-  const fn = (Collections as any)[key];
-  if (fn) return fn(...args);
-  console.warn(`[harlowe] unknown collection op: ${name}`);
-  return undefined;
-}
-
-// --- Value macro (standalone) ---
-
-/** Generic value macro dispatcher. */
-export function value_macro(name: string, ...args: any[]): any {
-  switch (name) {
-    case "str": case "string": return str(...args);
-    case "num": case "number": return num(args[0]);
-    case "random": return random(...args);
-    case "either": return either(...args);
-    case "a": case "array": return array(...args);
-    case "dm": case "datamap": return datamap(...args);
-    case "ds": case "dataset": return dataset(...args);
-    default:
-      console.warn(`[harlowe] unknown value macro: ${name}`);
-      return undefined;
-  }
-}
-
-// --- Save game queries ---
-
-/** `(saved-games:)` — returns a datamap of slot -> boolean. */
-export function saved_games(): Map<string, boolean> {
-  const m = new Map<string, boolean>();
-  for (let i = 0; i < 8; i++) {
-    m.set(String(i), State.hasSlot(String(i)));
-  }
-  return m;
-}
-
-/** `(passage:)` — returns the current passage name. */
-export function current_passage(): string {
-  return Navigation.current();
-}
-
-// --- Meta queries ---
-
-/** `(visits:)`, `(turns:)`, `(time:)`, `(history:)` */
-export function meta(name: string): any {
-  switch (name) {
-    case "visits": return State.historyLength();
-    case "turns": return State.historyLength();
-    case "time": return 0; // TODO: track elapsed time
-    case "history": return State.historyTitles();
-    default:
-      console.warn(`[harlowe] unknown meta query: ${name}`);
-      return undefined;
-  }
-}
-
-// --- Color operations ---
+// --- Color operations (pure) ---
 
 function rgb(r: any, g: any, b: any): string { return `rgb(${r}, ${g}, ${b})`; }
 function rgba(r: any, g: any, b: any, a: any): string { return `rgba(${r}, ${g}, ${b}, ${a})`; }
@@ -434,186 +720,21 @@ function hsla(h: any, s: any, l: any, a: any): string { return `hsla(${h}, ${s}%
 
 export const Colors = { rgb, rgba, hsl, hsla } as const;
 
-/** Color manipulation functions (fallback for unknown ops). */
-export function color_op(name: string, ...args: any[]): string {
-  const fn = (Colors as any)[name];
-  if (fn) return fn(...args);
-  console.warn(`[harlowe] unknown color op: ${name}`);
-  return String(args[0] ?? "");
-}
-
-// --- DOM macros ---
-
-/** `(replace:)`, `(append:)`, `(prepend:)`, `(show:)`, `(hide:)`, `(rerun:)` */
-export function dom_macro(method: string, ...args: any[]): void {
-  const selector = args.length > 0 ? String(args[0]) : "";
-  const callback = args.length > 1 && typeof args[args.length - 1] === "function"
-    ? args[args.length - 1] as (h: HarloweContext) => void
-    : undefined;
-
-  const container = story();
-  if (!container) return;
-
-  switch (method) {
-    case "replace": {
-      const targets = container.querySelectorAll(selector);
-      targets.forEach(el => {
-        el.innerHTML = "";
-        if (callback) {
-          const h = new HarloweContext(el, doc());
-          try { callback(h); } finally { h.closeAll(); }
-        }
-      });
-      break;
-    }
-    case "append": {
-      const targets = container.querySelectorAll(selector);
-      targets.forEach(el => {
-        if (callback) {
-          const h = new HarloweContext(el, doc());
-          try { callback(h); } finally { h.closeAll(); }
-        }
-      });
-      break;
-    }
-    case "prepend": {
-      const targets = container.querySelectorAll(selector);
-      targets.forEach(el => {
-        if (callback) {
-          const frag = doc().createDocumentFragment();
-          const h = new HarloweContext(frag, doc());
-          try { callback(h); } finally { h.closeAll(); }
-          el.insertBefore(frag, el.firstChild);
-        }
-      });
-      break;
-    }
-    case "show": {
-      const targets = container.querySelectorAll(selector);
-      targets.forEach(el => (el as HTMLElement).style.display = "");
-      break;
-    }
-    case "hide": {
-      const targets = container.querySelectorAll(selector);
-      targets.forEach(el => (el as HTMLElement).style.display = "none");
-      break;
-    }
-    case "rerun":
-      if (callback) {
-        const h = new HarloweContext(container as Element, doc());
-        try { callback(h); } finally { h.closeAll(); }
-      }
-      break;
-    default:
-      console.warn(`[harlowe] unknown DOM macro: ${method}`);
-  }
-}
-
-// --- Click macros ---
-
-/** `(click:)`, `(click-replace:)`, `(click-append:)`, `(click-prepend:)` */
-export function click_macro(method: string, ...args: any[]): void {
-  const selector = args.length > 0 ? String(args[0]) : "";
-  const callback = args.length > 1 && typeof args[args.length - 1] === "function"
-    ? args[args.length - 1] as (h: HarloweContext) => void
-    : undefined;
-
-  const container = story();
-  if (!container) return;
-
-  const targets = container.querySelectorAll(selector);
-  targets.forEach(el => {
-    (el as HTMLElement).style.cursor = "pointer";
-    el.addEventListener("click", () => {
-      if (!callback) return;
-      if (method === "click-replace") {
-        el.innerHTML = "";
-        const h = new HarloweContext(el, doc());
-        try { callback(h); } finally { h.closeAll(); }
-      } else if (method === "click-append") {
-        const h = new HarloweContext(el, doc());
-        try { callback(h); } finally { h.closeAll(); }
-      } else if (method === "click-prepend") {
-        const frag = doc().createDocumentFragment();
-        const h = new HarloweContext(frag, doc());
-        try { callback(h); } finally { h.closeAll(); }
-        el.insertBefore(frag, el.firstChild);
-      } else {
-        // plain click — render inline
-        const h = new HarloweContext(el, doc());
-        try { callback(h); } finally { h.closeAll(); }
-      }
-    }, { once: true });
-  });
-}
-
-// --- State management ---
-
-/** `(forget-undos: n)` — forget the n most recent undos. -1 forgets all. */
-export function forget_undos(n: any): void {
-  State.forgetUndos(Number(n));
-}
-
-/** `(forget-visits:)` — clear visit history. */
-export function forget_visits(): void {
-  State.forgetVisits();
-}
-
-// --- Meter ---
-
-/** `(meter: $var, max, label, color)` — progress meter element. */
-export function meter_macro(value: any, max: any, label?: any, color?: any): void {
-  const container = passage();
-  if (!container) return;
-
-  const numValue = Number(value);
-  const numMax = Number(max);
-  const pct = numMax > 0 ? Math.min(100, Math.max(0, (numValue / numMax) * 100)) : 0;
-
-  const meter = doc().createElement("tw-meter") as HTMLElement;
-  meter.style.display = "block";
-  meter.style.position = "relative";
-  meter.style.height = "1.5em";
-  meter.style.border = "1px solid #fff";
-  meter.style.marginBottom = "0.5em";
-
-  const bar = doc().createElement("div");
-  bar.style.height = "100%";
-  bar.style.width = `${pct}%`;
-  bar.style.backgroundColor = color ? String(color) : "green";
-  bar.style.transition = "width 0.3s";
-  meter.appendChild(bar);
-
-  if (label != null) {
-    const labelEl = doc().createElement("span");
-    labelEl.textContent = String(label);
-    labelEl.style.position = "absolute";
-    labelEl.style.left = "50%";
-    labelEl.style.top = "50%";
-    labelEl.style.transform = "translate(-50%, -50%)";
-    meter.appendChild(labelEl);
-  }
-
-  container.appendChild(meter);
-}
-
-// --- Enchant ---
+// --- Enchantment helpers (pure) ---
 
 /** Resolve a Harlowe hook selector to a CSS selector string. */
 function resolveHookSelector(selector: any): string {
   const s = String(selector);
-  if (s.startsWith("?")) {
-    return `tw-hook[name="${s.slice(1)}"]`;
-  }
+  if (s.startsWith("?")) return `tw-hook[name="${s.slice(1)}"]`;
   return s;
 }
 
 /** Apply a changer to matching elements by wrapping them in tw-enchantment. */
-function enchantElements(scope: Element, selector: string, changer: Changer | Changer[]): void {
+function enchantElements(scope: Element, selector: string, changer: Changer | Changer[], doc: DocumentFactory): void {
   const targets = scope.querySelectorAll(selector);
   targets.forEach(el => {
     if (el.parentElement?.tagName.toLowerCase() === "tw-enchantment") return;
-    const wrapper = doc().createElement("tw-enchantment") as HTMLElement;
+    const wrapper = doc.createElement("tw-enchantment") as HTMLElement;
     if (Array.isArray(changer)) {
       for (const c of changer) applyChangerToElement(wrapper, c);
     } else {
@@ -650,136 +771,3 @@ function applyChangerToElement(el: HTMLElement, changer: Changer): void {
   }
 }
 
-/** `(enchant: selector, changer)` — wraps matching elements in tw-enchantment. */
-export function enchant(selector: any, changer: any): void {
-  const story = story();
-  if (!story) return;
-  const css = resolveHookSelector(selector);
-  enchantElements(story, css, changer as Changer | Changer[]);
-}
-
-/** `(enchant-in: selector, changer)` — like enchant but scoped to current passage. */
-export function enchant_in(selector: any, changer: any): void {
-  const passage = passage();
-  if (!passage) return;
-  const css = resolveHookSelector(selector);
-  enchantElements(passage, css, changer as Changer | Changer[]);
-}
-
-// --- Dialog ---
-
-/** `(dialog: title, closeLabel)[hook]` — modal dialog. */
-export function dialog_macro(...args: any[]): void {
-  const callback = args.length > 0 && typeof args[args.length - 1] === "function"
-    ? args.pop() as (h: HarloweContext) => void
-    : undefined;
-  const title = args.length > 0 ? String(args[0]) : "";
-  const closeLabel = args.length > 1 ? String(args[1]) : "Close";
-
-  const story = story();
-  if (!story || !callback) return;
-
-  const backdrop = doc().createElement("tw-backdrop") as HTMLElement;
-  backdrop.style.position = "fixed";
-  backdrop.style.inset = "0";
-  backdrop.style.zIndex = "999996";
-  backdrop.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
-  backdrop.style.display = "flex";
-  backdrop.style.alignItems = "center";
-  backdrop.style.justifyContent = "center";
-
-  const dialog = doc().createElement("tw-dialog") as HTMLElement;
-  dialog.style.zIndex = "999997";
-  dialog.style.border = "#fff solid 2px";
-  dialog.style.padding = "2em";
-  dialog.style.backgroundColor = "#000";
-  dialog.style.color = "#fff";
-  dialog.style.maxWidth = "80vw";
-  dialog.style.maxHeight = "80vh";
-  dialog.style.overflow = "auto";
-  backdrop.appendChild(dialog);
-
-  if (title) {
-    const heading = doc().createElement("h2");
-    heading.textContent = title;
-    dialog.appendChild(heading);
-  }
-
-  const h = new HarloweContext(dialog, doc());
-  try {
-    callback(h);
-  } finally {
-    h.closeAll();
-  }
-
-  const links = doc().createElement("tw-dialog-links") as HTMLElement;
-  links.style.display = "block";
-  links.style.marginTop = "1em";
-  links.style.textAlign = "right";
-  const closeLink = doc().createElement("tw-link") as HTMLElement;
-  closeLink.setAttribute("tabindex", "0");
-  closeLink.textContent = closeLabel;
-  closeLink.addEventListener("click", () => backdrop.remove());
-  closeLink.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") backdrop.remove();
-  });
-  links.appendChild(closeLink);
-  dialog.appendChild(links);
-
-  story.appendChild(backdrop);
-}
-
-// --- Columns ---
-
-/** `(columns: "1fr", "2fr", ...)[hook]` — flex row with column widths. */
-export function columns_macro(...args: any[]): void {
-  const callback = args.length > 0 && typeof args[args.length - 1] === "function"
-    ? args.pop() as (h: HarloweContext) => void
-    : undefined;
-  const widths = args.map(String);
-
-  const container = passage();
-  if (!container || !callback) return;
-
-  const columns = doc().createElement("tw-columns") as HTMLElement;
-  columns.style.display = "flex";
-  columns.style.flexDirection = "row";
-  columns.style.justifyContent = "space-between";
-  container.appendChild(columns);
-
-  // Create the first column
-  const firstCol = doc().createElement("tw-column") as HTMLElement;
-  firstCol.style.flex = widths.length > 0 ? widths[0] : "1";
-  columns.appendChild(firstCol);
-
-  const h = new HarloweContext(columns, doc());
-  // Push the first column as the current container
-  (h as any).containerStack = [columns, firstCol];
-  try {
-    callback(h);
-  } finally {
-    h.closeAll();
-  }
-
-  // Apply widths to columns after callback has run (column breaks create new columns)
-  const cols = columns.querySelectorAll(":scope > tw-column");
-  cols.forEach((col, i) => {
-    (col as HTMLElement).style.flex = i < widths.length ? widths[i] : "1";
-  });
-}
-
-// --- Unknown macro fallback ---
-
-/** Handle unknown macros gracefully. */
-export function unknown_macro(name: string, ...args: any[]): any {
-  console.warn(`[harlowe] unknown macro: (${name}:)`, args);
-  return undefined;
-}
-
-// --- Generic call fallback ---
-
-/** Handle unknown function calls in expressions. */
-export function call(name: string, ...args: any[]): any {
-  console.warn(`[harlowe] unknown function call: ${name}`, args);
-  return undefined;
-}
