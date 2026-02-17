@@ -53,6 +53,30 @@ impl<'a> Parser<'a> {
         &self.source[self.pos..]
     }
 
+    /// Lookahead: does the `(` at current position start a macro (`(name:…)`)?
+    /// Returns false for prose like `(obviously)`.
+    fn looks_like_macro(&self) -> bool {
+        let mut i = self.pos + 1; // skip `(`
+        // Scan past name chars
+        while i < self.bytes.len()
+            && (self.bytes[i].is_ascii_alphanumeric()
+                || self.bytes[i] == b'-'
+                || self.bytes[i] == b'_')
+        {
+            i += 1;
+        }
+        // Empty name → `(` followed by non-name char, could be `($var)` etc.
+        if i == self.pos + 1 {
+            return true;
+        }
+        // Skip whitespace
+        while i < self.bytes.len() && self.bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        // Must have `:` after name to be a macro
+        i < self.bytes.len() && self.bytes[i] == b':'
+    }
+
     fn error(&mut self, span: Span, message: impl Into<String>) {
         self.errors.push(ParseError {
             span,
@@ -688,7 +712,8 @@ impl<'a> Parser<'a> {
         while !self.at_end() {
             let ch = self.bytes[self.pos];
             match ch {
-                b'(' | b'$' | b'<' | b'\n' => break,
+                b'(' if self.looks_like_macro() => break,
+                b'$' | b'<' | b'\n' => break,
                 b'[' => {
                     if self.peek_at(1) == Some(b'[') {
                         break; // `[[` link
