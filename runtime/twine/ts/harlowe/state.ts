@@ -5,19 +5,17 @@
  * Harlowe also tracks `it` — the result of the most recent expression.
  */
 
-import type { SaveableState } from "../platform";
-
-export interface Moment {
-  title: string;
-  variables: Record<string, any>;
-}
+import { type SaveableState, type HistoryStrategy, snapshotHistory } from "../platform";
 
 export class HarloweState implements SaveableState {
   storyVars: Record<string, any> = {};
   tempVars: Record<string, any> = {};
   itValue: any = undefined;
-  history: Moment[] = [];
-  visitedSet: Set<string> = new Set();
+  private history: HistoryStrategy;
+
+  constructor(history?: HistoryStrategy) {
+    this.history = history ?? snapshotHistory();
+  }
 
   // --- Variable accessors ---
 
@@ -45,86 +43,55 @@ export class HarloweState implements SaveableState {
     }
   }
 
-  // --- History ---
+  // --- History (delegated to strategy) ---
 
-  /** Deep-clone story variables and push onto history. */
   pushMoment(title: string): void {
-    this.visitedSet.add(title);
-    this.history.push({
-      title,
-      variables: JSON.parse(JSON.stringify(this.storyVars)),
-    });
+    this.history.push(title, this.storyVars);
   }
 
-  /** Pop the most recent moment and restore story variables. */
   popMoment(): string | undefined {
-    this.history.pop();
-    const prev = this.history[this.history.length - 1];
-    if (!prev) return undefined;
+    const restored = this.history.pop();
+    if (!restored) return undefined;
     for (const key of Object.keys(this.storyVars)) {
       delete this.storyVars[key];
     }
-    Object.assign(this.storyVars, JSON.parse(JSON.stringify(prev.variables)));
-    return prev.title;
+    Object.assign(this.storyVars, restored.vars);
+    return restored.title;
   }
 
-  /** Get the number of moments in history. */
   historyLength(): number {
     return this.history.length;
   }
 
-  /** Check if a passage has ever been visited. */
   hasVisited(title: string): boolean {
-    return this.visitedSet.has(title);
+    return this.history.hasVisited(title);
   }
 
-  /** Count how many times a passage appears in the history. */
   visits(title: string): number {
-    let count = 0;
-    for (const moment of this.history) {
-      if (moment.title === title) count++;
-    }
-    return count;
+    return this.history.countVisits(title);
   }
 
-  /** Get the current passage title. */
   currentPassage(): string | undefined {
-    const top = this.history[this.history.length - 1];
-    return top?.title;
+    return this.history.peek();
   }
 
-  /** Get all passage titles from history. */
   historyTitles(): string[] {
-    return this.history.map(m => m.title);
+    return this.history.titles();
   }
 
-  /** Forget the n most recent undos. -1 forgets all. */
   forgetUndos(n: number): void {
-    if (n < 0) {
-      // Keep only the current moment
-      if (this.history.length > 1) {
-        const current = this.history[this.history.length - 1];
-        this.history.length = 0;
-        this.history.push(current);
-      }
-    } else {
-      // Remove n most recent moments (keeping at least the current one)
-      const keep = Math.max(1, this.history.length - n);
-      this.history.splice(0, this.history.length - keep);
-    }
+    this.history.forgetUndos(n);
   }
 
-  /** Clear visit history. */
   forgetVisits(): void {
-    this.visitedSet.clear();
+    this.history.forgetVisits();
   }
 
   // --- SaveableState implementation ---
 
   serialize(): string {
-    const top = this.history[this.history.length - 1];
     return JSON.stringify({
-      title: top?.title,
+      title: this.history.peek(),
       variables: this.storyVars,
     });
   }
@@ -136,7 +103,7 @@ export class HarloweState implements SaveableState {
     }
     Object.assign(this.storyVars, parsed.variables);
     // Reset history — a loaded save starts a fresh history from the restored passage
-    this.history.length = 0;
+    this.history.forgetUndos(-1);
     if (parsed.title) {
       this.pushMoment(parsed.title);
     }

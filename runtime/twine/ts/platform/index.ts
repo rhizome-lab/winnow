@@ -9,6 +9,11 @@
 export { loadLocal, saveLocal, removeLocal, localStorageBackend } from "./persistence";
 
 export {
+  type HistoryStrategy,
+  snapshotHistory, diffHistory,
+} from "./history";
+
+export {
   type SaveBackend, type SaveableState,
   init as initSave,
   commit as commitSave, tryResume, clearAutosave,
