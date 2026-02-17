@@ -8,8 +8,10 @@
 import { type SaveableState, type HistoryStrategy, snapshotHistory } from "../platform";
 
 export class SCState implements SaveableState {
-  private storyVars: Record<string, any> = {};
-  private tempVars: Record<string, any> = {};
+  /** Story ($) variables — exposed for `State.variables` global alias. */
+  readonly storyVars: Record<string, any> = {};
+  /** Temporary (_) variables — exposed for `State.temporary` global alias. */
+  readonly tempVars: Record<string, any> = {};
   private history: HistoryStrategy;
 
   constructor(history?: HistoryStrategy) {

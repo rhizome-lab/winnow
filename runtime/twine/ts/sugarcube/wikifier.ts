@@ -418,8 +418,8 @@ export class Wikifier {
   /** Evaluate a JavaScript expression in the SugarCube context. */
   static evalExpression(expr: string): any {
     const g = globalThis as any;
-    return new Function("State", "setup", "V", "Config", "settings", `return (${expr})`)(
-      g.State, g.setup, g.V, g.Config, g.settings,
+    return new Function("State", "setup", "Config", "settings", `return (${expr})`)(
+      g.State, g.setup, g.Config, g.settings,
     );
   }
 

@@ -117,9 +117,9 @@ export class SCEngine {
 
     // --- State ---
     g.State = {
-      get variables() { return g.V; },
-      get temporary() { return g.T; },
-      get active() { return { title: Navigation.current(), variables: g.V }; },
+      get variables() { return State.storyVars; },
+      get temporary() { return State.tempVars; },
+      get active() { return { title: Navigation.current(), variables: State.storyVars }; },
       hasPlayed(passage: string) { return State.hasPlayed(passage); },
       length: 0,
       size: 0,
