@@ -66,6 +66,8 @@ From ecosystem-wide session analysis:
 
 **Two-tier approach.** Accept that some targets need binary patching (Tier 1) while others can be fully lifted (Tier 2). Design APIs that work for both.
 
+**Games are instantiable.** Multiple independent game instances must be able to run on the same page without sharing state. All mutable runtime state lives on a root runtime instance (`GameRuntime`, `FlashRuntime`, etc.) created at the entry point and threaded through generated code. No singletons, no module-level mutable state. Pure functions (math, string ops, color constants) stay as static imports; stateful functions are destructured from `this._rt` in methods or received as a `_rt` parameter in free functions.
+
 ## Runtime Architecture
 
 Each engine runtime uses a three-layer architecture:
@@ -146,7 +148,7 @@ Do not:
 - Use path dependencies in Cargo.toml - causes clippy to stash changes across repos
 - Use `--no-verify` - fix the issue or fix the hook
 - Assume tools are missing - check if `nix develop` is available for the right environment
-- Use module-level global state — state belongs on the object that owns its lifecycle. If data flows from A to B, pass it explicitly (return value, parameter, field on an instance). Module-level `let` variables that get mutated across calls are hidden coupling and make code unpredictable. The one exception is genuine singletons like registries (`Map<string, PassageFn>`) that model a process-lifetime resource.
+- Use module-level mutable state — state belongs on the runtime instance that owns its lifecycle. If data flows from A to B, pass it explicitly (return value, parameter, field on an instance). Module-level `let` variables that get mutated across calls are hidden coupling, make code unpredictable, and prevent multiple game instances from coexisting on the same page. There are no exceptions — even registries (`Map<string, PassageFn>`) belong on the runtime instance.
 - Use DOM data attributes as a state-passing mechanism — if you need to communicate between code paths, pass values through function parameters or object fields. Storing data on elements and querying it back later is a jQuery-era anti-pattern. Data attributes are for CSS selectors and third-party integration, not for plumbing your own code.
 
 ## CLI Usage

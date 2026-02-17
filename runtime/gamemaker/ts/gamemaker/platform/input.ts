@@ -1,24 +1,22 @@
 /** Browser input — mouse and keyboard event binding. */
 
-import { getCanvas } from "./graphics";
-
-export function onMouseMove(cb: (x: number, y: number) => void): void {
-  getCanvas().addEventListener("mousemove", (e) => cb(e.offsetX, e.offsetY));
+export function onMouseMove(canvas: HTMLCanvasElement, cb: (x: number, y: number) => void): void {
+  canvas.addEventListener("mousemove", (e) => cb(e.offsetX, e.offsetY));
 }
 
-export function onMouseDown(cb: (button: number) => void): void {
-  getCanvas().addEventListener("mousedown", (e) => cb(e.button));
-  getCanvas().addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
+export function onMouseDown(canvas: HTMLCanvasElement, cb: (button: number) => void): void {
+  canvas.addEventListener("mousedown", (e) => cb(e.button));
+  canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); e.stopPropagation(); });
 }
 
-export function onMouseUp(cb: (button: number) => void): void {
-  getCanvas().addEventListener("mouseup", (e) => cb(e.button));
+export function onMouseUp(canvas: HTMLCanvasElement, cb: (button: number) => void): void {
+  canvas.addEventListener("mouseup", (e) => cb(e.button));
 }
 
-export function onKeyDown(cb: (key: string, keyCode: number) => void): void {
-  getCanvas().addEventListener("keydown", (e) => cb(e.key, e.keyCode));
+export function onKeyDown(canvas: HTMLCanvasElement, cb: (key: string, keyCode: number) => void): void {
+  canvas.addEventListener("keydown", (e) => cb(e.key, e.keyCode));
 }
 
-export function onKeyUp(cb: (key: string, keyCode: number) => void): void {
-  getCanvas().addEventListener("keyup", (e) => cb(e.key, e.keyCode));
+export function onKeyUp(canvas: HTMLCanvasElement, cb: (key: string, keyCode: number) => void): void {
+  canvas.addEventListener("keyup", (e) => cb(e.key, e.keyCode));
 }

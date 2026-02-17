@@ -1,5 +1,7 @@
 /** GML math functions — PRNG, trig (degrees), standard math. */
 
+import type { GameRuntime } from "./runtime";
+
 // ---- Seedable PRNG (xorshift128) ----
 
 const UINT32_MAX = 4294967295;
@@ -42,51 +44,58 @@ class XorGen {
   }
 }
 
-class MathState {
+export class MathState {
   prng = new XorGen(0);
 }
 
-const mathState = new MathState();
+// ---- PRNG API (stateful — needs runtime) ----
 
-export function random_set_seed(seed: number): void {
-  mathState.prng = new XorGen(seed);
+export function createMathAPI(rt: GameRuntime) {
+  function random_set_seed(seed: number): void {
+    rt._math.prng = new XorGen(seed);
+  }
+
+  function randomize(): void {
+    rt._math.prng = new XorGen(Date.now());
+  }
+
+  function random(max: number): number {
+    return (rt._math.prng.next() + UINT32_OFFSET) * max / UINT32_MAX;
+  }
+
+  function random_range(min: number, max: number): number {
+    return min + (rt._math.prng.next() + UINT32_OFFSET) * (max - min) / UINT32_MAX;
+  }
+
+  function irandom(max: number): number {
+    const maxp1 = max + 1;
+    let res: number;
+    do {
+      res = Math.floor((rt._math.prng.next() + UINT32_OFFSET) * maxp1 / UINT32_MAX);
+    } while (res > max);
+    return res;
+  }
+
+  function irandom_range(min: number, max: number): number {
+    const deltap1 = max - min + 1;
+    let res: number;
+    do {
+      res = min + Math.floor((rt._math.prng.next() + UINT32_OFFSET) * deltap1 / UINT32_MAX);
+    } while (res > max);
+    return res;
+  }
+
+  function choose(...args: any[]): any {
+    return args[irandom(args.length - 1)];
+  }
+
+  return {
+    random_set_seed, randomize, random, random_range,
+    irandom, irandom_range, choose,
+  };
 }
 
-export function randomize(): void {
-  mathState.prng = new XorGen(Date.now());
-}
-
-export function random(max: number): number {
-  return (mathState.prng.next() + UINT32_OFFSET) * max / UINT32_MAX;
-}
-
-export function random_range(min: number, max: number): number {
-  return min + (mathState.prng.next() + UINT32_OFFSET) * (max - min) / UINT32_MAX;
-}
-
-export function irandom(max: number): number {
-  const maxp1 = max + 1;
-  let res: number;
-  do {
-    res = Math.floor((mathState.prng.next() + UINT32_OFFSET) * maxp1 / UINT32_MAX);
-  } while (res > max);
-  return res;
-}
-
-export function irandom_range(min: number, max: number): number {
-  const deltap1 = max - min + 1;
-  let res: number;
-  do {
-    res = min + Math.floor((mathState.prng.next() + UINT32_OFFSET) * deltap1 / UINT32_MAX);
-  } while (res > max);
-  return res;
-}
-
-export function choose(...args: any[]): any {
-  return args[irandom(args.length - 1)];
-}
-
-// ---- Standard math ----
+// ---- Standard math (pure — no runtime needed) ----
 
 export const { floor, ceil, round, abs, sin, cos, tan, sqrt, exp, log: ln, log2, log10, pow: power, max, min, sign } = Math;
 
