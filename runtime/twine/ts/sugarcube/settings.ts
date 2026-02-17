@@ -40,182 +40,180 @@ interface RangeDef {
 
 type SettingDef = ToggleDef | ListDef | RangeDef;
 
-class SettingsState {
-  definitions: Map<string, SettingDef> = new Map();
-  values: Record<string, any> = {};
-  register: ((id: string, binding: string, handler: () => void) => void) | null = null;
-}
+export class SCSettings {
+  private definitions: Map<string, SettingDef> = new Map();
+  private values: Record<string, any> = {};
+  private register: ((id: string, binding: string, handler: () => void) => void) | null = null;
 
-export const settings = new SettingsState();
+  // --- Registration ---
 
-// --- Registration ---
-
-/** Register a toggle (boolean) setting. */
-export function addToggle(name: string, def: {
-  label: string;
-  default?: boolean;
-  desc?: string;
-  onChange?: (value: any) => void;
-}): void {
-  const setting: ToggleDef = {
-    type: "toggle",
-    label: def.label,
-    default: def.default ?? false,
-    desc: def.desc,
-    onChange: def.onChange,
-  };
-  settings.definitions.set(name, setting);
-  if (!(name in settings.values)) {
-    settings.values[name] = setting.default;
-  }
-  if (settings.register) {
-    settings.register(`toggle-${name}`, "", () => {
-      set(name, !get(name));
-      save();
-    });
-  }
-}
-
-/** Register a list (select) setting. */
-export function addList(name: string, def: {
-  label: string;
-  list: any[];
-  default?: any;
-  desc?: string;
-  onChange?: (value: any) => void;
-}): void {
-  const setting: ListDef = {
-    type: "list",
-    label: def.label,
-    default: def.default ?? def.list[0],
-    list: def.list,
-    desc: def.desc,
-    onChange: def.onChange,
-  };
-  settings.definitions.set(name, setting);
-  if (!(name in settings.values)) {
-    settings.values[name] = setting.default;
-  }
-  if (settings.register) {
-    for (const opt of def.list) {
-      settings.register(`set-${name}-${opt}`, "", () => {
-        set(name, opt);
-        save();
+  /** Register a toggle (boolean) setting. */
+  addToggle(name: string, def: {
+    label: string;
+    default?: boolean;
+    desc?: string;
+    onChange?: (value: any) => void;
+  }): void {
+    const setting: ToggleDef = {
+      type: "toggle",
+      label: def.label,
+      default: def.default ?? false,
+      desc: def.desc,
+      onChange: def.onChange,
+    };
+    this.definitions.set(name, setting);
+    if (!(name in this.values)) {
+      this.values[name] = setting.default;
+    }
+    if (this.register) {
+      this.register(`toggle-${name}`, "", () => {
+        this.set(name, !this.get(name));
+        this.save();
       });
     }
   }
-}
 
-/** Register a range (slider) setting. */
-export function addRange(name: string, def: {
-  label: string;
-  min: number;
-  max: number;
-  step: number;
-  default?: number;
-  desc?: string;
-  onChange?: (value: any) => void;
-}): void {
-  const setting: RangeDef = {
-    type: "range",
-    label: def.label,
-    default: def.default ?? def.min,
-    min: def.min,
-    max: def.max,
-    step: def.step,
-    desc: def.desc,
-    onChange: def.onChange,
-  };
-  settings.definitions.set(name, setting);
-  if (!(name in settings.values)) {
-    settings.values[name] = setting.default;
-  }
-}
-
-// --- Value access ---
-
-/** Get the current value of a setting. */
-export function get(name: string): any {
-  return settings.values[name];
-}
-
-/** Set a setting value and fire its onChange callback. */
-export function set(name: string, value: any): void {
-  settings.values[name] = value;
-  const def = settings.definitions.get(name);
-  if (def?.onChange) {
-    def.onChange(value);
-  }
-}
-
-// --- Persistence ---
-
-/** Load settings from localStorage, applying saved values over defaults. */
-export function load(): void {
-  const raw = loadLocal(STORAGE_KEY);
-  if (raw) {
-    try {
-      const saved = JSON.parse(raw);
-      for (const [key, val] of Object.entries(saved)) {
-        if (settings.definitions.has(key)) {
-          settings.values[key] = val;
-        }
+  /** Register a list (select) setting. */
+  addList(name: string, def: {
+    label: string;
+    list: any[];
+    default?: any;
+    desc?: string;
+    onChange?: (value: any) => void;
+  }): void {
+    const setting: ListDef = {
+      type: "list",
+      label: def.label,
+      default: def.default ?? def.list[0],
+      list: def.list,
+      desc: def.desc,
+      onChange: def.onChange,
+    };
+    this.definitions.set(name, setting);
+    if (!(name in this.values)) {
+      this.values[name] = setting.default;
+    }
+    if (this.register) {
+      for (const opt of def.list) {
+        this.register(`set-${name}-${opt}`, "", () => {
+          this.set(name, opt);
+          this.save();
+        });
       }
-    } catch {
-      // Corrupt data — ignore
     }
   }
-}
 
-/** Save current settings to localStorage. */
-export function save(): void {
-  const toSave: Record<string, any> = {};
-  for (const [key] of settings.definitions) {
-    if (key in settings.values) {
-      toSave[key] = settings.values[key];
+  /** Register a range (slider) setting. */
+  addRange(name: string, def: {
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+    default?: number;
+    desc?: string;
+    onChange?: (value: any) => void;
+  }): void {
+    const setting: RangeDef = {
+      type: "range",
+      label: def.label,
+      default: def.default ?? def.min,
+      min: def.min,
+      max: def.max,
+      step: def.step,
+      desc: def.desc,
+      onChange: def.onChange,
+    };
+    this.definitions.set(name, setting);
+    if (!(name in this.values)) {
+      this.values[name] = setting.default;
     }
   }
-  saveLocal(STORAGE_KEY, JSON.stringify(toSave));
-}
 
-/** Reset all settings to their defaults. */
-export function reset(): void {
-  for (const [key, def] of settings.definitions) {
-    const prev = settings.values[key];
-    settings.values[key] = def.default;
-    if (def.onChange && prev !== def.default) {
-      def.onChange(def.default);
+  // --- Value access ---
+
+  /** Get the current value of a setting. */
+  get(name: string): any {
+    return this.values[name];
+  }
+
+  /** Set a setting value and fire its onChange callback. */
+  set(name: string, value: any): void {
+    this.values[name] = value;
+    const def = this.definitions.get(name);
+    if (def?.onChange) {
+      def.onChange(value);
     }
   }
-  removeLocal(STORAGE_KEY);
-}
 
-/** Get all registered setting definitions (for UI rendering). */
-export function getDefinitions(): Map<string, SettingDef> {
-  return settings.definitions;
-}
+  // --- Persistence ---
 
-/** Register commands for settings management. */
-export function initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
-  settings.register = registerCommand;
-  registerCommand("open-settings", "", () => {
-    const entries: SettingUIEntry[] = [];
-    for (const [name, def] of settings.definitions) {
-      entries.push({
-        name,
-        type: def.type,
-        label: def.label,
-        desc: def.desc,
-        value: get(name),
-        ...(def.type === "list" ? { list: (def as any).list } : {}),
-        ...(def.type === "range" ? { min: (def as any).min, max: (def as any).max, step: (def as any).step } : {}),
-      });
+  /** Load settings from localStorage, applying saved values over defaults. */
+  load(): void {
+    const raw = loadLocal(STORAGE_KEY);
+    if (raw) {
+      try {
+        const saved = JSON.parse(raw);
+        for (const [key, val] of Object.entries(saved)) {
+          if (this.definitions.has(key)) {
+            this.values[key] = val;
+          }
+        }
+      } catch {
+        // Corrupt data — ignore
+      }
     }
-    showSettingsUI(
-      entries,
-      (n, v) => { set(n, v); save(); },
-      () => reset(),
-    );
-  });
-  registerCommand("reset-settings", "", () => reset());
+  }
+
+  /** Save current settings to localStorage. */
+  save(): void {
+    const toSave: Record<string, any> = {};
+    for (const [key] of this.definitions) {
+      if (key in this.values) {
+        toSave[key] = this.values[key];
+      }
+    }
+    saveLocal(STORAGE_KEY, JSON.stringify(toSave));
+  }
+
+  /** Reset all settings to their defaults. */
+  reset(): void {
+    for (const [key, def] of this.definitions) {
+      const prev = this.values[key];
+      this.values[key] = def.default;
+      if (def.onChange && prev !== def.default) {
+        def.onChange(def.default);
+      }
+    }
+    removeLocal(STORAGE_KEY);
+  }
+
+  /** Get all registered setting definitions (for UI rendering). */
+  getDefinitions(): Map<string, SettingDef> {
+    return this.definitions;
+  }
+
+  /** Register commands for settings management. */
+  initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
+    this.register = registerCommand;
+    registerCommand("open-settings", "", () => {
+      const entries: SettingUIEntry[] = [];
+      for (const [name, def] of this.definitions) {
+        entries.push({
+          name,
+          type: def.type,
+          label: def.label,
+          desc: def.desc,
+          value: this.get(name),
+          ...(def.type === "list" ? { list: (def as any).list } : {}),
+          ...(def.type === "range" ? { min: (def as any).min, max: (def as any).max, step: (def as any).step } : {}),
+        });
+      }
+      showSettingsUI(
+        entries,
+        (n, v) => { this.set(n, v); this.save(); },
+        () => this.reset(),
+      );
+    });
+    registerCommand("reset-settings", "", () => this.reset());
+  }
 }

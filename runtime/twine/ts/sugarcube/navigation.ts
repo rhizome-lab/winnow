@@ -1,204 +1,143 @@
 /** SugarCube navigation — passage registry, goto/back/return/include. */
 
-import * as State from "./state";
-import * as Output from "./output";
-import * as Events from "./events";
-import type { RenderRoot } from "../../../shared/ts/render-root";
+import type { SugarCubeRuntime } from "./runtime";
 
-class SCNavigation {
-  passages: Map<string, () => void> = new Map();
+/** Passage function signature: receives the runtime instance. */
+export type PassageFn = (rt: SugarCubeRuntime) => void;
+
+export class SCNavigation {
+  passages: Map<string, PassageFn> = new Map();
   passageTags: Map<string, string[]> = new Map();
   currentPassage = "";
-}
 
-export const nav = new SCNavigation();
+  private rt: SugarCubeRuntime;
 
-// ---------------------------------------------------------------------------
-// SugarCubeRuntime
-// ---------------------------------------------------------------------------
+  constructor(rt: SugarCubeRuntime) {
+    this.rt = rt;
+  }
 
-export class SugarCubeRuntime {
-  /**
-   * Register all passage functions and start the story.
-   *
-   * Follows SugarCube's init order:
-   * 1. Register all passages/widgets
-   * 2. Run StoryInit passage (if it exists)
-   * 3. Navigate to the explicit start passage (or first registered)
-   */
-  start(passageMap: Record<string, () => void>, startPassage?: string, tagMap?: Record<string, string[]>, opts?: { root?: RenderRoot }): void {
-    if (opts?.root) {
-      Output.output.doc = opts.root.doc;
-      Output.output.container = opts.root.container as Element;
-    }
-
-    for (const [name, fn] of Object.entries(passageMap)) {
-      nav.passages.set(name, fn);
-    }
-    if (tagMap) {
-      for (const [name, tags] of Object.entries(tagMap)) {
-        nav.passageTags.set(name, tags);
-      }
-    }
-
-    // Run StoryInit if it exists (initializes story variables)
-    const storyInit = nav.passages.get("StoryInit");
-    if (storyInit) {
+  /** Run a special passage by name, if it exists. Errors are logged. */
+  private runSpecial(name: string): void {
+    const fn = this.passages.get(name);
+    if (fn) {
       try {
-        storyInit();
+        fn(this.rt);
       } catch (e) {
-        console.error("[navigation] error in StoryInit:", e);
+        console.error(`[navigation] error in ${name}:`, e);
       }
     }
+  }
 
-    // Navigate to the explicit start passage, or fall back to first registered
-    const target = startPassage || Object.keys(passageMap)[0];
-    if (target) {
-      goto(target);
+  /** Render a passage with full event lifecycle and special passage support. */
+  private renderPassage(target: string, fn: PassageFn): void {
+    this.rt.State.clearTemps();
+    this.currentPassage = target;
+    this.rt.Output.clear();
+
+    const tags = this.passageTags.get(target) || [];
+    if (tags.includes("nobr")) {
+      this.rt.Output.setNobr(true);
     }
 
-    Events.trigger(":storyready");
-  }
-}
+    const passageObj = { title: target, tags };
 
-export function createSugarCubeRuntime(): SugarCubeRuntime {
-  return new SugarCubeRuntime();
-}
+    this.rt.Events.trigger(":passageinit", { passage: passageObj });
+    this.runSpecial("PassageReady");
+    this.rt.Events.trigger(":passagestart", { passage: passageObj });
+    this.runSpecial("PassageHeader");
 
-/** Run a special passage by name, if it exists. Errors are logged. */
-function runSpecial(name: string): void {
-  const fn = nav.passages.get(name);
-  if (fn) {
     try {
-      fn();
+      fn(this.rt);
     } catch (e) {
-      console.error(`[navigation] error in ${name}:`, e);
+      console.error(`[navigation] error in passage "${target}":`, e);
+      this.rt.Output.text(`Error in passage "${target}": ${e}`);
+    }
+
+    this.runSpecial("PassageFooter");
+    this.rt.Events.trigger(":passagerender", { passage: passageObj });
+    this.runSpecial("PassageDone");
+
+    this.rt.Output.setNobr(false);
+    this.rt.Output.flush();
+
+    this.rt.Events.trigger(":passageend", { passage: passageObj });
+    this.rt.Events.trigger(":passagedisplay", { passage: passageObj });
+  }
+
+  /** Navigate to a passage by name. */
+  goto(target: string): void {
+    const fn = this.passages.get(target);
+    if (!fn) {
+      console.error(`[navigation] passage not found: "${target}"`);
+      return;
+    }
+    this.rt.State.pushMoment(target);
+    this.renderPassage(target, fn);
+  }
+
+  /** Go back to the previous passage. */
+  back(): void {
+    const title = this.rt.State.popMoment();
+    if (title === undefined) {
+      console.warn("[navigation] no history to go back to");
+      return;
+    }
+    const fn = this.passages.get(title);
+    if (!fn) {
+      console.error(`[navigation] passage not found on back: "${title}"`);
+      return;
+    }
+    this.renderPassage(title, fn);
+  }
+
+  /** Return to the previous passage (alias for back). */
+  return(): void {
+    this.back();
+  }
+
+  /** Include (embed) another passage inline without navigation. */
+  include(passage: string): void {
+    const fn = this.passages.get(passage);
+    if (!fn) {
+      console.error(`[navigation] passage not found for include: "${passage}"`);
+      return;
+    }
+    try {
+      fn(this.rt);
+    } catch (e) {
+      console.error(`[navigation] error in included passage "${passage}":`, e);
+      this.rt.Output.text(`Error in passage "${passage}": ${e}`);
     }
   }
-}
 
-/** Render a passage with full event lifecycle and special passage support. */
-function renderPassage(target: string, fn: () => void): void {
-  State.clearTemps();
-  nav.currentPassage = target;
-  Output.clear();
-
-  // Check for nobr tag
-  const tags = nav.passageTags.get(target) || [];
-  if (tags.includes("nobr")) {
-    Output.setNobr(true);
+  /** Get the current passage name. */
+  current(): string {
+    return this.currentPassage;
   }
 
-  // Build a passage object matching SugarCube's event data format.
-  const passageObj = { title: target, tags };
-
-  Events.trigger(":passageinit", { passage: passageObj });
-
-  // PassageReady runs after :passageinit, before the main passage
-  runSpecial("PassageReady");
-
-  Events.trigger(":passagestart", { passage: passageObj });
-
-  // PassageHeader content is prepended before the main passage
-  runSpecial("PassageHeader");
-
-  try {
-    fn();
-  } catch (e) {
-    console.error(`[navigation] error in passage "${target}":`, e);
-    Output.text(`Error in passage "${target}": ${e}`);
+  /** Check if a passage exists in the registry. */
+  has(name: string): boolean {
+    return this.passages.has(name);
   }
 
-  // PassageFooter content is appended after the main passage
-  runSpecial("PassageFooter");
-
-  Events.trigger(":passagerender", { passage: passageObj });
-
-  // PassageDone runs after :passagerender, before flush
-  runSpecial("PassageDone");
-
-  Output.setNobr(false);
-  Output.flush();
-
-  Events.trigger(":passageend", { passage: passageObj });
-  Events.trigger(":passagedisplay", { passage: passageObj });
-}
-
-/** Navigate to a passage by name. */
-export function goto(target: string): void {
-  const fn = nav.passages.get(target);
-  if (!fn) {
-    console.error(`[navigation] passage not found: "${target}"`);
-    return;
+  /** Get a passage function by name (for widget/engine lookup). */
+  getPassage(name: string): PassageFn | undefined {
+    return this.passages.get(name);
   }
-  State.pushMoment(target);
-  renderPassage(target, fn);
-}
 
-/** Go back to the previous passage. */
-export function back(): void {
-  const title = State.popMoment();
-  if (title === undefined) {
-    console.warn("[navigation] no history to go back to");
-    return;
+  /** Get the tags for a passage. */
+  getTags(name: string): string[] {
+    return this.passageTags.get(name) || [];
   }
-  const fn = nav.passages.get(title);
-  if (!fn) {
-    console.error(`[navigation] passage not found on back: "${title}"`);
-    return;
+
+  /** Get all passage names in the registry. */
+  allPassages(): string[] {
+    return Array.from(this.passages.keys());
   }
-  renderPassage(title, fn);
-}
 
-/** Return to the previous passage (alias for back). */
-// Using a wrapper to avoid JS reserved word in export.
-export { returnNav as return };
-function returnNav(): void {
-  back();
-}
-
-/** Include (embed) another passage inline without navigation. */
-export function include(passage: string): void {
-  const fn = nav.passages.get(passage);
-  if (!fn) {
-    console.error(`[navigation] passage not found for include: "${passage}"`);
-    return;
+  /** Register commands for navigation. */
+  initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
+    registerCommand("go-back", "", () => this.back());
+    registerCommand("restart", "", () => location.reload());
   }
-  try {
-    fn();
-  } catch (e) {
-    console.error(`[navigation] error in included passage "${passage}":`, e);
-    Output.text(`Error in passage "${passage}": ${e}`);
-  }
-}
-
-/** Get the current passage name. */
-export function current(): string {
-  return nav.currentPassage;
-}
-
-/** Check if a passage exists in the registry. */
-export function has(name: string): boolean {
-  return nav.passages.has(name);
-}
-
-/** Get a passage function by name (for widget/engine lookup). */
-export function getPassage(name: string): (() => void) | undefined {
-  return nav.passages.get(name);
-}
-
-/** Get the tags for a passage. */
-export function getTags(name: string): string[] {
-  return nav.passageTags.get(name) || [];
-}
-
-/** Get all passage names in the registry. */
-export function allPassages(): string[] {
-  return Array.from(nav.passages.keys());
-}
-
-/** Register commands for navigation. */
-export function initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
-  registerCommand("go-back", "", () => back());
-  registerCommand("restart", "", () => location.reload());
 }

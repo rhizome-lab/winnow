@@ -5,7 +5,7 @@
  * buffer stack to accumulate content, then applies it to matched elements.
  */
 
-import { output, pushBuffer, popBuffer } from "./output";
+import type { SugarCubeRuntime } from "./runtime";
 
 // --- DOM macro context stack ---
 
@@ -15,167 +15,171 @@ interface DomMacroContext {
   classes?: string[];
 }
 
-const domStack: DomMacroContext[] = [];
+export class SCDOM {
+  private domStack: DomMacroContext[] = [];
+  private rt: SugarCubeRuntime;
 
-/** Get the root element for DOM queries (output container or document). */
-function queryRoot(): ParentNode {
-  return output.container ?? document;
-}
-
-/** Get the passages container for content insertion. */
-function passagesContainer(): Element | null {
-  return output.container ?? document.getElementById("passages");
-}
-
-// --- Replace ---
-
-export function replace_start(selector: string): void {
-  domStack.push({ selector, operation: "replace" });
-  pushBuffer();
-}
-
-export function replace_end(): void {
-  const body = popBuffer();
-  const ctx = domStack.pop();
-  if (!ctx) return;
-
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    while (target.firstChild) target.removeChild(target.firstChild);
-    target.appendChild(body.cloneNode(true));
+  constructor(rt: SugarCubeRuntime) {
+    this.rt = rt;
   }
-}
 
-// --- Append ---
-
-export function append_start(selector: string): void {
-  domStack.push({ selector, operation: "append" });
-  pushBuffer();
-}
-
-export function append_end(): void {
-  const body = popBuffer();
-  const ctx = domStack.pop();
-  if (!ctx) return;
-
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    target.appendChild(body.cloneNode(true));
+  private queryRoot(): ParentNode {
+    return this.rt.Output.container ?? document;
   }
-}
 
-// --- Prepend ---
-
-export function prepend_start(selector: string): void {
-  domStack.push({ selector, operation: "prepend" });
-  pushBuffer();
-}
-
-export function prepend_end(): void {
-  const body = popBuffer();
-  const ctx = domStack.pop();
-  if (!ctx) return;
-
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    target.insertBefore(body.cloneNode(true), target.firstChild);
+  private passagesContainer(): Element | null {
+    return this.rt.Output.container ?? document.getElementById("passages");
   }
-}
 
-// --- Copy ---
+  // --- Replace ---
 
-export function copy_start(selector: string): void {
-  domStack.push({ selector, operation: "copy" });
-  pushBuffer();
-}
+  replace_start(selector: string): void {
+    this.domStack.push({ selector, operation: "replace" });
+    this.rt.Output.pushBuffer();
+  }
 
-export function copy_end(): void {
-  popBuffer(); // discard body (copy doesn't use it)
-  const ctx = domStack.pop();
-  if (!ctx) return;
+  replace_end(): void {
+    const body = this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx) return;
 
-  const source = queryRoot().querySelector(ctx.selector);
-  if (!source) return;
-
-  // Clone matched element's content into the #passages container
-  const container = passagesContainer();
-  if (container) {
-    for (const child of Array.from(source.childNodes)) {
-      container.appendChild(child.cloneNode(true));
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      while (target.firstChild) target.removeChild(target.firstChild);
+      target.appendChild(body.cloneNode(true));
     }
   }
-}
 
-// --- Remove ---
+  // --- Append ---
 
-export function remove_start(selector: string): void {
-  domStack.push({ selector, operation: "remove" });
-  pushBuffer();
-}
-
-export function remove_end(): void {
-  popBuffer(); // discard body
-  const ctx = domStack.pop();
-  if (!ctx) return;
-
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    target.remove();
+  append_start(selector: string): void {
+    this.domStack.push({ selector, operation: "append" });
+    this.rt.Output.pushBuffer();
   }
-}
 
-// --- Toggle/Add/Remove class ---
+  append_end(): void {
+    const body = this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx) return;
 
-export function toggleclass_start(selector: string, ...classes: string[]): void {
-  domStack.push({ selector, operation: "toggleclass", classes });
-  pushBuffer();
-}
-
-export function toggleclass_end(): void {
-  popBuffer(); // discard body
-  const ctx = domStack.pop();
-  if (!ctx || !ctx.classes) return;
-
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    for (const cls of ctx.classes) {
-      target.classList.toggle(cls);
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      target.appendChild(body.cloneNode(true));
     }
   }
-}
 
-export function addclass_start(selector: string, ...classes: string[]): void {
-  domStack.push({ selector, operation: "addclass", classes });
-  pushBuffer();
-}
+  // --- Prepend ---
 
-export function addclass_end(): void {
-  popBuffer(); // discard body
-  const ctx = domStack.pop();
-  if (!ctx || !ctx.classes) return;
+  prepend_start(selector: string): void {
+    this.domStack.push({ selector, operation: "prepend" });
+    this.rt.Output.pushBuffer();
+  }
 
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    for (const cls of ctx.classes) {
-      target.classList.add(cls);
+  prepend_end(): void {
+    const body = this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx) return;
+
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      target.insertBefore(body.cloneNode(true), target.firstChild);
     }
   }
-}
 
-export function removeclass_start(selector: string, ...classes: string[]): void {
-  domStack.push({ selector, operation: "removeclass", classes });
-  pushBuffer();
-}
+  // --- Copy ---
 
-export function removeclass_end(): void {
-  popBuffer(); // discard body
-  const ctx = domStack.pop();
-  if (!ctx || !ctx.classes) return;
+  copy_start(selector: string): void {
+    this.domStack.push({ selector, operation: "copy" });
+    this.rt.Output.pushBuffer();
+  }
 
-  const targets = queryRoot().querySelectorAll(ctx.selector);
-  for (const target of targets) {
-    for (const cls of ctx.classes) {
-      target.classList.remove(cls);
+  copy_end(): void {
+    this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx) return;
+
+    const source = this.queryRoot().querySelector(ctx.selector);
+    if (!source) return;
+
+    const container = this.passagesContainer();
+    if (container) {
+      for (const child of Array.from(source.childNodes)) {
+        container.appendChild(child.cloneNode(true));
+      }
+    }
+  }
+
+  // --- Remove ---
+
+  remove_start(selector: string): void {
+    this.domStack.push({ selector, operation: "remove" });
+    this.rt.Output.pushBuffer();
+  }
+
+  remove_end(): void {
+    this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx) return;
+
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      target.remove();
+    }
+  }
+
+  // --- Toggle/Add/Remove class ---
+
+  toggleclass_start(selector: string, ...classes: string[]): void {
+    this.domStack.push({ selector, operation: "toggleclass", classes });
+    this.rt.Output.pushBuffer();
+  }
+
+  toggleclass_end(): void {
+    this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx || !ctx.classes) return;
+
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      for (const cls of ctx.classes) {
+        target.classList.toggle(cls);
+      }
+    }
+  }
+
+  addclass_start(selector: string, ...classes: string[]): void {
+    this.domStack.push({ selector, operation: "addclass", classes });
+    this.rt.Output.pushBuffer();
+  }
+
+  addclass_end(): void {
+    this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx || !ctx.classes) return;
+
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      for (const cls of ctx.classes) {
+        target.classList.add(cls);
+      }
+    }
+  }
+
+  removeclass_start(selector: string, ...classes: string[]): void {
+    this.domStack.push({ selector, operation: "removeclass", classes });
+    this.rt.Output.pushBuffer();
+  }
+
+  removeclass_end(): void {
+    this.rt.Output.popBuffer();
+    const ctx = this.domStack.pop();
+    if (!ctx || !ctx.classes) return;
+
+    const targets = this.queryRoot().querySelectorAll(ctx.selector);
+    for (const target of targets) {
+      for (const cls of ctx.classes) {
+        target.classList.remove(cls);
+      }
     }
   }
 }

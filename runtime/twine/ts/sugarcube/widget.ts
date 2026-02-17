@@ -6,42 +6,42 @@
  * function and invokes it.
  */
 
-import * as State from "./state";
-import * as Macro from "./macro";
-import { pushBuffer, popBuffer } from "./output";
-import { getPassage } from "./navigation";
+import type { SugarCubeRuntime } from "./runtime";
 
-/** Invoke a widget by name. */
-export function call(name: string, ...args: any[]): void {
-  // Set _args temp variable for the widget to access
-  State.set("_args", args);
+export class SCWidget {
+  private rt: SugarCubeRuntime;
 
-  // Try passage/widget registry first
-  const widgetFn = getPassage(name);
-  if (widgetFn) {
-    widgetFn();
-    return;
+  constructor(rt: SugarCubeRuntime) {
+    this.rt = rt;
   }
 
-  // Fall back to Macro registry
-  const macroDef = Macro.get(name);
-  if (macroDef) {
-    Macro.invokeMacro(macroDef, name, args);
-    return;
+  /** Invoke a widget by name. */
+  call(name: string, ...args: any[]): void {
+    this.rt.State.set("_args", args);
+
+    const widgetFn = this.rt.Navigation.getPassage(name);
+    if (widgetFn) {
+      widgetFn(this.rt);
+      return;
+    }
+
+    const macroDef = this.rt.Macro.get(name);
+    if (macroDef) {
+      this.rt.Macro.invokeMacro(macroDef, name, args);
+      return;
+    }
+
+    console.warn(`[widget] widget not found: "${name}"`);
   }
 
-  console.warn(`[widget] widget not found: "${name}"`);
-}
+  /** Start a widget content block (<<widget>> body content). */
+  content_start(): void {
+    this.rt.Output.pushBuffer();
+  }
 
-/** Start a widget content block (<<widget>> body content). */
-export function content_start(): void {
-  pushBuffer();
-}
-
-/** End a widget content block. */
-export function content_end(): void {
-  const body = popBuffer();
-  // Widget body content is captured but consumed by the widget function.
-  // The widget accesses it via the _contents temp variable.
-  State.set("_contents", body);
+  /** End a widget content block. */
+  content_end(): void {
+    const body = this.rt.Output.popBuffer();
+    this.rt.State.set("_contents", body);
+  }
 }
