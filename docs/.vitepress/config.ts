@@ -45,6 +45,7 @@ export default withMermaid(
             items: [
               { text: 'Philosophy', link: '/philosophy' },
               { text: 'Tier 1 vs Tier 2', link: '/tiers' },
+              { text: 'Persistence & Saving', link: '/persistence' },
             ]
           },
         ]

@@ -558,6 +558,21 @@ API shim (engine runtime) runs on any target by swapping the platform
 implementation. For Rust targets, the platform traits monomorphize. For
 TypeScript, the bundler resolves the platform module at build time.
 
+## Persistence & Save System
+
+See [Persistence & Saving](persistence.md) for the full design. Key points:
+
+- **Save state** (current moment) and **history** (undo stack) are separate
+  concerns with independent persistence and retention policies.
+- The engine calls `commit(state)` after each transition; the platform handles
+  persistence strategy (when, where, how many copies).
+- Three composable axes: **state transforms** (what to save), **timing** (when
+  to save), **backends** (where to save). Deployers compose these at init.
+- History supports **diff-based** (store only changed variables per transition)
+  or **snapshot-based** (full clone) strategies, chosen per game's state size.
+- Default: continuous autosave with debouncing, upgrading every engine's
+  original save system.
+
 ## Architecture Decision Records
 
 See [adr/](adr/) for design decisions:
