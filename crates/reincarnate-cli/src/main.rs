@@ -181,11 +181,40 @@ fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
     }
 }
 
+/// In release builds, embed the entire runtime/ tree so the binary is self-contained.
+#[cfg(not(debug_assertions))]
+static EMBEDDED_RUNTIME: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../runtime");
+
+/// Release: extract embedded runtime to a temp directory.
+#[cfg(not(debug_assertions))]
+fn runtime_base_dir() -> Option<PathBuf> {
+    let tmp = std::env::temp_dir().join("reincarnate-runtime");
+    EMBEDDED_RUNTIME.extract(&tmp).ok()?;
+    Some(tmp)
+}
+
+/// Debug: walk up from the executable to find the workspace root's `runtime/` dir.
+#[cfg(debug_assertions)]
+fn runtime_base_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent()?;
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            let content = std::fs::read_to_string(&cargo_toml).ok()?;
+            if content.contains("[workspace]") {
+                return Some(dir.join("runtime"));
+            }
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Resolve the engine-specific runtime package.
 ///
-/// Uses `CARGO_MANIFEST_DIR` (compile-time) to locate `runtime/{engine}/{lang}/`
-/// relative to the workspace root. Loads `runtime.json` from the directory.
-/// Returns `None` if the directory or config file doesn't exist.
+/// In debug builds, locates `runtime/` by walking up from the executable to find
+/// the workspace root. In release builds, extracts embedded runtime files to a
+/// temp directory. Then loads `runtime.json` from `{engine}/{lang}/`.
 ///
 /// When `variant` is `Some("harlowe")`, tries `runtime.harlowe.json` first,
 /// falling back to `runtime.json`. This lets a single engine directory serve
@@ -201,13 +230,11 @@ fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend, variant: Opti
         TargetBackend::TypeScript => "ts",
         _ => return None,
     };
-    // CARGO_MANIFEST_DIR points to crates/reincarnate-cli/
-    let cli_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let runtime_dir = cli_dir.join("../../runtime").join(engine_name).join(lang);
-    let source_dir = match runtime_dir.canonicalize() {
-        Ok(p) if p.is_dir() => p,
-        _ => return None,
-    };
+    let runtime_base = runtime_base_dir()?;
+    let source_dir = runtime_base.join(engine_name).join(lang);
+    if !source_dir.is_dir() {
+        return None;
+    }
     // Try variant-specific config first (e.g. runtime.harlowe.json),
     // then fall back to runtime.json.
     let config_path = if let Some(v) = variant {
