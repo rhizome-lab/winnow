@@ -102,24 +102,28 @@ function decodeSymbol(br: BitReader, table: HuffmanTable): number {
 // Fixed Huffman tables (RFC 1951 §3.2.6)
 // ---------------------------------------------------------------------------
 
-let fixedLitLen: HuffmanTable | null = null;
-let fixedDist: HuffmanTable | null = null;
+class DeflateState {
+  fixedLitLen: HuffmanTable | null = null;
+  fixedDist: HuffmanTable | null = null;
+}
+
+const _deflateState = new DeflateState();
 
 function getFixedTables(): [HuffmanTable, HuffmanTable] {
-  if (!fixedLitLen) {
+  if (!_deflateState.fixedLitLen) {
     const lens = new Uint8Array(288);
     let i = 0;
     for (; i < 144; i++) lens[i] = 8;
     for (; i < 256; i++) lens[i] = 9;
     for (; i < 280; i++) lens[i] = 7;
     for (; i < 288; i++) lens[i] = 8;
-    fixedLitLen = buildHuffmanTable(lens, 288);
+    _deflateState.fixedLitLen = buildHuffmanTable(lens, 288);
 
     const dlens = new Uint8Array(32);
     for (i = 0; i < 32; i++) dlens[i] = 5;
-    fixedDist = buildHuffmanTable(dlens, 32);
+    _deflateState.fixedDist = buildHuffmanTable(dlens, 32);
   }
-  return [fixedLitLen, fixedDist!];
+  return [_deflateState.fixedLitLen, _deflateState.fixedDist!];
 }
 
 // ---------------------------------------------------------------------------

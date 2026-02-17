@@ -271,9 +271,9 @@ export class DisplayObject extends EventDispatcher {
     super();
     this._transform = new Transform(this);
     // Document-class root: wire stage during construction (Flash behaviour).
-    if (_constructingRootStage) {
-      this._stage = _constructingRootStage;
-      _constructingRootStage = null;
+    if (_displayState.constructingRootStage) {
+      this._stage = _displayState.constructingRootStage;
+      _displayState.constructingRootStage = null;
     }
   }
 
@@ -1206,11 +1206,15 @@ export class Loader extends DisplayObjectContainer {
  * picks up for the first object created (the root), then clears it so that
  * children created during the root's constructor don't inherit it directly.
  */
-let _constructingRootStage: Stage | null = null;
+class DisplayModuleState {
+  constructingRootStage: Stage | null = null;
+}
+
+const _displayState = new DisplayModuleState();
 
 /** @internal Set by runtime before constructing the document class root. */
 export function _setConstructingRoot(s: Stage | null): void {
-  _constructingRootStage = s;
+  _displayState.constructingRootStage = s;
 }
 
 // ---------------------------------------------------------------------------

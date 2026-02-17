@@ -12,13 +12,17 @@ import { createMeasureContext } from "./platform";
 // Shared off-screen canvas for text measurement
 // ---------------------------------------------------------------------------
 
-let _measureCtx: CanvasRenderingContext2D | null = null;
+class TextModuleState {
+  measureCtx: CanvasRenderingContext2D | null = null;
+}
+
+const _textState = new TextModuleState();
 
 function getMeasureCtx(): CanvasRenderingContext2D {
-  if (!_measureCtx) {
-    _measureCtx = createMeasureContext();
+  if (!_textState.measureCtx) {
+    _textState.measureCtx = createMeasureContext();
   }
-  return _measureCtx;
+  return _textState.measureCtx;
 }
 
 function _fontString(fmt: TextFormat, defaultFmt: TextFormat): string {
