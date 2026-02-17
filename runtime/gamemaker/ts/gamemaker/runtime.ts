@@ -2,7 +2,8 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, resizeCanvas, loadImage, scheduleFrame } from "./platform";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleFrame } from "./platform";
+import type { RenderRoot } from "../../../shared/ts/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
 import { StorageState, createStorageAPI } from "./storage";
@@ -245,6 +246,7 @@ export class GameRuntime {
   _storage = new StorageState();
   _math = new MathState();
   _gfx = new GraphicsContext();
+  _root?: RenderRoot;
 
   // Runtime state
   _drawHandle = 0;
@@ -456,7 +458,14 @@ export class GameRuntime {
     }
 
     // Init canvas and input
-    initCanvas(this._gfx, "reincarnate-canvas");
+    if (this._root) {
+      const canvas = createCanvas(this._root.doc);
+      canvas.id = "reincarnate-canvas";
+      this._root.container.appendChild(canvas);
+      initCanvas(this._gfx, "reincarnate-canvas", this._root.doc);
+    } else {
+      initCanvas(this._gfx, "reincarnate-canvas");
+    }
     this._gfx.canvas.tabIndex = 0;
     this._gfx.canvas.focus();
     this.setupInput();
@@ -491,8 +500,10 @@ export interface GameConfig {
 
 // ---- Factory function ----
 
-export function createGameRuntime(): GameRuntime {
-  return new GameRuntime();
+export function createGameRuntime(opts?: { root?: RenderRoot }): GameRuntime {
+  const rt = new GameRuntime();
+  if (opts?.root) rt._root = opts.root;
+  return rt;
 }
 
 // ---- Timing stub (for compatibility) ----
