@@ -20,6 +20,23 @@ pub struct Preprocessed {
     pub clone_positions: Vec<usize>,
 }
 
+/// Copy one UTF-8 character from `src` at byte position `i` into `out`.
+/// Returns the byte position after the character.
+fn push_char(out: &mut String, src: &str, i: usize) -> usize {
+    let bytes = src.as_bytes();
+    if bytes[i] < 0x80 {
+        out.push(bytes[i] as char);
+        i + 1
+    } else {
+        let mut end = i + 1;
+        while end < bytes.len() && bytes[end] & 0xC0 == 0x80 {
+            end += 1;
+        }
+        out.push_str(&src[i..end]);
+        end
+    }
+}
+
 /// Preprocess a SugarCube expression, replacing TwineScript keywords with JS equivalents.
 ///
 /// Skips replacements inside string literals, template literals, and comments.
@@ -43,14 +60,19 @@ pub fn preprocess(src: &str) -> Preprocessed {
             i += 1;
             while i < len {
                 let c = bytes[i];
-                out.push(c as char);
-                i += 1;
                 if c == quote {
+                    out.push(c as char);
+                    i += 1;
                     break;
                 }
                 if c == b'\\' && i < len {
-                    out.push(bytes[i] as char);
+                    out.push(c as char);
                     i += 1;
+                    if i < len {
+                        i = push_char(&mut out, src, i);
+                    }
+                } else {
+                    i = push_char(&mut out, src, i);
                 }
             }
             continue;
@@ -67,12 +89,11 @@ pub fn preprocess(src: &str) -> Preprocessed {
                     i += 1;
                     break;
                 }
-                if c == b'\\' && i < len {
+                if c == b'\\' {
                     out.push(c as char);
                     i += 1;
                     if i < len {
-                        out.push(bytes[i] as char);
-                        i += 1;
+                        i = push_char(&mut out, src, i);
                     }
                 } else if c == b'$' && i + 1 < len && bytes[i + 1] == b'{' {
                     out.push('$');
@@ -104,8 +125,7 @@ pub fn preprocess(src: &str) -> Preprocessed {
                     }
                 } else {
                     // Template literal text — copy verbatim
-                    out.push(c as char);
-                    i += 1;
+                    i = push_char(&mut out, src, i);
                 }
             }
             continue;
@@ -114,8 +134,7 @@ pub fn preprocess(src: &str) -> Preprocessed {
         // Skip line comments
         if ch == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
             while i < len && bytes[i] != b'\n' {
-                out.push(bytes[i] as char);
-                i += 1;
+                i = push_char(&mut out, src, i);
             }
             continue;
         }
@@ -132,8 +151,7 @@ pub fn preprocess(src: &str) -> Preprocessed {
                     i += 2;
                     break;
                 }
-                out.push(bytes[i] as char);
-                i += 1;
+                i = push_char(&mut out, src, i);
             }
             continue;
         }
@@ -184,15 +202,14 @@ pub fn preprocess(src: &str) -> Preprocessed {
 
             // Not a keyword — copy the identifier
             while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
-                out.push(bytes[i] as char);
+                out.push(bytes[i] as char); // identifier chars are ASCII
                 i += 1;
             }
             continue;
         }
 
-        // Default: copy character
-        out.push(ch as char);
-        i += 1;
+        // Default: copy character (handles multi-byte UTF-8)
+        i = push_char(&mut out, src, i);
     }
 
     Preprocessed {
@@ -443,5 +460,13 @@ mod tests {
     fn not_as_prefix_operator() {
         // `not` becomes `!` — the space after is preserved from source
         assert_eq!(pp("not $x and not $y"), "! $x && ! $y");
+    }
+
+    #[test]
+    fn utf8_preserved() {
+        // Non-ASCII chars must not be corrupted (no mojibake)
+        assert_eq!(pp("$obj.risqué isnot true"), "$obj.risqué !== true");
+        assert_eq!(pp("\"café\""), "\"café\"");
+        assert_eq!(pp("`naïve ${$x is 1}`"), "`naïve ${$x === 1}`");
     }
 }
