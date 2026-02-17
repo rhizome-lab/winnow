@@ -56,27 +56,56 @@ pub fn preprocess(src: &str) -> Preprocessed {
             continue;
         }
 
-        // Skip template literals
+        // Template literals: skip literal text but preprocess ${...} expressions
         if ch == b'`' {
             out.push(ch as char);
             i += 1;
-            let mut depth = 0u32;
             while i < len {
                 let c = bytes[i];
-                out.push(c as char);
-                i += 1;
-                if c == b'`' && depth == 0 {
+                if c == b'`' {
+                    out.push(c as char);
+                    i += 1;
                     break;
                 }
                 if c == b'\\' && i < len {
-                    out.push(bytes[i] as char);
+                    out.push(c as char);
                     i += 1;
-                } else if c == b'$' && i < len && bytes[i] == b'{' {
+                    if i < len {
+                        out.push(bytes[i] as char);
+                        i += 1;
+                    }
+                } else if c == b'$' && i + 1 < len && bytes[i + 1] == b'{' {
+                    out.push('$');
                     out.push('{');
+                    i += 2;
+                    // Extract expression between ${ and matching }, preprocess it
+                    let expr_start = i;
+                    let mut depth = 1u32;
+                    while i < len && depth > 0 {
+                        match bytes[i] {
+                            b'{' => { depth += 1; i += 1; }
+                            b'}' => { depth -= 1; if depth > 0 { i += 1; } }
+                            b'"' | b'\'' => { i = skip_string_in_preprocess(bytes, i); }
+                            b'`' => { i = skip_template_in_preprocess(bytes, i); }
+                            _ => { i += 1; }
+                        }
+                    }
+                    let expr_text = &src[expr_start..i];
+                    let pp = preprocess(expr_text);
+                    out.push_str(&pp.js);
+                    // Track def/ndef/clone positions with offset
+                    let offset = out.len() - pp.js.len();
+                    for p in pp.def_positions { def_positions.push(offset + p); }
+                    for p in pp.ndef_positions { ndef_positions.push(offset + p); }
+                    for p in pp.clone_positions { clone_positions.push(offset + p); }
+                    if i < len && bytes[i] == b'}' {
+                        out.push('}');
+                        i += 1;
+                    }
+                } else {
+                    // Template literal text — copy verbatim
+                    out.push(c as char);
                     i += 1;
-                    depth += 1;
-                } else if c == b'}' && depth > 0 {
-                    depth -= 1;
                 }
             }
             continue;
@@ -187,6 +216,39 @@ enum KeywordKind {
 ///
 /// Keywords are only matched at word boundaries — the character after the keyword
 /// must not be alphanumeric or `_`.
+/// Skip a string literal in the preprocess context.
+fn skip_string_in_preprocess(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == quote {
+            return i + 1;
+        }
+        if bytes[i] == b'\\' {
+            i += 1;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// Skip a template literal in the preprocess context (nested templates inside ${}).
+fn skip_template_in_preprocess(bytes: &[u8], start: usize) -> usize {
+    let mut i = start + 1; // skip opening `
+    let mut depth = 0u32;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'`' if depth == 0 => return i + 1,
+            b'\\' => { i += 2; continue; }
+            b'$' if i + 1 < bytes.len() && bytes[i + 1] == b'{' => { i += 2; depth += 1; continue; }
+            b'}' if depth > 0 => { depth -= 1; }
+            _ => {}
+        }
+        i += 1;
+    }
+    i
+}
+
 fn try_match_keyword(bytes: &[u8], i: usize, len: usize) -> Option<(&'static str, usize, KeywordKind)> {
     // Match longer keywords first to avoid prefix conflicts (e.g. `isnot` before `is`)
     let candidates: &[(&[u8], &str, KeywordKind)] = &[
@@ -288,8 +350,22 @@ mod tests {
     }
 
     #[test]
-    fn template_not_replaced() {
+    fn template_text_not_replaced() {
+        // Keywords in literal text portions of template are NOT replaced
         assert_eq!(pp("`is ${$x} to`"), "`is ${$x} to`");
+    }
+
+    #[test]
+    fn template_expression_preprocessed() {
+        // Keywords inside ${...} ARE preprocessed
+        assert_eq!(
+            pp("`${$x is 1 ? 'a' : 'b'}`"),
+            "`${$x === 1 ? 'a' : 'b'}`"
+        );
+        assert_eq!(
+            pp("`count: ${_n gt 0}`"),
+            "`count: ${_n > 0}`"
+        );
     }
 
     #[test]

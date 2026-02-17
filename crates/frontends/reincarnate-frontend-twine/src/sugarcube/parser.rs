@@ -1388,7 +1388,14 @@ fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
         }
 
         if i > val_start {
-            result.push(Expr::new(base + val_start, base + i));
+            // Strip trailing comma (DoL uses `<<case "a", "b">>` with commas)
+            let mut end = i;
+            while end > val_start && src.as_bytes()[end - 1] == b',' {
+                end -= 1;
+            }
+            if end > val_start {
+                result.push(Expr::new(base + val_start, base + end));
+            }
         }
     }
 
