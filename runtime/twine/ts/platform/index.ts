@@ -6,7 +6,13 @@
  * "./input" for a module that merges both.
  */
 
-export { loadLocal, saveLocal, removeLocal } from "./persistence";
+export { loadLocal, saveLocal, removeLocal, localStorageBackend } from "./persistence";
+
+export {
+  type SaveBackend, type SaveableState,
+  init as initSave,
+  saveSlot, loadSlot, deleteSlot, hasSlot, slotCount, totalSlots,
+} from "./save";
 
 export {
   type AudioHandle,

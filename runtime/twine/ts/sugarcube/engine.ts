@@ -132,64 +132,56 @@ export class SCEngine {
     };
 
     // --- Save ---
-    const saveSlotCount = 8;
     const onLoadCallbacks = new Set<Function>();
     const onSaveCallbacks = new Set<Function>();
 
     g.Save = {
       slots: {
-        length: saveSlotCount,
-        count() {
-          let n = 0;
-          for (let i = 0; i < saveSlotCount; i++) { if (State.hasSlot(String(i))) n++; }
-          return n;
-        },
-        isEmpty() { return g.Save.slots.count() === 0; },
-        has(i: number) { return State.hasSlot(String(i)); },
+        length: Platform.totalSlots(),
+        count() { return Platform.slotCount(); },
+        isEmpty() { return Platform.slotCount() === 0; },
+        has(i: number) { return Platform.hasSlot(String(i)); },
         get(i: number) {
-          const raw = State.loadSlot(String(i));
-          return raw !== undefined ? { title: raw } : null;
+          const title = Platform.loadSlot(String(i));
+          return title !== undefined ? { title } : null;
         },
         load(i: number) {
-          const title = State.loadSlot(String(i));
+          const title = Platform.loadSlot(String(i));
           if (title) {
             for (const cb of onLoadCallbacks) cb();
             Navigation.goto(title);
           }
         },
-        save(i: number, title?: string, metadata?: any) {
+        save(i: number, _title?: string, _metadata?: any) {
           for (const cb of onSaveCallbacks) cb();
-          State.saveSlot(String(i));
+          Platform.saveSlot(String(i));
         },
-        delete(i: number) { State.deleteSlot(String(i)); },
+        delete(i: number) { Platform.deleteSlot(String(i)); },
         ok() { return true; },
       },
       autosave: {
-        has() { return State.hasSlot("auto"); },
+        has() { return Platform.hasSlot("auto"); },
         get() {
-          const raw = State.loadSlot("auto");
-          return raw !== undefined ? { title: raw } : null;
+          const title = Platform.loadSlot("auto");
+          return title !== undefined ? { title } : null;
         },
         load() {
-          const title = State.loadSlot("auto");
+          const title = Platform.loadSlot("auto");
           if (title) {
             for (const cb of onLoadCallbacks) cb();
             Navigation.goto(title);
           }
         },
-        save(_title?: string, _metadata?: any) { State.saveSlot("auto"); },
-        delete() { State.deleteSlot("auto"); },
+        save(_title?: string, _metadata?: any) { Platform.saveSlot("auto"); },
+        delete() { Platform.deleteSlot("auto"); },
         ok() { return true; },
       },
       export() {
-        const data = { history: State.exportHistory(), variables: State.exportVariables() };
-        return btoa(JSON.stringify(data));
+        return btoa(State.serialize());
       },
       import(data: string) {
         try {
-          const parsed = JSON.parse(atob(data));
-          State.importState(parsed.history, parsed.variables);
-          const title = State.peekMoment();
+          const title = State.deserialize(atob(data));
           if (title) Navigation.goto(title);
         } catch (e) {
           console.error("[Save] import failed:", e);
@@ -467,7 +459,12 @@ export class SCEngine {
 
     // --- Commands ---
     Settings.initCommands(Platform.registerCommand);
-    State.initCommands(Platform.registerCommand, Navigation.goto.bind(Navigation));
+    Platform.initSave(
+      State,
+      Platform.localStorageBackend(),
+      Navigation.goto.bind(Navigation),
+      Platform.registerCommand,
+    );
     Navigation.initCommands(Platform.registerCommand);
 
     Settings.load();

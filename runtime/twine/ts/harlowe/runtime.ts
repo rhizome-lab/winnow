@@ -49,8 +49,14 @@ export class HarloweRuntime {
       }
     }
 
-    // Register commands
-    this.State.initCommands(Platform.registerCommand, this.Navigation.goto.bind(this.Navigation));
+    // Wire persistence
+    Platform.initSave(
+      this.State,
+      Platform.localStorageBackend(),
+      this.Navigation.goto.bind(this.Navigation),
+      Platform.registerCommand,
+      "reincarnate-harlowe-save-",
+    );
     this.Navigation.initCommands(Platform.registerCommand);
 
     // Navigate to the explicit start passage, or fall back to first registered

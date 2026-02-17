@@ -1,5 +1,7 @@
 /** Browser persistence — localStorage wrapper. */
 
+import type { SaveBackend } from "./save";
+
 export function loadLocal(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -22,4 +24,9 @@ export function removeLocal(key: string): void {
   } catch {
     // Unavailable — silent fail
   }
+}
+
+/** Default SaveBackend backed by localStorage. */
+export function localStorageBackend(): SaveBackend {
+  return { load: loadLocal, save: saveLocal, remove: removeLocal };
 }
