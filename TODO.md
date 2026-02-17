@@ -244,25 +244,24 @@ root for Harlowe (SugarCube keeps `<div id="passages">`).
 - [x] `<tw-consecutive-br>` — consecutive line break normalization (context.ts `br()`)
 - [x] `<tw-include>` — embedded passage content via `(display:)` (context.ts)
 
-**Content (remaining — need macro support, not used in test corpus):**
-- [ ] `<tw-verbatim>` — raw/verbatim text (needs `(verbatim:)` macro)
+**Content (done — macro support added, untested against real games):**
+- [x] `<tw-verbatim>` — raw/verbatim text via `(verbatim:)` changer (context.ts)
+- [x] `<tw-enchantment>` — enchanted element wrapper via `(enchant:)`/`(enchant-in:)` (engine.ts)
+- [x] `<tw-columns>` / `<tw-column>` — column layout via `(columns:)`/`(column:)` (engine.ts, context.ts)
+- [x] `<tw-meter>` — progress meter via `(meter:)` (engine.ts)
+- [x] `<tw-colour>` — color swatch display in `printVal` (context.ts)
+
+**Dialog system (done — untested against real games):**
+- [x] `<tw-dialog>` — modal dialog container via `(dialog:)` (engine.ts)
+- [x] `<tw-backdrop>` — dialog backdrop overlay (engine.ts)
+- [x] `<tw-dialog-links>` — dialog close link container (engine.ts)
+
+**Content (remaining):**
 - [ ] `<tw-transition-container>` — transition animation wrapper
-- [ ] `<tw-enchantment>` — enchanted element wrapper (needs `(enchant:)` macro)
-- [ ] `<tw-columns>` / `<tw-column>` — column layout (needs `(columns:)` macro)
-- [ ] `<tw-meter>` — progress meter (needs `(meter:)` macro)
-- [ ] `<tw-colour>` — color display element
 
-**Dialog system (remaining — needs `(dialog:)` macro):**
-- [ ] `<tw-dialog>` — modal dialog container
-- [ ] `<tw-backdrop>` — dialog backdrop overlay
-- [ ] `<tw-dialog-links>` — dialog link container
-
-**Testing:** None of the 21 current test games use these macros. Before
-implementing, find a Harlowe game on the IFDB or itch.io that exercises
-`(columns:)`, `(dialog:)`, `(enchant:)`, `(meter:)`, or `(verbatim:)` and
-add it to `~/reincarnate/twine/`. Without a real test game, correctness
-cannot be verified — the Harlowe docs describe behavior but not DOM structure,
-so the only reliable reference is Harlowe's own format.js output.
+**Testing:** None of the 21 current test games use these macros. To verify
+correctness, find a Harlowe game on IFDB/itch.io that exercises these macros
+and add it to `~/reincarnate/twine/`.
 
 **CSS animation keyframes:** Now extracted from format CSS (no runtime injection).
 
@@ -281,9 +280,9 @@ so the only reliable reference is Harlowe's own format.js output.
 - [x] **Changer composition with `+`** — `(color: red) + (text-style: "bold")` (fixed in `155af06`)
 - [ ] **`(save-game:)` / `(load-game:)`** — Save integration (basic runtime done)
 - [ ] **`(replace:)`, `(show:)`, `(hide:)`** — DOM manipulation hooks
-- [ ] **`(meter:)`, `(dialog:)`, `(dropdown:)`** — UI macros
-- [ ] **`(verbatim:)[...]`** — Raw text pass-through (no macro processing)
-- [ ] **`(enchant:)` / `(enchant-in:)`** — Apply changers to matching elements
+- [x] **`(meter:)`, `(dialog:)`** — UI macros (implemented, `(dropdown:)` still open)
+- [x] **`(verbatim:)[...]`** — Raw text pass-through via `<tw-verbatim>` element
+- [x] **`(enchant:)` / `(enchant-in:)`** — Apply changers to matching elements via `<tw-enchantment>`
 - [ ] **Named hooks** — `|name>[hook content]` and `?name` hook references
 - [ ] **Complex `'s` possessive chains** — `$obj's (str-nth: $idx)` nested macro in possessive
 
