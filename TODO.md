@@ -257,6 +257,13 @@ root for Harlowe (SugarCube keeps `<div id="passages">`).
 - [ ] `<tw-backdrop>` — dialog backdrop overlay
 - [ ] `<tw-dialog-links>` — dialog link container
 
+**Testing:** None of the 21 current test games use these macros. Before
+implementing, find a Harlowe game on the IFDB or itch.io that exercises
+`(columns:)`, `(dialog:)`, `(enchant:)`, `(meter:)`, or `(verbatim:)` and
+add it to `~/reincarnate/twine/`. Without a real test game, correctness
+cannot be verified — the Harlowe docs describe behavior but not DOM structure,
+so the only reliable reference is Harlowe's own format.js output.
+
 **CSS animation keyframes:** Now extracted from format CSS (no runtime injection).
 
 **Error/debug (skip):** `tw-error`, `tw-debugger`, `tw-eval-*`, etc.
