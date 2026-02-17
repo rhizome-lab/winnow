@@ -98,6 +98,13 @@ function wrapInTransitionContainer(parent: HTMLElement, name: string, duration: 
     container.appendChild(parent.firstChild);
   }
   parent.appendChild(container);
+  // Remove the container once the animation finishes, promoting children back up
+  container.addEventListener("animationend", () => {
+    while (container.firstChild) {
+      parent.insertBefore(container.firstChild, container);
+    }
+    container.remove();
+  }, { once: true });
 }
 
 // --- Alignment resolution ---
@@ -194,12 +201,13 @@ function applyChanger(el: HTMLElement, changer: Changer): void {
   }
 }
 
-function applyChangers(el: HTMLElement, changers: Changer | Changer[]): void {
+function applyChangers(el: HTMLElement, changers: Changer | Changer[], populate?: () => void): void {
   if (Array.isArray(changers)) {
     for (const c of changers) applyChanger(el, c);
   } else {
     applyChanger(el, changers);
   }
+  if (populate) populate();
   applyTransition(el);
 }
 
@@ -476,8 +484,7 @@ export class HarloweContext {
   /** Apply a changer (or changer array) to a tw-hook wrapping children. */
   styled(changer: Changer | Changer[], ...children: Child[]): Node {
     const hook = document.createElement("tw-hook") as HTMLElement;
-    applyChangers(hook, changer);
-    this.appendChildren(hook, children);
+    applyChangers(hook, changer, () => this.appendChildren(hook, children));
     this.current().appendChild(hook);
     this.prevBr = false;
     return hook;
