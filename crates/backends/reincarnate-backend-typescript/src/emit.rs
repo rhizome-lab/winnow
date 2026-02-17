@@ -94,8 +94,10 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
         let no_late_bound = HashSet::new();
         let no_short_to_qualified = HashMap::new();
         let (class_groups, free_funcs) = group_by_class(module);
+        let no_stateful = BTreeSet::new();
+        let no_free_fns = HashSet::new();
         for group in &class_groups {
-            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
+            emit_class(group, module, &class_names, &class_meta, &no_mutable_globals, &no_late_bound, &no_short_to_qualified, &known_classes, lowering_config, engine, &no_stateful, &no_free_fns, debug, &mut out)?;
         }
         let closure_fids: Vec<FuncId> = free_funcs.iter()
             .copied()
@@ -104,7 +106,7 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
         let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
         for &fid in &free_funcs {
             if module.functions[fid].method_kind != MethodKind::Closure {
-                emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, &mut out)?;
+                emit_function(&mut module.functions[fid], &class_names, &known_classes, &no_mutable_globals, lowering_config, engine, &module.sprite_names, &closure_bodies, &no_stateful, &no_free_fns, debug, &mut out)?;
             }
         }
     }
@@ -851,7 +853,8 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let calls = collect_call_names_from_funcs(class_funcs(), engine);
         let func_prefix = "../".repeat(depth + 1);
         let func_prefix = func_prefix.trim_end_matches('/');
-        emit_function_imports_with_prefix(&calls, &mut out, func_prefix, runtime_config);
+        let mut stateful_names = BTreeSet::new();
+        emit_function_imports_with_prefix(&calls, &mut out, func_prefix, runtime_config, &mut stateful_names);
         emit_free_function_imports(&calls, &free_func_names, depth, &mut out);
         if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
             let prefix = "../".repeat(depth + 1);
@@ -882,7 +885,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             validate_member_accesses(&module.functions[fid], Some(&qualified), &class_meta, &registry, &short_to_qualified, type_defs);
         }
 
-        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, debug, &mut out)?;
+        emit_class(group, module, &class_names, &class_meta, &mutable_global_names, &late_bound, &short_to_qualified, &known_classes, lowering_config, engine, &stateful_names, &free_func_names, debug, &mut out)?;
 
         strip_unused_namespace_imports(&mut out);
         let path = file_dir.join(format!("{short_name}.ts"));
@@ -900,7 +903,15 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let systems = collect_system_names_from_funcs(free_fn_iter());
         emit_runtime_imports_for(systems, &mut out, 0, runtime_config);
         let calls = collect_call_names_from_funcs(free_fn_iter(), engine);
-        emit_function_imports_with_prefix(&calls, &mut out, "..", runtime_config);
+        let mut free_stateful_names = BTreeSet::new();
+        emit_function_imports_with_prefix(&calls, &mut out, "..", runtime_config, &mut free_stateful_names);
+        // If free functions use stateful runtime functions, import the runtime type
+        // for the `_rt` parameter annotation.
+        if !free_stateful_names.is_empty() {
+            if let Some(preamble_cfg) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
+                let _ = writeln!(out, "import type {{ GameRuntime }} from \"../runtime/{}\";", preamble_cfg.path);
+            }
+        }
         if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
             let prefix = "../";
             let prefix = prefix.trim_end_matches('/');
@@ -962,7 +973,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
         for &fid in &free_funcs {
             if module.functions[fid].method_kind != MethodKind::Closure {
-                emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, &mut out)?;
+                emit_function(&mut module.functions[fid], &class_names, &known_classes, &mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, &free_stateful_names, &free_func_names, debug, &mut out)?;
             }
         }
         strip_unused_namespace_imports(&mut out);
@@ -1090,7 +1101,9 @@ fn emit_runtime_imports(module: &Module, out: &mut String, runtime_config: Optio
     let systems = collect_system_names_from_funcs(all_funcs());
     emit_runtime_imports_with_prefix(systems, out, ".", runtime_config);
     let calls = collect_call_names_from_funcs(all_funcs(), engine);
-    emit_function_imports_with_prefix(&calls, out, ".", runtime_config);
+    let mut _flat_stateful = BTreeSet::new();
+    emit_function_imports_with_prefix(&calls, out, ".", runtime_config, &mut _flat_stateful);
+    // Flat modules (Flash/Twine) don't use the stateful split yet.
 }
 
 /// Emit runtime imports for files inside a module directory.
@@ -1261,28 +1274,38 @@ fn collect_call_names_from_funcs<'a>(
 ///
 /// Scans `call_names` against `function_modules` in the runtime config,
 /// groups matches by module path, and emits one import per module.
+///
+/// Functions from modules marked `stateful: true` are NOT imported — instead
+/// their names are collected in `stateful_out` for destructuring from the
+/// runtime instance at the call site.
 fn emit_function_imports_with_prefix(
     call_names: &BTreeSet<String>,
     out: &mut String,
     prefix: &str,
     runtime_config: Option<&RuntimeConfig>,
+    stateful_out: &mut BTreeSet<String>,
 ) {
     let Some(cfg) = runtime_config else { return };
     if cfg.function_modules.is_empty() {
         return;
     }
-    // Build reverse map: function_name → module_path.
-    let mut func_to_module: HashMap<&str, &str> = HashMap::new();
+    // Build reverse map: function_name → (module_path, stateful).
+    let mut func_to_module: HashMap<&str, (&str, bool)> = HashMap::new();
     for group in &cfg.function_modules {
+        let is_stateful = group.stateful.unwrap_or(false);
         for name in &group.names {
-            func_to_module.insert(name.as_str(), group.path.as_str());
+            func_to_module.insert(name.as_str(), (group.path.as_str(), is_stateful));
         }
     }
-    // Group needed imports by module path.
+    // Group needed imports by module path (pure only).
     let mut by_mod: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for name in call_names {
-        if let Some(&path) = func_to_module.get(name.as_str()) {
-            by_mod.entry(path).or_default().insert(name.as_str());
+        if let Some(&(path, stateful)) = func_to_module.get(name.as_str()) {
+            if stateful {
+                stateful_out.insert(name.clone());
+            } else {
+                by_mod.entry(path).or_default().insert(name.as_str());
+            }
         }
     }
     for (module, names) in &by_mod {
@@ -2279,7 +2302,9 @@ fn emit_functions(
     let closure_bodies = compile_closures(&closure_fids, module, lowering_config, debug);
     for id in all_ids {
         if module.functions[id].method_kind != MethodKind::Closure {
-            emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, debug, out)?;
+            let no_stateful = BTreeSet::new();
+            let no_free_fns = HashSet::new();
+            emit_function(&mut module.functions[id], class_names, known_classes, mutable_global_names, lowering_config, engine, &module.sprite_names, &closure_bodies, &no_stateful, &no_free_fns, debug, out)?;
         }
     }
     Ok(())
@@ -2295,6 +2320,8 @@ fn emit_function(
     engine: EngineKind,
     sprite_names: &[String],
     closure_bodies: &HashMap<String, JsFunction>,
+    stateful_names: &BTreeSet<String>,
+    free_func_names: &HashSet<String>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2339,7 +2366,25 @@ fn emit_function(
     crate::ast_passes::strip_redundant_casts(&mut js_func);
     crate::ast_passes::coalesce_text_calls(&mut js_func.body);
     crate::ast_passes::coalesce_array_strings(&mut js_func.body);
-    crate::ast_printer::print_function(&js_func, out);
+    // Rewrite calls to other free functions: prepend `_rt` as first argument.
+    if !free_func_names.is_empty() {
+        let self_name = func.name.clone();
+        let mut other_fns: HashSet<String> = free_func_names.clone();
+        other_fns.remove(&self_name);
+        if !other_fns.is_empty() {
+            prepend_rt_arg_to_free_calls(&mut js_func.body, &other_fns, false);
+        }
+    }
+    // Build preamble and prepend `_rt` parameter for stateful free functions.
+    let preamble = if !stateful_names.is_empty() {
+        // Add `_rt: GameRuntime` as first parameter.
+        js_func.params.insert(0, ("_rt".into(), Type::Struct("GameRuntime".into())));
+        let names: Vec<&str> = stateful_names.iter().map(|s| s.as_str()).collect();
+        Some(format!("const {{ {} }} = _rt;", names.join(", ")))
+    } else {
+        None
+    };
+    crate::ast_printer::print_function(&js_func, preamble.as_deref(), out);
     Ok(())
 }
 
@@ -2506,6 +2551,8 @@ fn emit_class(
     known_classes: &HashSet<String>,
     lowering_config: &LoweringConfig,
     engine: EngineKind,
+    stateful_names: &BTreeSet<String>,
+    free_func_names: &HashSet<String>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2620,7 +2667,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, debug, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, stateful_names, free_func_names, debug, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2705,6 +2752,8 @@ fn emit_class_method(
     lowering_config: &LoweringConfig,
     engine: EngineKind,
     sprite_names: &[String],
+    stateful_names: &BTreeSet<String>,
+    free_func_names: &HashSet<String>,
     debug: &DebugConfig,
     out: &mut String,
 ) -> Result<(), CoreError> {
@@ -2800,9 +2849,204 @@ fn emit_class_method(
     crate::ast_passes::strip_redundant_casts(&mut js_func);
     crate::ast_passes::coalesce_text_calls(&mut js_func.body);
     crate::ast_passes::coalesce_array_strings(&mut js_func.body);
-    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, out);
+    // Rewrite calls to free functions: prepend `this._rt` as first argument.
+    if !free_func_names.is_empty() {
+        prepend_rt_arg_to_free_calls(&mut js_func.body, free_func_names, true);
+    }
+    // Build destructure preamble for stateful runtime functions.
+    let preamble = if !stateful_names.is_empty() && !is_cinit && !matches!(func.method_kind, MethodKind::Static) {
+        let names: Vec<&str> = stateful_names.iter().map(|s| s.as_str()).collect();
+        Some(format!("const {{ {} }} = this._rt;", names.join(", ")))
+    } else {
+        None
+    };
+    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), out);
     Ok(())
 }
+/// Prepend a runtime argument to calls to free functions.
+///
+/// When `from_class` is true, prepends `this._rt`; when false, prepends `_rt`.
+fn prepend_rt_arg_to_free_calls(
+    stmts: &mut [JsStmt],
+    free_func_names: &HashSet<String>,
+    from_class: bool,
+) {
+    for stmt in stmts.iter_mut() {
+        prepend_rt_arg_stmt(stmt, free_func_names, from_class);
+    }
+}
+
+fn prepend_rt_arg_stmt(
+    stmt: &mut JsStmt,
+    free_func_names: &HashSet<String>,
+    from_class: bool,
+) {
+    match stmt {
+        JsStmt::VarDecl { init, .. } => {
+            if let Some(expr) = init {
+                prepend_rt_arg_expr(expr, free_func_names, from_class);
+            }
+        }
+        JsStmt::Assign { target, value } => {
+            prepend_rt_arg_expr(target, free_func_names, from_class);
+            prepend_rt_arg_expr(value, free_func_names, from_class);
+        }
+        JsStmt::CompoundAssign { target, value, .. } => {
+            prepend_rt_arg_expr(target, free_func_names, from_class);
+            prepend_rt_arg_expr(value, free_func_names, from_class);
+        }
+        JsStmt::Expr(e) => prepend_rt_arg_expr(e, free_func_names, from_class),
+        JsStmt::Return(Some(e)) => prepend_rt_arg_expr(e, free_func_names, from_class),
+        JsStmt::Return(None) => {}
+        JsStmt::If { cond, then_body, else_body } => {
+            prepend_rt_arg_expr(cond, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(then_body, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(else_body, free_func_names, from_class);
+        }
+        JsStmt::While { cond, body } => {
+            prepend_rt_arg_expr(cond, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(body, free_func_names, from_class);
+        }
+        JsStmt::For { init, cond, update, body } => {
+            prepend_rt_arg_to_free_calls(init, free_func_names, from_class);
+            prepend_rt_arg_expr(cond, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(update, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(body, free_func_names, from_class);
+        }
+        JsStmt::Loop { body } => {
+            prepend_rt_arg_to_free_calls(body, free_func_names, from_class);
+        }
+        JsStmt::ForOf { iterable, body, .. } => {
+            prepend_rt_arg_expr(iterable, free_func_names, from_class);
+            prepend_rt_arg_to_free_calls(body, free_func_names, from_class);
+        }
+        JsStmt::Throw(e) => prepend_rt_arg_expr(e, free_func_names, from_class),
+        JsStmt::Dispatch { blocks, .. } => {
+            for (_, stmts) in blocks {
+                prepend_rt_arg_to_free_calls(stmts, free_func_names, from_class);
+            }
+        }
+        JsStmt::Switch { value, cases, default_body } => {
+            prepend_rt_arg_expr(value, free_func_names, from_class);
+            for (_, stmts) in cases {
+                prepend_rt_arg_to_free_calls(stmts, free_func_names, from_class);
+            }
+            prepend_rt_arg_to_free_calls(default_body, free_func_names, from_class);
+        }
+        JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {}
+    }
+}
+
+fn prepend_rt_arg_expr(
+    expr: &mut JsExpr,
+    free_func_names: &HashSet<String>,
+    from_class: bool,
+) {
+    // Recurse into children first.
+    match expr {
+        JsExpr::Binary { lhs, rhs, .. } | JsExpr::Cmp { lhs, rhs, .. } => {
+            prepend_rt_arg_expr(lhs, free_func_names, from_class);
+            prepend_rt_arg_expr(rhs, free_func_names, from_class);
+        }
+        JsExpr::LogicalOr { lhs, rhs } | JsExpr::LogicalAnd { lhs, rhs } => {
+            prepend_rt_arg_expr(lhs, free_func_names, from_class);
+            prepend_rt_arg_expr(rhs, free_func_names, from_class);
+        }
+        JsExpr::Unary { expr: inner, .. }
+        | JsExpr::Not(inner)
+        | JsExpr::PostIncrement(inner)
+        | JsExpr::Spread(inner)
+        | JsExpr::TypeOf(inner)
+        | JsExpr::Cast { expr: inner, .. }
+        | JsExpr::TypeCheck { expr: inner, .. } => {
+            prepend_rt_arg_expr(inner, free_func_names, from_class);
+        }
+        JsExpr::Field { object, .. } => prepend_rt_arg_expr(object, free_func_names, from_class),
+        JsExpr::Index { collection, index } => {
+            prepend_rt_arg_expr(collection, free_func_names, from_class);
+            prepend_rt_arg_expr(index, free_func_names, from_class);
+        }
+        JsExpr::Ternary { cond, then_val, else_val } => {
+            prepend_rt_arg_expr(cond, free_func_names, from_class);
+            prepend_rt_arg_expr(then_val, free_func_names, from_class);
+            prepend_rt_arg_expr(else_val, free_func_names, from_class);
+        }
+        JsExpr::ArrayInit(items) | JsExpr::TupleInit(items) => {
+            for item in items.iter_mut() {
+                prepend_rt_arg_expr(item, free_func_names, from_class);
+            }
+        }
+        JsExpr::ObjectInit(fields) => {
+            for (_, val) in fields.iter_mut() {
+                prepend_rt_arg_expr(val, free_func_names, from_class);
+            }
+        }
+        JsExpr::New { callee, args } => {
+            prepend_rt_arg_expr(callee, free_func_names, from_class);
+            for arg in args.iter_mut() {
+                prepend_rt_arg_expr(arg, free_func_names, from_class);
+            }
+        }
+        JsExpr::In { key, object } => {
+            prepend_rt_arg_expr(key, free_func_names, from_class);
+            prepend_rt_arg_expr(object, free_func_names, from_class);
+        }
+        JsExpr::Delete { object, key } => {
+            prepend_rt_arg_expr(object, free_func_names, from_class);
+            prepend_rt_arg_expr(key, free_func_names, from_class);
+        }
+        JsExpr::ArrowFunction { body, .. } => {
+            prepend_rt_arg_to_free_calls(body, free_func_names, from_class);
+        }
+        JsExpr::SuperCall(args) | JsExpr::SuperMethodCall { args, .. } => {
+            for arg in args.iter_mut() {
+                prepend_rt_arg_expr(arg, free_func_names, from_class);
+            }
+        }
+        JsExpr::SuperSet { value, .. } => prepend_rt_arg_expr(value, free_func_names, from_class),
+        JsExpr::GeneratorCreate { args, .. } => {
+            for arg in args.iter_mut() {
+                prepend_rt_arg_expr(arg, free_func_names, from_class);
+            }
+        }
+        JsExpr::GeneratorResume(inner) => prepend_rt_arg_expr(inner, free_func_names, from_class),
+        JsExpr::Yield(inner) => {
+            if let Some(e) = inner {
+                prepend_rt_arg_expr(e, free_func_names, from_class);
+            }
+        }
+        JsExpr::SystemCall { args, .. } => {
+            for arg in args.iter_mut() {
+                prepend_rt_arg_expr(arg, free_func_names, from_class);
+            }
+        }
+        JsExpr::Call { callee, args } => {
+            // Check if this is a call to a free function.
+            if let JsExpr::Var(name) = callee.as_ref() {
+                if free_func_names.contains(name) {
+                    let rt_arg = if from_class {
+                        JsExpr::Field {
+                            object: Box::new(JsExpr::This),
+                            field: "_rt".into(),
+                        }
+                    } else {
+                        JsExpr::Var("_rt".into())
+                    };
+                    args.insert(0, rt_arg);
+                }
+            }
+            // Recurse into callee and args.
+            prepend_rt_arg_expr(callee, free_func_names, from_class);
+            for arg in args.iter_mut() {
+                prepend_rt_arg_expr(arg, free_func_names, from_class);
+            }
+        }
+        // Leaf nodes — nothing to recurse into.
+        JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This
+        | JsExpr::SuperGet(_) | JsExpr::Activation => {}
+    }
+}
+
 /// Whether a cinit statement is a redundant assignment to a field that already
 /// has a `static readonly` default value on the class.
 fn is_redundant_static_assign(stmt: &JsStmt, const_fields: &HashSet<String>) -> bool {

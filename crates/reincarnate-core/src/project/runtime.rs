@@ -93,6 +93,10 @@ pub struct ScaffoldConfig {
 pub struct ImportGroup {
     pub names: Vec<String>,
     pub path: String,
+    /// When `true`, these functions are stateful (close over mutable runtime state)
+    /// and should be destructured from the runtime instance instead of imported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stateful: Option<bool>,
 }
 
 /// Describes an external (runtime-provided) type's members.

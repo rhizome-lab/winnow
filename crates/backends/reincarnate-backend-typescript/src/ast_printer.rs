@@ -19,7 +19,7 @@ use crate::types::ts_type;
 // ---------------------------------------------------------------------------
 
 /// Print a standalone function.
-pub fn print_function(js: &JsFunction, out: &mut String) {
+pub fn print_function(js: &JsFunction, preamble: Option<&str>, out: &mut String) {
     let vis = visibility_prefix(js.visibility);
     let star = if js.is_generator { "*" } else { "" };
     let params = print_params(&js.params, js.has_rest_param);
@@ -31,6 +31,10 @@ pub fn print_function(js: &JsFunction, out: &mut String) {
         sanitize_ident(&js.name),
     );
 
+    if let Some(pre) = preamble {
+        let _ = writeln!(out, "  {pre}");
+    }
+
     print_stmts(&js.body, out, "  ");
 
     let _ = writeln!(out, "}}\n");
@@ -41,6 +45,7 @@ pub fn print_class_method(
     js: &JsFunction,
     raw_name: &str,
     skip_self: bool,
+    preamble: Option<&str>,
     out: &mut String,
 ) {
     let params = if skip_self && !js.params.is_empty() {
@@ -93,6 +98,9 @@ pub fn print_class_method(
     } else {
         "    "
     };
+    if let Some(pre) = preamble {
+        let _ = writeln!(out, "{indent}{pre}");
+    }
     print_stmts(&js.body, out, indent);
 
     let _ = writeln!(out, "  }}");

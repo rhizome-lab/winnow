@@ -5,7 +5,7 @@
   },
   "scaffold": {
     "imports": [
-      { "names": ["startGame"], "path": "gamemaker/runtime" }
+      { "names": ["createGameRuntime"], "path": "gamemaker/runtime" }
     ],
     "data_imports": [
       { "names": ["rooms", "Rooms"], "path": "data/rooms" },
@@ -14,7 +14,7 @@
       { "names": ["fonts"], "path": "data/fonts" },
       { "names": ["Classes"], "path": "data/objects" }
     ],
-    "entry": "startGame({ rooms, sprites, textures, fonts, classes: [{classes}], Classes, initialRoom: Rooms.Init, roomCreationCode: [{roomCreationCode}] });"
+    "entry": "createGameRuntime().start({ rooms, sprites, textures, fonts, classes: [{classes}], Classes, initialRoom: Rooms.Init, roomCreationCode: [{roomCreationCode}] });"
   },
   "class_preamble": {
     "names": ["GMLObject", "Sprites", "Colors", "HAligns", "VAligns"],
@@ -288,11 +288,17 @@
         "degtorad", "radtodeg", "lengthdir_x", "lengthdir_y",
         "dsin", "dcos", "dtan", "darcsin", "darccos", "darctan", "darctan2",
         "logn", "int64",
-        "int", "uint", "real", "string",
+        "int", "uint", "real", "string"
+      ],
+      "path": "gamemaker/math"
+    },
+    {
+      "names": [
         "random", "random_range", "irandom", "irandom_range", "choose",
         "randomize", "random_set_seed"
       ],
-      "path": "gamemaker/math"
+      "path": "gamemaker/math",
+      "stateful": true
     },
     {
       "names": [
@@ -313,7 +319,8 @@
         "draw_text_transformed_color", "draw_text_ext_transformed_color",
         "draw_rectangle", "draw_set_ext", "string_height_ext"
       ],
-      "path": "gamemaker/draw"
+      "path": "gamemaker/draw",
+      "stateful": true
     },
     {
       "names": [
@@ -330,14 +337,16 @@
         "ini_section_delete", "ini_key_delete",
         "ini_open_from_string"
       ],
-      "path": "gamemaker/storage"
+      "path": "gamemaker/storage",
+      "stateful": true
     },
     {
       "names": [
         "mouse_check_button", "mouse_check_button_pressed",
         "mouse_check_button_released", "mouse_x", "mouse_y"
       ],
-      "path": "gamemaker/input"
+      "path": "gamemaker/input",
+      "stateful": true
     },
     {
       "names": [
@@ -345,20 +354,23 @@
         "room_goto", "room_goto_next", "room_goto_previous",
         "room_restart", "game_restart"
       ],
-      "path": "gamemaker/runtime"
+      "path": "gamemaker/runtime",
+      "stateful": true
     },
     {
       "names": [
         "global", "variable_global_exists", "variable_global_get", "variable_global_set"
       ],
-      "path": "gamemaker/global"
+      "path": "gamemaker/global",
+      "stateful": true
     },
     {
       "names": [
         "getInstanceField", "setInstanceField", "setInstanceFieldIndex",
         "getAllField", "setAllField", "withInstances"
       ],
-      "path": "gamemaker/instance"
+      "path": "gamemaker/instance",
+      "stateful": true
     }
   ]
 }
