@@ -342,7 +342,8 @@ impl TranslateCtx {
             }
             ExprKind::Paren(inner) => self.lower_expr(inner),
             ExprKind::Error(msg) => {
-                // Parse error placeholder — emit a diagnostic and return null
+                // Parse error — warn at compile time and emit runtime error call
+                eprintln!("warning: parse error in {}: {}", self.func_name, msg);
                 let m = self.fb.const_string(msg.as_str());
                 self.fb
                     .system_call("SugarCube.Engine", "error", &[m], Type::Dynamic)

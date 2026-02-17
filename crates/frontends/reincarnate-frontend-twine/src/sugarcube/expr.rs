@@ -651,13 +651,27 @@ fn parse_prefix(lexer: &mut ExprLexer<'_>) -> Expr {
 
         // EOF or unexpected token
         TokenKind::Eof => Expr {
-            kind: ExprKind::Error("unexpected end of expression".into()),
+            kind: ExprKind::Error(format!(
+                "unexpected end of expression in `{}`",
+                lexer.source()
+            )),
             span: tok.span,
         },
-        _ => Expr {
-            kind: ExprKind::Error(format!("unexpected token: {:?}", tok.kind)),
-            span: tok.span,
-        },
+        _ => {
+            let src = lexer.source();
+            let context: &str = if src.len() <= 80 {
+                src
+            } else {
+                &src[..80]
+            };
+            Expr {
+                kind: ExprKind::Error(format!(
+                    "unexpected `{:?}` in `{}`",
+                    tok.kind, context
+                )),
+                span: tok.span,
+            }
+        }
     }
 }
 

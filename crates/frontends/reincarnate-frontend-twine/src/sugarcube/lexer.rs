@@ -199,6 +199,11 @@ impl<'a> ExprLexer<'a> {
         }
     }
 
+    /// Return the full expression source text.
+    pub fn source(&self) -> &'a str {
+        self.src
+    }
+
     /// Return the remaining unconsumed source (for raw arg extraction).
     pub fn remaining(&self) -> &'a str {
         let pos = if let Some(ref tok) = self.peeked {
