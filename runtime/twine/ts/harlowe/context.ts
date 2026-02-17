@@ -424,8 +424,23 @@ export class HarloweContext {
     return expr;
   }
 
-  /** Print a value as text. */
+  /** Print a value as text, or as a tw-colour swatch for color changers. */
   printVal(v: any): Node {
+    if (v != null && typeof v === "object" && "name" in v && "args" in v) {
+      const name = (v as { name: string }).name;
+      if (name === "color" || name === "colour" || name === "text-colour" || name === "text-color") {
+        const el = document.createElement("tw-colour") as HTMLElement;
+        el.style.backgroundColor = resolveColor(String((v as { args: any[] }).args[0]));
+        el.style.display = "inline-block";
+        el.style.width = "1em";
+        el.style.height = "1em";
+        el.style.border = "1px solid #000";
+        el.style.verticalAlign = "middle";
+        this.current().appendChild(el);
+        this.prevBr = false;
+        return el;
+      }
+    }
     const node = document.createTextNode(String(v));
     this.current().appendChild(node);
     return node;
