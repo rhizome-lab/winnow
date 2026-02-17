@@ -218,7 +218,7 @@ fn build_user_script_calls(modules: &[Module]) -> String {
     for module in modules {
         for func in module.functions.values() {
             if func.name.starts_with("__user_script_") && func.visibility == Visibility::Public {
-                calls.push(format!("{}();", sanitize_ident(&func.name)));
+                calls.push(format!("{}(_rt);", sanitize_ident(&func.name)));
             }
         }
     }
