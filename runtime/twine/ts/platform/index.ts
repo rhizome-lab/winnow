@@ -14,7 +14,7 @@ export {
 } from "./history";
 
 export {
-  type SaveBackend, type SaveableState,
+  type SaveBackend, type SaveableState, type PersistenceOpts,
   init as initSave,
   commit as commitSave, tryResume, clearAutosave,
   saveSlot, loadSlot, deleteSlot, hasSlot, slotCount, totalSlots,

@@ -74,6 +74,53 @@ impl<'de> Deserialize<'de> for AssetMapping {
     }
 }
 
+/// Persistence configuration for save/load behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistenceConfig {
+    /// Enable continuous autosave after each passage transition.
+    #[serde(default = "PersistenceConfig::default_autosave")]
+    pub autosave: bool,
+    /// Resume behavior: "auto" (silent), "prompt", or "ignore".
+    #[serde(default = "PersistenceConfig::default_resume")]
+    pub resume: String,
+    /// History strategy: "snapshot" or "diff".
+    #[serde(default = "PersistenceConfig::default_history")]
+    pub history: String,
+    /// Number of save slots.
+    #[serde(default = "PersistenceConfig::default_slot_count")]
+    pub slot_count: u32,
+    /// Debounce interval for autosave writes (milliseconds). 0 = no debounce.
+    #[serde(default)]
+    pub debounce_ms: u32,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            autosave: true,
+            resume: "auto".into(),
+            history: "snapshot".into(),
+            slot_count: 8,
+            debounce_ms: 0,
+        }
+    }
+}
+
+impl PersistenceConfig {
+    fn default_autosave() -> bool {
+        true
+    }
+    fn default_resume() -> String {
+        "auto".into()
+    }
+    fn default_history() -> String {
+        "snapshot".into()
+    }
+    fn default_slot_count() -> u32 {
+        8
+    }
+}
+
 /// Top-level project manifest (reincarnate.json).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -89,4 +136,7 @@ pub struct ProjectManifest {
     /// or `{ "src": "...", "dest": "..." }` for path remapping.
     #[serde(default)]
     pub assets: Vec<AssetMapping>,
+    /// Persistence configuration (save/load/autosave behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistence: Option<PersistenceConfig>,
 }

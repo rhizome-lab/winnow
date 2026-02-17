@@ -6,7 +6,9 @@
 
 import type { RenderRoot } from "../../../shared/ts/render-root";
 import type { PassageFn } from "./navigation";
-import { tryResume } from "../platform";
+import type { PersistenceOpts } from "../platform";
+import * as Platform from "../platform";
+import { tryResume, diffHistory, snapshotHistory } from "../platform";
 import { SCState } from "./state";
 import { SCEvents } from "./events";
 import { SCOutput } from "./output";
@@ -33,9 +35,12 @@ export class SugarCubeRuntime {
   readonly Navigation: SCNavigation;
   readonly Engine: SCEngine;
 
-  constructor() {
+  constructor(persistence?: PersistenceOpts) {
     Wikifier.rt = this;
-    this.State = new SCState();
+    const history = persistence?.history === "diff"
+      ? diffHistory()
+      : snapshotHistory();
+    this.State = new SCState(history);
     this.Events = new SCEvents();
     this.Output = new SCOutput(this);
     this.Macro = new SCMacro(this);
@@ -60,7 +65,7 @@ export class SugarCubeRuntime {
     passageMap: Record<string, PassageFn>,
     startPassage?: string,
     tagMap?: Record<string, string[]>,
-    opts?: { root?: RenderRoot },
+    opts?: { root?: RenderRoot; persistence?: PersistenceOpts },
   ): void {
     if (opts?.root) {
       this.Output.doc = opts.root.doc;
@@ -76,6 +81,22 @@ export class SugarCubeRuntime {
       }
     }
 
+    const p = opts?.persistence;
+
+    // Wire persistence
+    let backend = Platform.localStorageBackend();
+    if (p?.debounce_ms) {
+      backend = Platform.debounced(backend, p.debounce_ms);
+    }
+    Platform.initSave(
+      this.State,
+      backend,
+      this.Navigation.goto.bind(this.Navigation),
+      Platform.registerCommand,
+      undefined,
+      p?.autosave,
+    );
+
     // Run StoryInit if it exists
     const storyInit = this.Navigation.passages.get("StoryInit");
     if (storyInit) {
@@ -85,21 +106,24 @@ export class SugarCubeRuntime {
         console.error("[navigation] error in StoryInit:", e);
       }
     }
+    const autosave = p?.autosave !== false;
+    const resume = p?.resume ?? "auto";
 
-    // Try to resume from autosave, otherwise navigate to start passage
-    const resumed = tryResume();
-    if (resumed) {
-      const fn = this.Navigation.passages.get(resumed);
-      if (fn) {
-        this.Navigation.renderPassage(resumed, fn);
-      } else {
-        const target = startPassage || Object.keys(passageMap)[0];
-        if (target) this.Navigation.goto(target);
+    // Try to resume from autosave
+    if (autosave && resume !== "ignore") {
+      const resumed = tryResume();
+      if (resumed) {
+        const fn = this.Navigation.passages.get(resumed);
+        if (fn) {
+          this.Navigation.renderPassage(resumed, fn);
+          this.Events.trigger(":storyready");
+          return;
+        }
       }
-    } else {
-      const target = startPassage || Object.keys(passageMap)[0];
-      if (target) this.Navigation.goto(target);
     }
+
+    const target = startPassage || Object.keys(passageMap)[0];
+    if (target) this.Navigation.goto(target);
 
     this.Events.trigger(":storyready");
   }

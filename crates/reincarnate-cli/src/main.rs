@@ -375,6 +375,7 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
             lowering_config: lowering_config.clone(),
             runtime: resolve_runtime(&manifest.engine, &target.backend, runtime_variant),
             debug: debug.clone(),
+            persistence: manifest.persistence.clone(),
         };
         eprintln!("[emit] emitting to {}...", target.output_dir.display());
         backend

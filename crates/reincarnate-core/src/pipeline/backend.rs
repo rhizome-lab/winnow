@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::error::CoreError;
 use crate::ir::Module;
 use super::{DebugConfig, LoweringConfig};
-use crate::project::{AssetCatalog, RuntimeConfig};
+use crate::project::{AssetCatalog, PersistenceConfig, RuntimeConfig};
 
 /// A resolved runtime package: source directory + parsed config.
 pub struct RuntimePackage {
@@ -29,6 +29,8 @@ pub struct BackendInput {
     pub runtime: Option<RuntimePackage>,
     /// Debug dump configuration.
     pub debug: DebugConfig,
+    /// Persistence configuration from project manifest.
+    pub persistence: Option<PersistenceConfig>,
 }
 
 /// Backend trait — emits target code from IR.

@@ -15,7 +15,7 @@
   },
   "scaffold": {
     "imports": [{ "names": ["createSugarCubeRuntime"], "path": "sugarcube/runtime" }],
-    "entry": "{userScripts}\ncreateSugarCubeRuntime().start({passages}, {startPassage}, {passageTags});",
+    "entry": "{userScripts}\ncreateSugarCubeRuntime().start({passages}, {startPassage}, {passageTags}, { persistence: {persistence} });",
     "dependencies": {
       "jquery": "3.6.0",
       "keybinds": "github:pterror/keybinds"

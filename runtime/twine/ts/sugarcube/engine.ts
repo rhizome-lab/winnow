@@ -459,12 +459,6 @@ export class SCEngine {
 
     // --- Commands ---
     Settings.initCommands(Platform.registerCommand);
-    Platform.initSave(
-      State,
-      Platform.localStorageBackend(),
-      Navigation.goto.bind(Navigation),
-      Platform.registerCommand,
-    );
     Navigation.initCommands(Platform.registerCommand);
 
     Settings.load();

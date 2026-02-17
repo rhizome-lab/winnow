@@ -11,7 +11,7 @@
   },
   "scaffold": {
     "imports": [{ "names": ["createHarloweRuntime"], "path": "harlowe/runtime" }],
-    "entry": "{userScripts}\ncreateHarloweRuntime().start({passages}, {startPassage}, {passageTags});",
+    "entry": "{userScripts}\ncreateHarloweRuntime().start({passages}, {startPassage}, {passageTags}, { persistence: {persistence} });",
     "dependencies": {
       "keybinds": "github:pterror/keybinds"
     }

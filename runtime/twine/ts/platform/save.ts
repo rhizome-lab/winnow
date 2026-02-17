@@ -7,6 +7,15 @@
 
 import { type SaveSlotInfo, showSaveUI } from "./save-ui";
 
+/** Deployer-configurable persistence options (from reincarnate.json). */
+export interface PersistenceOpts {
+  autosave?: boolean;
+  resume?: "auto" | "prompt" | "ignore";
+  history?: "snapshot" | "diff";
+  slot_count?: number;
+  debounce_ms?: number;
+}
+
 // --- Backend abstraction ---
 
 /** Storage backend — deployers swap this to change where saves go. */
@@ -30,6 +39,7 @@ let state: SaveableState;
 let backend: SaveBackend;
 let gotoFn: (passage: string) => void;
 let slotPrefix = "reincarnate-save-";
+let autosaveEnabled = true;
 const SLOT_COUNT = 8;
 
 // --- Public API ---
@@ -41,11 +51,13 @@ export function init(
   goto: (passage: string) => void,
   registerCommand: (id: string, binding: string, handler: () => void) => void,
   prefix?: string,
+  autosave?: boolean,
 ): void {
   state = s;
   backend = b;
   gotoFn = goto;
   if (prefix !== undefined) slotPrefix = prefix;
+  autosaveEnabled = autosave !== false;
 
   registerCommand("quicksave", "$mod+s", () => saveSlot("auto"));
   registerCommand("quickload", "", () => {
@@ -80,6 +92,7 @@ export function init(
 
 /** Continuous autosave — call after each passage transition. */
 export function commit(): void {
+  if (!autosaveEnabled) return;
   try {
     backend.save(slotPrefix + "_autosave", state.serialize());
   } catch {

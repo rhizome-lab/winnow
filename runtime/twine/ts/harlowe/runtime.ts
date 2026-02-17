@@ -10,14 +10,18 @@ import { HarloweState } from "./state";
 import { HarloweNavigation } from "./navigation";
 import { HarloweEngine } from "./engine";
 import * as Platform from "../platform";
+import type { PersistenceOpts } from "../platform";
 
 export class HarloweRuntime {
   readonly State: HarloweState;
   readonly Navigation: HarloweNavigation;
   readonly Engine: HarloweEngine;
 
-  constructor() {
-    this.State = new HarloweState();
+  constructor(persistence?: PersistenceOpts) {
+    const history = persistence?.history === "diff"
+      ? Platform.diffHistory()
+      : Platform.snapshotHistory();
+    this.State = new HarloweState(history);
     this.Navigation = new HarloweNavigation(this);
     this.Engine = new HarloweEngine(this);
   }
@@ -33,7 +37,7 @@ export class HarloweRuntime {
     passageMap: Record<string, PassageFn>,
     startPassage?: string,
     tagMap?: Record<string, string[]>,
-    opts?: { root?: RenderRoot },
+    opts?: { root?: RenderRoot; persistence?: PersistenceOpts },
   ): void {
     if (opts?.root) {
       this.Navigation.doc = opts.root.doc;
@@ -49,25 +53,37 @@ export class HarloweRuntime {
       }
     }
 
+    const p = opts?.persistence;
+
     // Wire persistence
+    let backend = Platform.localStorageBackend();
+    if (p?.debounce_ms) {
+      backend = Platform.debounced(backend, p.debounce_ms);
+    }
     Platform.initSave(
       this.State,
-      Platform.localStorageBackend(),
+      backend,
       this.Navigation.goto.bind(this.Navigation),
       Platform.registerCommand,
       "reincarnate-harlowe-save-",
+      p?.autosave,
     );
     this.Navigation.initCommands(Platform.registerCommand);
 
-    // Try to resume from autosave, otherwise navigate to start passage
-    const resumed = Platform.tryResume();
-    if (resumed) {
-      const fn = this.Navigation.passages.get(resumed);
-      if (fn) {
-        this.Navigation.renderPassage(resumed, fn);
-        return;
+    // Try to resume from autosave (unless autosave is explicitly disabled or resume is "ignore")
+    const autosave = p?.autosave !== false;
+    const resume = p?.resume ?? "auto";
+    if (autosave && resume !== "ignore") {
+      const resumed = Platform.tryResume();
+      if (resumed) {
+        const fn = this.Navigation.passages.get(resumed);
+        if (fn) {
+          this.Navigation.renderPassage(resumed, fn);
+          return;
+        }
       }
     }
+
     const target = startPassage || Object.keys(passageMap)[0];
     if (target) {
       this.Navigation.goto(target);

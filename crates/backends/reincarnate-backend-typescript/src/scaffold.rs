@@ -7,12 +7,12 @@ use std::path::Path;
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::{EntryPoint, FuncId, MethodKind, Module, Visibility};
-use reincarnate_core::project::{AssetCatalog, AssetKind, RuntimeConfig};
+use reincarnate_core::project::{AssetCatalog, AssetKind, PersistenceConfig, RuntimeConfig};
 
 use crate::emit::sanitize_ident;
 
 /// Write all scaffold files into `output_dir`.
-pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Option<&RuntimeConfig>, assets: &AssetCatalog) -> Result<(), CoreError> {
+pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Option<&RuntimeConfig>, assets: &AssetCatalog, persistence: Option<&PersistenceConfig>) -> Result<(), CoreError> {
     let html = if is_twine(modules) {
         generate_twine_index_html(modules, assets)
     } else {
@@ -20,7 +20,7 @@ pub fn emit_scaffold(modules: &[Module], output_dir: &Path, runtime_config: Opti
     };
     fs::write(output_dir.join("index.html"), html)?;
     fs::write(output_dir.join("tsconfig.json"), TSCONFIG)?;
-    fs::write(output_dir.join("main.ts"), generate_main(modules, runtime_config))?;
+    fs::write(output_dir.join("main.ts"), generate_main(modules, runtime_config, persistence))?;
     fs::write(output_dir.join("package.json"), generate_package_json(runtime_config))?;
     Ok(())
 }
@@ -353,7 +353,7 @@ fn generate_package_json(runtime_config: Option<&RuntimeConfig>) -> String {
 
 /// Generate `main.ts` — imports all modules and calls the entry point in a
 /// requestAnimationFrame game loop.
-fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> String {
+fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, persistence: Option<&PersistenceConfig>) -> String {
     let mut out = String::new();
 
     let has_custom_entry = runtime_config
@@ -407,6 +407,9 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> 
         let user_scripts = build_user_script_calls(modules);
         let start_passage = find_start_passage(modules);
         let root_class = find_root_class(modules);
+        let persistence_json = persistence
+            .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "{}".into()))
+            .unwrap_or_else(|| "undefined".into());
         let expanded = entry
             .replace("{classes}", &class_list)
             .replace("{roomCreationCode}", &room_creation_code)
@@ -414,7 +417,8 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>) -> 
             .replace("{passageTags}", &passage_tags)
             .replace("{userScripts}", &user_scripts)
             .replace("{startPassage}", &start_passage)
-            .replace("{rootClass}", &root_class);
+            .replace("{rootClass}", &root_class)
+            .replace("{persistence}", &persistence_json);
         let _ = writeln!(out, "{}", expanded);
     } else if let Some(code) = metadata_entry_code(modules, runtime_config) {
         // Prefer metadata-based entry point over heuristic.
@@ -670,7 +674,7 @@ mod tests {
         mb.add_function(fb2.build());
         let module = mb.build();
 
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(main.contains("import { update } from \"./game\";"));
         assert!(main.contains("update();"));
         assert!(main.contains("requestAnimationFrame(loop);"));
@@ -689,7 +693,7 @@ mod tests {
         mb.add_function(fb.build());
         let module = mb.build();
 
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(main.contains("import { compute } from \"./utils\";"));
         assert!(main.contains("No entry point detected"));
         assert!(!main.contains("requestAnimationFrame"));
@@ -733,7 +737,7 @@ mod tests {
         });
 
         let module = mb.build();
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(
             main.contains("import { App } from \"./game\";"),
             "Should import class from barrel:\n{main}"
@@ -783,7 +787,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::ConstructClass("MyApp".into()));
         let module = mb.build();
 
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(
             main.contains("const app = new MyApp();"),
             "Should construct class:\n{main}"
@@ -813,7 +817,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::CallFunction(fid));
         let module = mb.build();
 
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(
             main.contains("start_game();"),
             "Should call function:\n{main}"
@@ -860,7 +864,7 @@ mod tests {
         mb.set_entry_point(EntryPoint::ConstructClass("App".into()));
         let module = mb.build();
 
-        let main = generate_main(&[module], None);
+        let main = generate_main(&[module], None, None);
         assert!(
             main.contains("const app = new App();"),
             "Should construct App:\n{main}"
