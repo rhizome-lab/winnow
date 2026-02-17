@@ -43,6 +43,7 @@ Reincarnate works on **bytecode and script**, not native code:
 
 From ecosystem-wide session analysis:
 
+- **CLAUDE.md updates are immediate priority.** When the user asks to update CLAUDE.md or documentation, drop everything and do it NOW. Context rots — defer even one task and the insight is lost. This overrides any in-progress work.
 - **Question scope early:** Before implementing, ask whether it belongs in this crate/module
 - **Check consistency:** Look at how similar things are done elsewhere in the codebase
 - **Implement fully:** No silent arbitrary caps, incomplete pagination, or unexposed trait methods. The test projects (`~/reincarnate/flash/cc/` for Flash, `~/reincarnate/gamemaker/bounty/` for GML) are example inputs, not the universe — fixing only the cases they exercise is a half measure. If a class of bug exists, fix the entire class. If a pattern applies to all properties on a type, apply it to all of them, not just the ones that happen to blow up today.
@@ -51,6 +52,9 @@ From ecosystem-wide session analysis:
 - **Consider tests for bug fixes:** When fixing a bug that has a clear, self-contained reproduction — especially in compiler passes (transforms, structurizer, AST passes, emit) — write a regression test. Not every fix warrants a test (runtime stubs, config changes, one-off wiring), but if the bug can recur from future code changes, a test prevents that. Err on the side of writing the test if unsure.
 - **Treat special-casing as a smell:** When a fix adds a narrow guard (`if this_specific_case { continue }`) to a pass, stop and ask whether the pass's core logic is wrong. A special case that prevents one crash often means the pass's assumptions are too broad — fix the assumption, not the symptom. Use `git blame` on the file to check whether a cluster of special-case guards have accumulated around the same function; that pattern indicates a deeper design gap.
 - **Use git blame for audits:** When fixing a bug in a pass, `git blame` the surrounding function to see if other guards were patched in after the fact. A function with multiple post-hoc `continue` guards is likely fragile — the guards compensate for an incomplete model rather than fixing it. Audit the whole function, not just the line that broke.
+- **Don't hand-roll what a library does.** When a well-maintained crate exists for a standard (HTML entities, Unicode normalization, MIME types, etc.), use it. Hand-rolling a partial reimplementation is not "simpler" — it's an incomplete, untested copy of someone else's work that will silently produce wrong results. The question isn't "is my list complete?" — it's "why am I writing this at all?"
+- **Pre-existing bugs are bugs.** When investigating errors and you discover a bug that existed before your change, don't dismiss it as "pre-existing" or "not caused by my changes". Fix it if possible. If fixing it would derail the current task, add it to TODO.md as **critical priority** immediately — do not assume a future session will rediscover it.
+- **Match the target's semantics.** When reimplementing a runtime's behavior (SugarCube expression parsing, GML bytecode decoding, etc.), check what the original runtime actually does. Don't guess at semantics or invent a "simplified" version. Read the source if available (SugarCube is open source, UndertaleModTool is open source).
 
 ## Design Principles
 
