@@ -1,16 +1,20 @@
 {
   "system_modules": {
-    "SugarCube.State": { "path": "sugarcube/state" },
-    "SugarCube.Output": { "path": "sugarcube/output" },
-    "SugarCube.Navigation": { "path": "sugarcube/navigation" },
-    "SugarCube.Engine": { "path": "sugarcube/engine" },
-    "SugarCube.Audio": { "path": "sugarcube/audio" },
-    "SugarCube.DOM": { "path": "sugarcube/dom" },
-    "SugarCube.Input": { "path": "sugarcube/input" },
-    "SugarCube.Widget": { "path": "sugarcube/widget" }
+    "SugarCube.State": { "path": "sugarcube/state", "stateful": true },
+    "SugarCube.Output": { "path": "sugarcube/output", "stateful": true },
+    "SugarCube.Navigation": { "path": "sugarcube/navigation", "stateful": true },
+    "SugarCube.Engine": { "path": "sugarcube/engine", "stateful": true },
+    "SugarCube.Audio": { "path": "sugarcube/audio", "stateful": true },
+    "SugarCube.DOM": { "path": "sugarcube/dom", "stateful": true },
+    "SugarCube.Input": { "path": "sugarcube/input", "stateful": true },
+    "SugarCube.Widget": { "path": "sugarcube/widget", "stateful": true }
+  },
+  "runtime_type": {
+    "name": "SugarCubeRuntime",
+    "path": "sugarcube/runtime"
   },
   "scaffold": {
-    "imports": [{ "names": ["createSugarCubeRuntime"], "path": "sugarcube/navigation" }],
+    "imports": [{ "names": ["createSugarCubeRuntime"], "path": "sugarcube/runtime" }],
     "entry": "{userScripts}\ncreateSugarCubeRuntime().start({passages}, {startPassage}, {passageTags});",
     "dependencies": {
       "jquery": "3.6.0",
