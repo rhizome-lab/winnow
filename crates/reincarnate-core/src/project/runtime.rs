@@ -51,6 +51,11 @@ pub struct RuntimeConfig {
 pub struct SystemModule {
     /// Submodule path relative to runtime root (e.g. `"flash/object"`).
     pub path: String,
+    /// When `true`, this module's functions close over mutable runtime state
+    /// and should be accessed via the runtime instance (`_rt.Output`) instead
+    /// of a namespace import (`import * as SugarCube_Output`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stateful: Option<bool>,
 }
 
 /// Configuration for the generated entry point (`main.ts`).
