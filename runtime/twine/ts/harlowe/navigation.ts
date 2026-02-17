@@ -1,7 +1,7 @@
 /** Harlowe navigation — passage registry, goto, display (include). */
 
 import * as State from "./state";
-import { HarloweContext, clear } from "./context";
+import { HarloweContext, clear, wrapInTransitionContainer } from "./context";
 
 /** Passage function type — receives h context, returns void. */
 export type PassageFn = (h: HarloweContext) => void;
@@ -81,12 +81,19 @@ function renderPassage(target: string, fn: PassageFn): void {
 
   story.appendChild(passage);
 
-  const h = new HarloweContext(passage);
+  // Render content into a transition container (sidebar stays outside)
+  const transitionContainer = document.createElement("tw-transition-container") as HTMLElement;
+  transitionContainer.style.animation = "tw-dissolve 0.8s ease-in-out";
+  transitionContainer.style.display = "block";
+  transitionContainer.setAttribute("data-t8n", "dissolve");
+  passage.appendChild(transitionContainer);
+
+  const h = new HarloweContext(transitionContainer);
   try {
     fn(h);
   } catch (e) {
     console.error(`[harlowe] error in passage "${target}":`, e);
-    passage.appendChild(document.createTextNode(`Error in passage "${target}": ${e}`));
+    transitionContainer.appendChild(document.createTextNode(`Error in passage "${target}": ${e}`));
   } finally {
     h.closeAll();
   }

@@ -78,12 +78,26 @@ function resolveColor(value: string): string {
 // --- Transition animation support ---
 // Keyframe definitions are in the extracted format CSS (format_harlowe.css).
 
+/** Wrap an element's children in a <tw-transition-container> with the specified animation. */
 function applyTransition(el: HTMLElement): void {
   const name = el.dataset.tw_transition || el.dataset.tw_transition_arrive;
   if (!name) return;
   const duration = el.dataset.tw_transition_time || "0.8s";
+  wrapInTransitionContainer(el, name, duration);
+}
+
+/** Create a <tw-transition-container> wrapping the given element's children. */
+export function wrapInTransitionContainer(parent: HTMLElement, name: string, duration: string): void {
+  const container = document.createElement("tw-transition-container") as HTMLElement;
   const animName = `tw-${name}`;
-  el.style.animation = `${animName} ${duration} ease-in-out`;
+  container.style.animation = `${animName} ${duration} ease-in-out`;
+  container.style.display = "block";
+  container.setAttribute("data-t8n", name);
+  // Move all children into the transition container
+  while (parent.firstChild) {
+    container.appendChild(parent.firstChild);
+  }
+  parent.appendChild(container);
 }
 
 // --- Alignment resolution ---
