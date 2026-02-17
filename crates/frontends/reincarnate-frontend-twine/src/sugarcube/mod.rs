@@ -9,6 +9,7 @@ pub mod expr;
 pub mod lexer;
 pub mod macros;
 pub mod parser;
+pub mod preprocess;
 pub mod translate;
 
 use ast::PassageAst;

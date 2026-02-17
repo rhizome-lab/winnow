@@ -9,4 +9,8 @@ description = "Twine frontend for the Reincarnate legacy software lifting framew
 [dependencies]
 html5ever = "0.38"
 markup5ever = "0.16"
+oxc_allocator = "0.114.0"
+oxc_ast = "0.114.0"
+oxc_parser = "0.114.0"
+oxc_span = "0.114.0"
 reincarnate-core = { path = "../../reincarnate-core" }
