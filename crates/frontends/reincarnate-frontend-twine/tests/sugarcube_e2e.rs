@@ -57,9 +57,9 @@ fn translate_all_passages(html: &str) -> (usize, usize, usize) {
             Ok(tr) => {
                 total_functions += 1 + tr.widgets.len();
                 // Also translate widgets to catch panics there
-                for (name, body) in &tr.widgets {
+                for (name, body, source) in &tr.widgets {
                     let wr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        sugarcube::translate::translate_widget(name, body)
+                        sugarcube::translate::translate_widget(name, body, source)
                     }));
                     if wr.is_err() {
                         translate_panics += 1;

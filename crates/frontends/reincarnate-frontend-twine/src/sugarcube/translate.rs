@@ -15,14 +15,18 @@
 
 use std::collections::HashMap;
 
+use oxc_allocator::Allocator;
+use oxc_ast::ast as js;
+use oxc_parser::Parser as OxcParser;
+use oxc_span::SourceType;
+
 use reincarnate_core::ir::{
     BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, MethodKind, Type, ValueId,
     Visibility,
 };
 
 use super::ast::*;
-use super::expr::parse_expr;
-use super::lexer::ExprLexer;
+use super::preprocess::{self, Preprocessed};
 
 /// Translation context for a single passage/widget function.
 pub struct TranslateCtx {
@@ -36,8 +40,8 @@ pub struct TranslateCtx {
     suppress_output: bool,
     /// Whether line breaks are suppressed (inside `<<nobr>>`).
     suppress_line_breaks: bool,
-    /// Extracted widget definitions (name → body nodes) accumulated during translation.
-    pub widgets: Vec<(String, Vec<Node>)>,
+    /// Extracted widget definitions (name, body nodes, source) accumulated during translation.
+    pub widgets: Vec<(String, Vec<Node>, String)>,
     /// The passage/widget function name (used to generate unique setter names).
     func_name: String,
     /// Counter for generating unique setter callback names.
@@ -46,10 +50,12 @@ pub struct TranslateCtx {
     arrow_count: usize,
     /// Setter callback functions generated for link setters.
     pub setter_callbacks: Vec<Function>,
+    /// The full passage source text (for slicing Expr byte ranges).
+    source: String,
 }
 
 impl TranslateCtx {
-    pub fn new(name: &str) -> Self {
+    pub fn new(name: &str, source: &str) -> Self {
         let sig = FunctionSig {
             params: vec![],
             return_ty: Type::Void,
@@ -68,6 +74,7 @@ impl TranslateCtx {
             setter_count: 0,
             arrow_count: 0,
             setter_callbacks: Vec::new(),
+            source: source.to_string(),
         }
     }
 
@@ -147,9 +154,7 @@ impl TranslateCtx {
             return;
         }
         for (attr_name, expr_str) in dynamic_attrs {
-            let mut lexer = ExprLexer::new(expr_str, 0);
-            let expr = parse_expr(&mut lexer);
-            let val = self.lower_expr(&expr);
+            let val = self.lower_raw_expr_str(expr_str);
             let name_val = self.fb.const_string(attr_name);
             self.fb.system_call(
                 "SugarCube.Output",
@@ -180,490 +185,905 @@ impl TranslateCtx {
         alloc
     }
 
-    // ── Expression lowering ────────────────────────────────────────────
+    // ── Expression lowering (oxc-based) ───────────────────────────────
 
+    /// Lower an `Expr` (byte range) by extracting the source text and parsing with oxc.
     pub fn lower_expr(&mut self, expr: &Expr) -> ValueId {
-        match &expr.kind {
-            ExprKind::Literal(lit) => self.lower_literal(lit),
-            ExprKind::Str(s) => self.fb.const_string(s.as_str()),
-            ExprKind::Ident(name) => {
-                // Check if identifier is a known local parameter (e.g. arrow function param)
-                if let Some(&param_val) = self.local_params.get(name.as_str()) {
-                    return param_val;
-                }
-                // Bare identifier — global function ref or runtime lookup
-                let n = self.fb.const_string(name.as_str());
-                self.fb
-                    .system_call("SugarCube.Engine", "resolve", &[n], Type::Dynamic)
-            }
-            ExprKind::StoryVar(name) => {
-                let n = self.fb.const_string(name.as_str());
-                self.fb
-                    .system_call("SugarCube.State", "get", &[n], Type::Dynamic)
-            }
-            ExprKind::TempVar(name) => {
-                let alloc = self.get_or_create_temp(name);
-                self.fb.load(alloc, Type::Dynamic)
-            }
-            ExprKind::Member { object, property } => {
-                let obj = self.lower_expr(object);
-                self.fb.get_field(obj, property.as_str(), Type::Dynamic)
-            }
-            ExprKind::Index { object, index } => {
-                let obj = self.lower_expr(object);
-                let idx = self.lower_expr(index);
-                self.fb.get_index(obj, idx, Type::Dynamic)
-            }
-            ExprKind::Call { callee, args } => {
-                let arg_vals: Vec<ValueId> = args.iter().map(|a| self.lower_expr(a)).collect();
-                let callee_val = self.lower_expr(callee);
-                self.fb
-                    .call_indirect(callee_val, &arg_vals, Type::Dynamic)
-            }
-            ExprKind::New { callee, args } => {
-                let callee_val = self.lower_expr(callee);
-                let mut all_args = vec![callee_val];
-                for a in args {
-                    all_args.push(self.lower_expr(a));
-                }
-                self.fb
-                    .system_call("SugarCube.Engine", "new", &all_args, Type::Dynamic)
-            }
-            ExprKind::Unary { op, operand } => {
-                let val = self.lower_expr(operand);
-                self.lower_unary_op(*op, val, operand, true)
-            }
-            ExprKind::Postfix { op, operand } => {
-                let val = self.lower_expr(operand);
-                self.lower_unary_op(*op, val, operand, false)
-            }
-            ExprKind::Binary { op, left, right } => {
-                self.lower_binary_op(*op, left, right)
-            }
-            ExprKind::Ternary {
-                cond,
-                then_expr,
-                else_expr,
-            } => self.lower_ternary(cond, then_expr, else_expr),
-            ExprKind::Assign { op, target, value } => self.lower_assign(*op, target, value),
-            ExprKind::Comma(exprs) => {
-                // Evaluate all, return last
-                let mut last = self.fb.const_null();
-                for e in exprs {
-                    last = self.lower_expr(e);
-                }
-                last
-            }
-            ExprKind::Array(elements) => {
-                let vals: Vec<ValueId> = elements.iter().map(|e| self.lower_expr(e)).collect();
-                self.fb.array_init(&vals, Type::Dynamic)
-            }
-            ExprKind::Object(entries) => {
-                let fields: Vec<(String, ValueId)> = entries
-                    .iter()
-                    .map(|(k, v)| {
-                        let key = self.expr_to_field_name(k);
-                        let val = self.lower_expr(v);
-                        (key, val)
-                    })
-                    .collect();
-                self.fb.struct_init("Object", fields)
-            }
-            ExprKind::Template { parts } => self.lower_template(parts),
-            ExprKind::Arrow { params, body } => {
-                // Build arrow as a closure function for inline emission.
-                let arrow_name = format!("{}_arrow_{}", self.func_name, self.arrow_count);
-                self.arrow_count += 1;
+        let src = self.source.clone();
+        let text = &src[expr.start..expr.end];
+        self.lower_raw_expr_str(text)
+    }
 
-                let sig = FunctionSig {
-                    params: vec![Type::Dynamic; params.len()],
-                    return_ty: Type::Dynamic,
-                    defaults: vec![],
-                    has_rest_param: false,
-                };
-                let mut arrow_fb = FunctionBuilder::new(&arrow_name, sig, Visibility::Private);
+    /// Lower a raw expression string through the preprocess → oxc → IR pipeline.
+    fn lower_raw_expr_str(&mut self, text: &str) -> ValueId {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return self.fb.const_null();
+        }
 
-                // Register parameter names so they can be resolved in the body.
-                let mut arrow_params = HashMap::new();
-                for (idx, name) in params.iter().enumerate() {
-                    let v = arrow_fb.param(idx);
-                    arrow_fb.name_value(v, name.clone());
-                    arrow_params.insert(name.clone(), v);
-                }
+        // Preprocess SugarCube keywords → JS
+        let pp = preprocess::preprocess(trimmed);
 
-                let saved_fb = std::mem::replace(&mut self.fb, arrow_fb);
-                let saved_temps = std::mem::take(&mut self.temp_vars);
-                let saved_params = std::mem::replace(&mut self.local_params, arrow_params);
+        // Parse with oxc
+        let allocator = Allocator::default();
+        let source_type = SourceType::mjs();
+        let result = OxcParser::new(&allocator, &pp.js, source_type).parse_expression();
 
-                let result = self.lower_expr(body);
-                self.fb.ret(Some(result));
-
-                let built = std::mem::replace(&mut self.fb, saved_fb);
-                self.temp_vars = saved_temps;
-                self.local_params = saved_params;
-                let mut func = built.build();
-                func.method_kind = MethodKind::Closure;
-                self.setter_callbacks.push(func);
-
-                // Emit a SystemCall marker that the backend replaces with an
-                // inline ArrowFunction during the Twine rewrite pass.
-                let name_val = self.fb.const_string(&arrow_name);
-                self.fb
-                    .system_call("SugarCube.Engine", "closure", &[name_val], Type::Dynamic)
-            }
-            ExprKind::Delete(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb
-                    .system_call("SugarCube.Engine", "delete", &[val], Type::Dynamic)
-            }
-            ExprKind::TypeOf(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb
-                    .system_call("SugarCube.Engine", "typeof", &[val], Type::String)
-            }
-            ExprKind::Clone(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb
-                    .system_call("SugarCube.Engine", "clone", &[val], Type::Dynamic)
-            }
-            ExprKind::Def(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb
-                    .system_call("SugarCube.Engine", "def", &[val], Type::Bool)
-            }
-            ExprKind::Ndef(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb
-                    .system_call("SugarCube.Engine", "ndef", &[val], Type::Bool)
-            }
-            ExprKind::Spread(inner) => {
-                let val = self.lower_expr(inner);
-                self.fb.spread(val)
-            }
-            ExprKind::Paren(inner) => self.lower_expr(inner),
-            ExprKind::Error(msg) => {
-                // Parse error — warn at compile time and emit runtime error call
-                eprintln!("warning: parse error in {}: {}", self.func_name, msg);
-                let m = self.fb.const_string(msg.as_str());
+        match result {
+            Ok(oxc_expr) => self.lower_oxc_expr(&oxc_expr, &pp),
+            Err(_) => {
+                // Parse error — emit runtime error
+                eprintln!(
+                    "warning: oxc parse error in {}: {:?} (source: {})",
+                    self.func_name, &pp.js, trimmed
+                );
+                let m = self.fb.const_string(format!("parse error: {trimmed}"));
                 self.fb
                     .system_call("SugarCube.Engine", "error", &[m], Type::Dynamic)
             }
         }
     }
 
-    fn lower_literal(&mut self, lit: &Literal) -> ValueId {
-        match lit {
-            Literal::Bool(b) => self.fb.const_bool(*b),
-            Literal::Number(n) => self.fb.const_float(n.value()),
-            Literal::Null => self.fb.const_null(),
-            Literal::Undefined => self.fb.const_null(), // undefined ≈ null in IR
+    /// Walk an oxc AST expression and produce IR.
+    fn lower_oxc_expr(&mut self, expr: &js::Expression<'_>, pp: &Preprocessed) -> ValueId {
+        match expr {
+            js::Expression::BooleanLiteral(lit) => self.fb.const_bool(lit.value),
+            js::Expression::NullLiteral(_) => self.fb.const_null(),
+            js::Expression::NumericLiteral(lit) => self.fb.const_float(lit.value),
+            js::Expression::BigIntLiteral(lit) => {
+                // Approximate as float
+                let val: f64 = lit.raw.as_ref().and_then(|r| r.parse().ok()).unwrap_or(0.0);
+                self.fb.const_float(val)
+            }
+            js::Expression::StringLiteral(lit) => {
+                self.fb.const_string(lit.value.as_str())
+            }
+            js::Expression::RegExpLiteral(lit) => {
+                // new RegExp(pattern, flags)
+                let pattern = self.fb.const_string(lit.regex.pattern.text.as_str());
+                let flags_str = lit.regex.flags.to_string();
+                let flags = self.fb.const_string(&flags_str);
+                let regexp_name = self.fb.const_string("RegExp");
+                let regexp = self.fb.system_call(
+                    "SugarCube.Engine",
+                    "resolve",
+                    &[regexp_name],
+                    Type::Dynamic,
+                );
+                let mut new_args = vec![regexp, pattern];
+                if !flags_str.is_empty() {
+                    new_args.push(flags);
+                }
+                self.fb
+                    .system_call("SugarCube.Engine", "new", &new_args, Type::Dynamic)
+            }
+            js::Expression::TemplateLiteral(tl) => {
+                self.lower_template_literal(tl, pp)
+            }
+            js::Expression::Identifier(ident) => {
+                let name = ident.name.as_str();
+                // Check SugarCube variable sigils
+                if let Some(var_name) = name.strip_prefix('$') {
+                    let n = self.fb.const_string(var_name);
+                    return self.fb
+                        .system_call("SugarCube.State", "get", &[n], Type::Dynamic);
+                }
+                if let Some(stripped) = name.strip_prefix('_') {
+                    // Temp variable (only if followed by alphanumeric, which the
+                    // identifier always is since _ alone isn't a SugarCube var)
+                    if !stripped.is_empty() {
+                        let alloc = self.get_or_create_temp(stripped);
+                        return self.fb.load(alloc, Type::Dynamic);
+                    }
+                }
+                // Check if identifier is a known local parameter
+                if let Some(&param_val) = self.local_params.get(name) {
+                    return param_val;
+                }
+                // Check for `undefined`
+                if name == "undefined" {
+                    return self.fb.const_null();
+                }
+                // Bare identifier — global function ref or runtime lookup
+                let n = self.fb.const_string(name);
+                self.fb
+                    .system_call("SugarCube.Engine", "resolve", &[n], Type::Dynamic)
+            }
+            js::Expression::StaticMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                self.fb.get_field(obj, mem.property.name.as_str(), Type::Dynamic)
+            }
+            js::Expression::ComputedMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                let idx = self.lower_oxc_expr(&mem.expression, pp);
+                self.fb.get_index(obj, idx, Type::Dynamic)
+            }
+            js::Expression::CallExpression(call) => {
+                let args: Vec<ValueId> = call
+                    .arguments
+                    .iter()
+                    .map(|a| self.lower_oxc_argument(a, pp))
+                    .collect();
+                let callee = self.lower_oxc_expr(&call.callee, pp);
+                self.fb.call_indirect(callee, &args, Type::Dynamic)
+            }
+            js::Expression::NewExpression(new) => {
+                let callee = self.lower_oxc_expr(&new.callee, pp);
+                let mut all_args = vec![callee];
+                for a in &new.arguments {
+                    all_args.push(self.lower_oxc_argument(a, pp));
+                }
+                self.fb
+                    .system_call("SugarCube.Engine", "new", &all_args, Type::Dynamic)
+            }
+            js::Expression::UnaryExpression(unary) => {
+                self.lower_oxc_unary(unary, pp)
+            }
+            js::Expression::UpdateExpression(update) => {
+                self.lower_oxc_update(update, pp)
+            }
+            js::Expression::BinaryExpression(bin) => {
+                self.lower_oxc_binary(bin, pp)
+            }
+            js::Expression::LogicalExpression(log) => {
+                self.lower_oxc_logical(log, pp)
+            }
+            js::Expression::ConditionalExpression(cond) => {
+                self.lower_oxc_ternary(cond, pp)
+            }
+            js::Expression::AssignmentExpression(assign) => {
+                self.lower_oxc_assign(assign, pp)
+            }
+            js::Expression::SequenceExpression(seq) => {
+                let mut last = self.fb.const_null();
+                for e in &seq.expressions {
+                    last = self.lower_oxc_expr(e, pp);
+                }
+                last
+            }
+            js::Expression::ArrayExpression(arr) => {
+                let vals: Vec<ValueId> = arr
+                    .elements
+                    .iter()
+                    .map(|e| match e {
+                        js::ArrayExpressionElement::SpreadElement(spread) => {
+                            let val = self.lower_oxc_expr(&spread.argument, pp);
+                            self.fb.spread(val)
+                        }
+                        js::ArrayExpressionElement::Elision(_) => self.fb.const_null(),
+                        _ => self.lower_oxc_expr(e.to_expression(), pp),
+                    })
+                    .collect();
+                self.fb.array_init(&vals, Type::Dynamic)
+            }
+            js::Expression::ObjectExpression(obj) => {
+                let fields: Vec<(String, ValueId)> = obj
+                    .properties
+                    .iter()
+                    .map(|prop| match prop {
+                        js::ObjectPropertyKind::ObjectProperty(p) => {
+                            let key = self.oxc_property_key_name(&p.key, pp);
+                            let val = self.lower_oxc_expr(&p.value, pp);
+                            (key, val)
+                        }
+                        js::ObjectPropertyKind::SpreadProperty(spread) => {
+                            let val = self.lower_oxc_expr(&spread.argument, pp);
+                            ("__spread__".to_string(), self.fb.spread(val))
+                        }
+                    })
+                    .collect();
+                self.fb.struct_init("Object", fields)
+            }
+            js::Expression::ArrowFunctionExpression(arrow) => {
+                self.lower_oxc_arrow(arrow, pp)
+            }
+            js::Expression::ParenthesizedExpression(paren) => {
+                self.lower_oxc_expr(&paren.expression, pp)
+            }
+            js::Expression::TaggedTemplateExpression(tagged) => {
+                // Lower tag(template) as a call
+                let tag = self.lower_oxc_expr(&tagged.tag, pp);
+                let tl_val = self.lower_template_literal(&tagged.quasi, pp);
+                self.fb.call_indirect(tag, &[tl_val], Type::Dynamic)
+            }
+            js::Expression::ChainExpression(chain) => {
+                // Optional chaining: a?.b, a?.(), a?.[b]
+                self.lower_oxc_chain(&chain.expression, pp)
+            }
+            js::Expression::YieldExpression(_)
+            | js::Expression::AwaitExpression(_)
+            | js::Expression::ClassExpression(_)
+            | js::Expression::FunctionExpression(_)
+            | js::Expression::ImportExpression(_)
+            | js::Expression::MetaProperty(_)
+            | js::Expression::Super(_)
+            | js::Expression::ThisExpression(_)
+            | js::Expression::TSAsExpression(_)
+            | js::Expression::TSSatisfiesExpression(_)
+            | js::Expression::TSTypeAssertion(_)
+            | js::Expression::TSNonNullExpression(_)
+            | js::Expression::TSInstantiationExpression(_)
+            | js::Expression::PrivateFieldExpression(_)
+            | js::Expression::PrivateInExpression(_)
+            | js::Expression::JSXElement(_)
+            | js::Expression::JSXFragment(_)
+            | js::Expression::V8IntrinsicExpression(_) => {
+                // Unsupported expression types — emit error
+                let m = self.fb.const_string("unsupported expression");
+                self.fb
+                    .system_call("SugarCube.Engine", "error", &[m], Type::Dynamic)
+            }
         }
     }
 
-    fn lower_unary_op(
-        &mut self,
-        op: UnaryOp,
-        val: ValueId,
-        operand: &Expr,
-        is_prefix: bool,
-    ) -> ValueId {
-        match op {
-            UnaryOp::Not => self.fb.not(val),
-            UnaryOp::Neg => self.fb.neg(val),
-            UnaryOp::Pos => {
-                // Numeric coercion — cast to float
-                self.fb.coerce(val, Type::Float(64))
+    fn lower_oxc_argument(&mut self, arg: &js::Argument<'_>, pp: &Preprocessed) -> ValueId {
+        match arg {
+            js::Argument::SpreadElement(spread) => {
+                let val = self.lower_oxc_expr(&spread.argument, pp);
+                self.fb.spread(val)
             }
-            UnaryOp::BitNot => self.fb.bit_not(val),
-            UnaryOp::Inc | UnaryOp::Dec => {
-                // Pre/post increment/decrement: modify in place, return old or new
-                let one = self.fb.const_float(1.0);
-                let new_val = if op == UnaryOp::Inc {
-                    self.fb.add(val, one)
+            _ => self.lower_oxc_expr(arg.to_expression(), pp),
+        }
+    }
+
+    fn lower_oxc_unary(
+        &mut self,
+        unary: &js::UnaryExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        // Check if this `typeof` is actually a `def`, `ndef`, or `clone`
+        if unary.operator == js::UnaryOperator::Typeof {
+            let expr_start = unary.span.start as usize;
+            if pp.def_positions.contains(&expr_start) {
+                let val = self.lower_oxc_expr(&unary.argument, pp);
+                return self.fb
+                    .system_call("SugarCube.Engine", "def", &[val], Type::Bool);
+            }
+            if pp.ndef_positions.contains(&expr_start) {
+                let val = self.lower_oxc_expr(&unary.argument, pp);
+                return self.fb
+                    .system_call("SugarCube.Engine", "ndef", &[val], Type::Bool);
+            }
+            if pp.clone_positions.contains(&expr_start) {
+                let val = self.lower_oxc_expr(&unary.argument, pp);
+                return self.fb
+                    .system_call("SugarCube.Engine", "clone", &[val], Type::Dynamic);
+            }
+        }
+
+        let val = self.lower_oxc_expr(&unary.argument, pp);
+        match unary.operator {
+            js::UnaryOperator::UnaryNegation => self.fb.neg(val),
+            js::UnaryOperator::UnaryPlus => self.fb.coerce(val, Type::Float(64)),
+            js::UnaryOperator::LogicalNot => self.fb.not(val),
+            js::UnaryOperator::BitwiseNot => self.fb.bit_not(val),
+            js::UnaryOperator::Typeof => {
+                self.fb
+                    .system_call("SugarCube.Engine", "typeof", &[val], Type::String)
+            }
+            js::UnaryOperator::Void => {
+                // void expr → evaluate for side effects, return undefined
+                self.fb.const_null()
+            }
+            js::UnaryOperator::Delete => {
+                self.fb
+                    .system_call("SugarCube.Engine", "delete", &[val], Type::Dynamic)
+            }
+        }
+    }
+
+    /// Read the current value from a SimpleAssignmentTarget (used by update expressions).
+    fn lower_simple_assignment_target_read(
+        &mut self,
+        target: &js::SimpleAssignmentTarget<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        match target {
+            js::SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let name = ident.name.as_str();
+                if let Some(var_name) = name.strip_prefix('$') {
+                    let n = self.fb.const_string(var_name);
+                    self.fb.system_call("SugarCube.State", "get", &[n], Type::Dynamic)
+                } else if let Some(stripped) = name.strip_prefix('_') {
+                    if !stripped.is_empty() {
+                        let alloc = self.get_or_create_temp(stripped);
+                        self.fb.load(alloc, Type::Dynamic)
+                    } else {
+                        self.fb.const_null()
+                    }
+                } else if let Some(&param_val) = self.local_params.get(name) {
+                    param_val
                 } else {
-                    self.fb.sub(val, one)
-                };
-                self.store_to_target(operand, new_val);
-                if is_prefix {
-                    new_val
+                    let n = self.fb.const_string(name);
+                    self.fb.system_call("SugarCube.Engine", "resolve", &[n], Type::Dynamic)
+                }
+            }
+            _ => {
+                if let Some(member) = target.as_member_expression() {
+                    match member {
+                        js::MemberExpression::StaticMemberExpression(mem) => {
+                            let obj = self.lower_oxc_expr(&mem.object, pp);
+                            self.fb.get_field(obj, mem.property.name.as_str(), Type::Dynamic)
+                        }
+                        js::MemberExpression::ComputedMemberExpression(mem) => {
+                            let obj = self.lower_oxc_expr(&mem.object, pp);
+                            let idx = self.lower_oxc_expr(&mem.expression, pp);
+                            self.fb.get_index(obj, idx, Type::Dynamic)
+                        }
+                        _ => self.fb.const_null(),
+                    }
                 } else {
-                    val
+                    self.fb.const_null()
                 }
             }
         }
     }
 
-    fn lower_binary_op(&mut self, op: BinaryOp, left: &Expr, right: &Expr) -> ValueId {
-        // Short-circuit operators need special control flow
-        match op {
-            BinaryOp::And => return self.lower_logical_and(left, right),
-            BinaryOp::Or => return self.lower_logical_or(left, right),
-            BinaryOp::NullishCoalesce => return self.lower_nullish_coalesce(left, right),
-            _ => {}
+    fn lower_oxc_update(
+        &mut self,
+        update: &js::UpdateExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let val = self.lower_simple_assignment_target_read(&update.argument, pp);
+        let one = self.fb.const_float(1.0);
+        let new_val = match update.operator {
+            js::UpdateOperator::Increment => self.fb.add(val, one),
+            js::UpdateOperator::Decrement => self.fb.sub(val, one),
+        };
+        self.store_to_oxc_target(&update.argument, new_val, pp);
+        if update.prefix {
+            new_val
+        } else {
+            val
         }
+    }
 
-        let lhs = self.lower_expr(left);
-        let rhs = self.lower_expr(right);
+    fn lower_oxc_binary(
+        &mut self,
+        bin: &js::BinaryExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let lhs = self.lower_oxc_expr(&bin.left, pp);
+        let rhs = self.lower_oxc_expr(&bin.right, pp);
 
-        match op {
-            BinaryOp::Add => self.fb.add(lhs, rhs),
-            BinaryOp::Sub => self.fb.sub(lhs, rhs),
-            BinaryOp::Mul => self.fb.mul(lhs, rhs),
-            BinaryOp::Div => self.fb.div(lhs, rhs),
-            BinaryOp::Mod => self.fb.rem(lhs, rhs),
-            BinaryOp::Exp => {
+        match bin.operator {
+            js::BinaryOperator::Addition => self.fb.add(lhs, rhs),
+            js::BinaryOperator::Subtraction => self.fb.sub(lhs, rhs),
+            js::BinaryOperator::Multiplication => self.fb.mul(lhs, rhs),
+            js::BinaryOperator::Division => self.fb.div(lhs, rhs),
+            js::BinaryOperator::Remainder => self.fb.rem(lhs, rhs),
+            js::BinaryOperator::Exponential => {
                 self.fb
                     .system_call("SugarCube.Engine", "pow", &[lhs, rhs], Type::Dynamic)
             }
-            BinaryOp::Eq => self.fb.cmp(CmpKind::LooseEq, lhs, rhs),
-            BinaryOp::Neq => self.fb.cmp(CmpKind::LooseNe, lhs, rhs),
-            BinaryOp::StrictEq => self.fb.cmp(CmpKind::Eq, lhs, rhs),
-            BinaryOp::StrictNeq => self.fb.cmp(CmpKind::Ne, lhs, rhs),
-            BinaryOp::Lt => self.fb.cmp(CmpKind::Lt, lhs, rhs),
-            BinaryOp::Lte => self.fb.cmp(CmpKind::Le, lhs, rhs),
-            BinaryOp::Gt => self.fb.cmp(CmpKind::Gt, lhs, rhs),
-            BinaryOp::Gte => self.fb.cmp(CmpKind::Ge, lhs, rhs),
-            BinaryOp::BitAnd => self.fb.bit_and(lhs, rhs),
-            BinaryOp::BitOr => self.fb.bit_or(lhs, rhs),
-            BinaryOp::BitXor => self.fb.bit_xor(lhs, rhs),
-            BinaryOp::Shl => self.fb.shl(lhs, rhs),
-            BinaryOp::Shr => self.fb.shr(lhs, rhs),
-            BinaryOp::UShr => {
+            js::BinaryOperator::Equality => self.fb.cmp(CmpKind::LooseEq, lhs, rhs),
+            js::BinaryOperator::Inequality => self.fb.cmp(CmpKind::LooseNe, lhs, rhs),
+            js::BinaryOperator::StrictEquality => self.fb.cmp(CmpKind::Eq, lhs, rhs),
+            js::BinaryOperator::StrictInequality => self.fb.cmp(CmpKind::Ne, lhs, rhs),
+            js::BinaryOperator::LessThan => self.fb.cmp(CmpKind::Lt, lhs, rhs),
+            js::BinaryOperator::LessEqualThan => self.fb.cmp(CmpKind::Le, lhs, rhs),
+            js::BinaryOperator::GreaterThan => self.fb.cmp(CmpKind::Gt, lhs, rhs),
+            js::BinaryOperator::GreaterEqualThan => self.fb.cmp(CmpKind::Ge, lhs, rhs),
+            js::BinaryOperator::BitwiseAnd => self.fb.bit_and(lhs, rhs),
+            js::BinaryOperator::BitwiseOR => self.fb.bit_or(lhs, rhs),
+            js::BinaryOperator::BitwiseXOR => self.fb.bit_xor(lhs, rhs),
+            js::BinaryOperator::ShiftLeft => self.fb.shl(lhs, rhs),
+            js::BinaryOperator::ShiftRight => self.fb.shr(lhs, rhs),
+            js::BinaryOperator::ShiftRightZeroFill => {
                 self.fb
                     .system_call("SugarCube.Engine", "ushr", &[lhs, rhs], Type::Dynamic)
             }
-            BinaryOp::In => {
+            js::BinaryOperator::In => {
                 self.fb
                     .system_call("SugarCube.Engine", "in", &[lhs, rhs], Type::Bool)
             }
-            BinaryOp::InstanceOf => {
+            js::BinaryOperator::Instanceof => {
                 self.fb
                     .system_call("SugarCube.Engine", "instanceof", &[lhs, rhs], Type::Bool)
             }
-            // And/Or/NullishCoalesce handled above
-            BinaryOp::And | BinaryOp::Or | BinaryOp::NullishCoalesce => unreachable!(),
         }
     }
 
-    fn lower_logical_and(&mut self, left: &Expr, right: &Expr) -> ValueId {
-        let lhs = self.lower_expr(left);
-
-        let rhs_block = self.fb.create_block();
-        let merge_block = self.fb.create_block();
-        let (_, merge_params) = ((), self.fb.add_block_params(merge_block, &[Type::Dynamic]));
-        let merge_param = merge_params[0];
-
-        self.fb
-            .br_if(lhs, rhs_block, &[], merge_block, &[lhs]);
-
-        self.fb.switch_to_block(rhs_block);
-        let rhs = self.lower_expr(right);
-        self.fb.br(merge_block, &[rhs]);
-
-        self.fb.switch_to_block(merge_block);
-        merge_param
-    }
-
-    fn lower_logical_or(&mut self, left: &Expr, right: &Expr) -> ValueId {
-        let lhs = self.lower_expr(left);
-
-        let rhs_block = self.fb.create_block();
-        let merge_block = self.fb.create_block();
-        let merge_params = self.fb.add_block_params(merge_block, &[Type::Dynamic]);
-        let merge_param = merge_params[0];
-
-        // If truthy, short-circuit to merge; otherwise evaluate rhs
-        self.fb
-            .br_if(lhs, merge_block, &[lhs], rhs_block, &[]);
-
-        self.fb.switch_to_block(rhs_block);
-        let rhs = self.lower_expr(right);
-        self.fb.br(merge_block, &[rhs]);
-
-        self.fb.switch_to_block(merge_block);
-        merge_param
-    }
-
-    fn lower_nullish_coalesce(&mut self, left: &Expr, right: &Expr) -> ValueId {
-        let lhs = self.lower_expr(left);
-        let is_null = self.fb.system_call(
-            "SugarCube.Engine",
-            "is_nullish",
-            &[lhs],
-            Type::Bool,
-        );
-
-        let rhs_block = self.fb.create_block();
-        let merge_block = self.fb.create_block();
-        let merge_params = self.fb.add_block_params(merge_block, &[Type::Dynamic]);
-        let merge_param = merge_params[0];
-
-        // If nullish, evaluate rhs; otherwise use lhs
-        self.fb
-            .br_if(is_null, rhs_block, &[], merge_block, &[lhs]);
-
-        self.fb.switch_to_block(rhs_block);
-        let rhs = self.lower_expr(right);
-        self.fb.br(merge_block, &[rhs]);
-
-        self.fb.switch_to_block(merge_block);
-        merge_param
-    }
-
-    fn lower_ternary(
+    fn lower_oxc_logical(
         &mut self,
-        cond: &Expr,
-        then_expr: &Expr,
-        else_expr: &Expr,
+        log: &js::LogicalExpression<'_>,
+        pp: &Preprocessed,
     ) -> ValueId {
-        let cond_val = self.lower_expr(cond);
-
-        let then_block = self.fb.create_block();
-        let else_block = self.fb.create_block();
-        let merge_block = self.fb.create_block();
-        let merge_params = self.fb.add_block_params(merge_block, &[Type::Dynamic]);
-        let merge_param = merge_params[0];
-
-        self.fb
-            .br_if(cond_val, then_block, &[], else_block, &[]);
-
-        self.fb.switch_to_block(then_block);
-        let then_val = self.lower_expr(then_expr);
-        self.fb.br(merge_block, &[then_val]);
-
-        self.fb.switch_to_block(else_block);
-        let else_val = self.lower_expr(else_expr);
-        self.fb.br(merge_block, &[else_val]);
-
-        self.fb.switch_to_block(merge_block);
-        merge_param
-    }
-
-    fn lower_assign(
-        &mut self,
-        compound_op: Option<CompoundOp>,
-        target: &Expr,
-        value: &Expr,
-    ) -> ValueId {
-        let rhs = self.lower_expr(value);
-
-        let final_val = if let Some(cop) = compound_op {
-            let current = self.lower_expr(target);
-            self.apply_compound_op(cop, current, rhs)
-        } else {
-            rhs
-        };
-
-        self.store_to_target(target, final_val);
-        final_val
-    }
-
-    fn apply_compound_op(&mut self, op: CompoundOp, lhs: ValueId, rhs: ValueId) -> ValueId {
-        match op {
-            CompoundOp::Add => self.fb.add(lhs, rhs),
-            CompoundOp::Sub => self.fb.sub(lhs, rhs),
-            CompoundOp::Mul => self.fb.mul(lhs, rhs),
-            CompoundOp::Div => self.fb.div(lhs, rhs),
-            CompoundOp::Mod => self.fb.rem(lhs, rhs),
-            CompoundOp::Exp => {
+        match log.operator {
+            js::LogicalOperator::And => {
+                let lhs = self.lower_oxc_expr(&log.left, pp);
+                let rhs_block = self.fb.create_block();
+                let merge_block = self.fb.create_block();
+                let merge_params =
+                    self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+                let merge_param = merge_params[0];
                 self.fb
-                    .system_call("SugarCube.Engine", "pow", &[lhs, rhs], Type::Dynamic)
+                    .br_if(lhs, rhs_block, &[], merge_block, &[lhs]);
+                self.fb.switch_to_block(rhs_block);
+                let rhs = self.lower_oxc_expr(&log.right, pp);
+                self.fb.br(merge_block, &[rhs]);
+                self.fb.switch_to_block(merge_block);
+                merge_param
             }
-            CompoundOp::BitAnd => self.fb.bit_and(lhs, rhs),
-            CompoundOp::BitOr => self.fb.bit_or(lhs, rhs),
-            CompoundOp::BitXor => self.fb.bit_xor(lhs, rhs),
-            CompoundOp::Shl => self.fb.shl(lhs, rhs),
-            CompoundOp::Shr => self.fb.shr(lhs, rhs),
-            CompoundOp::UShr => {
+            js::LogicalOperator::Or => {
+                let lhs = self.lower_oxc_expr(&log.left, pp);
+                let rhs_block = self.fb.create_block();
+                let merge_block = self.fb.create_block();
+                let merge_params =
+                    self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+                let merge_param = merge_params[0];
                 self.fb
-                    .system_call("SugarCube.Engine", "ushr", &[lhs, rhs], Type::Dynamic)
+                    .br_if(lhs, merge_block, &[lhs], rhs_block, &[]);
+                self.fb.switch_to_block(rhs_block);
+                let rhs = self.lower_oxc_expr(&log.right, pp);
+                self.fb.br(merge_block, &[rhs]);
+                self.fb.switch_to_block(merge_block);
+                merge_param
             }
-            CompoundOp::NullishCoalesce => {
+            js::LogicalOperator::Coalesce => {
+                let lhs = self.lower_oxc_expr(&log.left, pp);
                 let is_null = self.fb.system_call(
                     "SugarCube.Engine",
                     "is_nullish",
                     &[lhs],
                     Type::Bool,
                 );
-                let then_block = self.fb.create_block();
+                let rhs_block = self.fb.create_block();
                 let merge_block = self.fb.create_block();
                 let merge_params =
                     self.fb.add_block_params(merge_block, &[Type::Dynamic]);
                 let merge_param = merge_params[0];
-
                 self.fb
-                    .br_if(is_null, then_block, &[], merge_block, &[lhs]);
-
-                self.fb.switch_to_block(then_block);
+                    .br_if(is_null, rhs_block, &[], merge_block, &[lhs]);
+                self.fb.switch_to_block(rhs_block);
+                let rhs = self.lower_oxc_expr(&log.right, pp);
                 self.fb.br(merge_block, &[rhs]);
-
                 self.fb.switch_to_block(merge_block);
                 merge_param
             }
         }
     }
 
-    /// Store a value to the location described by a target expression.
-    fn store_to_target(&mut self, target: &Expr, value: ValueId) {
-        match &target.kind {
-            ExprKind::StoryVar(name) => {
-                let n = self.fb.const_string(name.as_str());
+    fn lower_oxc_ternary(
+        &mut self,
+        cond: &js::ConditionalExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let cond_val = self.lower_oxc_expr(&cond.test, pp);
+        let then_block = self.fb.create_block();
+        let else_block = self.fb.create_block();
+        let merge_block = self.fb.create_block();
+        let merge_params = self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+        let merge_param = merge_params[0];
+        self.fb
+            .br_if(cond_val, then_block, &[], else_block, &[]);
+        self.fb.switch_to_block(then_block);
+        let then_val = self.lower_oxc_expr(&cond.consequent, pp);
+        self.fb.br(merge_block, &[then_val]);
+        self.fb.switch_to_block(else_block);
+        let else_val = self.lower_oxc_expr(&cond.alternate, pp);
+        self.fb.br(merge_block, &[else_val]);
+        self.fb.switch_to_block(merge_block);
+        merge_param
+    }
+
+    fn lower_oxc_assign(
+        &mut self,
+        assign: &js::AssignmentExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let rhs = self.lower_oxc_expr(&assign.right, pp);
+
+        let final_val = if assign.operator != js::AssignmentOperator::Assign {
+            // Compound assignment — load current, apply op
+            let current = self.lower_oxc_assignment_target_val(&assign.left, pp);
+            self.apply_oxc_compound_op(assign.operator, current, rhs)
+        } else {
+            rhs
+        };
+
+        self.store_to_oxc_assignment_target(&assign.left, final_val, pp);
+        final_val
+    }
+
+    fn apply_oxc_compound_op(
+        &mut self,
+        op: js::AssignmentOperator,
+        lhs: ValueId,
+        rhs: ValueId,
+    ) -> ValueId {
+        match op {
+            js::AssignmentOperator::Addition => self.fb.add(lhs, rhs),
+            js::AssignmentOperator::Subtraction => self.fb.sub(lhs, rhs),
+            js::AssignmentOperator::Multiplication => self.fb.mul(lhs, rhs),
+            js::AssignmentOperator::Division => self.fb.div(lhs, rhs),
+            js::AssignmentOperator::Remainder => self.fb.rem(lhs, rhs),
+            js::AssignmentOperator::Exponential => {
                 self.fb
-                    .system_call("SugarCube.State", "set", &[n, value], Type::Void);
+                    .system_call("SugarCube.Engine", "pow", &[lhs, rhs], Type::Dynamic)
             }
-            ExprKind::TempVar(name) => {
-                let alloc = self.get_or_create_temp(name);
-                self.fb.store(alloc, value);
+            js::AssignmentOperator::BitwiseAnd => self.fb.bit_and(lhs, rhs),
+            js::AssignmentOperator::BitwiseOR => self.fb.bit_or(lhs, rhs),
+            js::AssignmentOperator::BitwiseXOR => self.fb.bit_xor(lhs, rhs),
+            js::AssignmentOperator::ShiftLeft => self.fb.shl(lhs, rhs),
+            js::AssignmentOperator::ShiftRight => self.fb.shr(lhs, rhs),
+            js::AssignmentOperator::ShiftRightZeroFill => {
+                self.fb
+                    .system_call("SugarCube.Engine", "ushr", &[lhs, rhs], Type::Dynamic)
             }
-            ExprKind::Member { object, property } => {
-                let obj = self.lower_expr(object);
-                self.fb.set_field(obj, property.as_str(), value);
+            js::AssignmentOperator::LogicalAnd
+            | js::AssignmentOperator::LogicalOr
+            | js::AssignmentOperator::LogicalNullish => {
+                // These are handled as logical short-circuit patterns,
+                // but for compound assign just apply naively
+                lhs // fallback
             }
-            ExprKind::Index { object, index } => {
-                let obj = self.lower_expr(object);
-                let idx = self.lower_expr(index);
+            js::AssignmentOperator::Assign => rhs, // shouldn't reach here
+        }
+    }
+
+    fn lower_oxc_assignment_target_val(
+        &mut self,
+        target: &js::AssignmentTarget<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        match target {
+            js::AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let name = ident.name.as_str();
+                if let Some(var_name) = name.strip_prefix('$') {
+                    let n = self.fb.const_string(var_name);
+                    self.fb
+                        .system_call("SugarCube.State", "get", &[n], Type::Dynamic)
+                } else if let Some(stripped) = name.strip_prefix('_') {
+                    if !stripped.is_empty() {
+                        let alloc = self.get_or_create_temp(stripped);
+                        self.fb.load(alloc, Type::Dynamic)
+                    } else {
+                        self.fb.const_null()
+                    }
+                } else {
+                    let n = self.fb.const_string(name);
+                    self.fb
+                        .system_call("SugarCube.Engine", "resolve", &[n], Type::Dynamic)
+                }
+            }
+            js::AssignmentTarget::StaticMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                self.fb.get_field(obj, mem.property.name.as_str(), Type::Dynamic)
+            }
+            js::AssignmentTarget::ComputedMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                let idx = self.lower_oxc_expr(&mem.expression, pp);
+                self.fb.get_index(obj, idx, Type::Dynamic)
+            }
+            _ => self.fb.const_null(),
+        }
+    }
+
+    fn store_to_oxc_assignment_target(
+        &mut self,
+        target: &js::AssignmentTarget<'_>,
+        value: ValueId,
+        pp: &Preprocessed,
+    ) {
+        match target {
+            js::AssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let name = ident.name.as_str();
+                if let Some(var_name) = name.strip_prefix('$') {
+                    let n = self.fb.const_string(var_name);
+                    self.fb
+                        .system_call("SugarCube.State", "set", &[n, value], Type::Void);
+                } else if let Some(stripped) = name.strip_prefix('_') {
+                    if !stripped.is_empty() {
+                        let alloc = self.get_or_create_temp(stripped);
+                        self.fb.store(alloc, value);
+                    }
+                } else {
+                    // Bare identifier assignment — unsupported, eval as side effect
+                    let _ = value;
+                }
+            }
+            js::AssignmentTarget::StaticMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                self.fb.set_field(obj, mem.property.name.as_str(), value);
+            }
+            js::AssignmentTarget::ComputedMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                let idx = self.lower_oxc_expr(&mem.expression, pp);
                 self.fb.set_index(obj, idx, value);
             }
             _ => {
-                // Unsupported assignment target — emit as side-effect
-                let _ = self.lower_expr(target);
+                // Destructuring etc — unsupported
             }
         }
     }
 
-    fn expr_to_field_name(&mut self, key: &Expr) -> String {
-        match &key.kind {
-            ExprKind::Ident(s) | ExprKind::Str(s) => s.clone(),
-            ExprKind::Literal(Literal::Number(n)) => format!("{}", n.value()),
-            _ => "__computed__".to_string(),
+    /// Store to an update expression target (SimpleAssignmentTarget).
+    fn store_to_oxc_target(
+        &mut self,
+        target: &js::SimpleAssignmentTarget<'_>,
+        value: ValueId,
+        pp: &Preprocessed,
+    ) {
+        match target {
+            js::SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
+                let name = ident.name.as_str();
+                if let Some(var_name) = name.strip_prefix('$') {
+                    let n = self.fb.const_string(var_name);
+                    self.fb
+                        .system_call("SugarCube.State", "set", &[n, value], Type::Void);
+                } else if let Some(stripped) = name.strip_prefix('_') {
+                    if !stripped.is_empty() {
+                        let alloc = self.get_or_create_temp(stripped);
+                        self.fb.store(alloc, value);
+                    }
+                }
+            }
+            js::SimpleAssignmentTarget::StaticMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                self.fb.set_field(obj, mem.property.name.as_str(), value);
+            }
+            js::SimpleAssignmentTarget::ComputedMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                let idx = self.lower_oxc_expr(&mem.expression, pp);
+                self.fb.set_index(obj, idx, value);
+            }
+            _ => {}
         }
     }
 
-    fn lower_template(&mut self, parts: &[TemplatePart]) -> ValueId {
-        if parts.is_empty() {
-            return self.fb.const_string("");
+    fn lower_template_literal(
+        &mut self,
+        tl: &js::TemplateLiteral<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let mut result: Option<ValueId> = None;
+
+        for (i, quasi) in tl.quasis.iter().enumerate() {
+            // String part
+            let text = quasi.value.raw.as_str();
+            if !text.is_empty() {
+                let s = self.fb.const_string(text);
+                result = Some(match result {
+                    Some(acc) => self.fb.add(acc, s),
+                    None => s,
+                });
+            }
+            // Expression part (if not the last quasi)
+            if i < tl.expressions.len() {
+                let val = self.lower_oxc_expr(&tl.expressions[i], pp);
+                let str_val = self.fb.system_call(
+                    "SugarCube.Engine",
+                    "to_string",
+                    &[val],
+                    Type::String,
+                );
+                result = Some(match result {
+                    Some(acc) => self.fb.add(acc, str_val),
+                    None => str_val,
+                });
+            }
         }
 
-        let mut result: Option<ValueId> = None;
-        for part in parts {
-            let part_val = match part {
-                TemplatePart::Str(s) => self.fb.const_string(s.as_str()),
-                TemplatePart::Expr(e) => {
-                    let val = self.lower_expr(e);
-                    self.fb.system_call(
-                        "SugarCube.Engine",
-                        "to_string",
-                        &[val],
-                        Type::String,
-                    )
+        result.unwrap_or_else(|| self.fb.const_string(""))
+    }
+
+    fn lower_oxc_arrow(
+        &mut self,
+        arrow: &js::ArrowFunctionExpression<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        let arrow_name = format!("{}_arrow_{}", self.func_name, self.arrow_count);
+        self.arrow_count += 1;
+
+        let params: Vec<String> = arrow
+            .params
+            .items
+            .iter()
+            .filter_map(|p| {
+                if let js::BindingPattern::BindingIdentifier(ident) = &p.pattern {
+                    Some(ident.name.to_string())
+                } else {
+                    None
                 }
-            };
-            result = Some(match result {
-                Some(acc) => self.fb.add(acc, part_val),
-                None => part_val,
-            });
+            })
+            .collect();
+
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic; params.len()],
+            return_ty: Type::Dynamic,
+            defaults: vec![],
+            has_rest_param: false,
+        };
+        let mut arrow_fb = FunctionBuilder::new(&arrow_name, sig, Visibility::Private);
+
+        // Register parameter names
+        let mut arrow_params = HashMap::new();
+        for (idx, name) in params.iter().enumerate() {
+            let v = arrow_fb.param(idx);
+            arrow_fb.name_value(v, name.clone());
+            arrow_params.insert(name.clone(), v);
         }
-        result.unwrap()
+
+        let saved_fb = std::mem::replace(&mut self.fb, arrow_fb);
+        let saved_temps = std::mem::take(&mut self.temp_vars);
+        let saved_params = std::mem::replace(&mut self.local_params, arrow_params);
+
+        // Lower arrow body
+        if arrow.expression {
+            // Expression body: `() => expr`
+            if let Some(js::Statement::ExpressionStatement(es)) = arrow.body.statements.first() {
+                let result = self.lower_oxc_expr(&es.expression, pp);
+                self.fb.ret(Some(result));
+            } else {
+                self.fb.ret(None);
+            }
+        } else {
+            // Block body: `() => { ... }` — lower each statement
+            for stmt in &arrow.body.statements {
+                self.lower_oxc_statement(stmt, pp);
+            }
+            self.fb.ret(None);
+        }
+
+        let built = std::mem::replace(&mut self.fb, saved_fb);
+        self.temp_vars = saved_temps;
+        self.local_params = saved_params;
+        let mut func = built.build();
+        func.method_kind = MethodKind::Closure;
+        self.setter_callbacks.push(func);
+
+        let name_val = self.fb.const_string(&arrow_name);
+        self.fb
+            .system_call("SugarCube.Engine", "closure", &[name_val], Type::Dynamic)
+    }
+
+    fn lower_oxc_statement(&mut self, stmt: &js::Statement<'_>, pp: &Preprocessed) {
+        match stmt {
+            js::Statement::ExpressionStatement(es) => {
+                self.lower_oxc_expr(&es.expression, pp);
+            }
+            js::Statement::ReturnStatement(ret) => {
+                let val = ret
+                    .argument
+                    .as_ref()
+                    .map(|e| self.lower_oxc_expr(e, pp));
+                self.fb.ret(val);
+            }
+            js::Statement::VariableDeclaration(decl) => {
+                for d in &decl.declarations {
+                    if let Some(init) = &d.init {
+                        let val = self.lower_oxc_expr(init, pp);
+                        if let js::BindingPattern::BindingIdentifier(ident) =
+                            &d.id
+                        {
+                            let name = ident.name.as_str();
+                            let alloc = self.get_or_create_temp(name);
+                            self.fb.store(alloc, val);
+                        }
+                    }
+                }
+            }
+            _ => {
+                // Other statement types — ignore for now
+            }
+        }
+    }
+
+    fn lower_oxc_chain(
+        &mut self,
+        expr: &js::ChainElement<'_>,
+        pp: &Preprocessed,
+    ) -> ValueId {
+        match expr {
+            js::ChainElement::CallExpression(call) => {
+                let callee = self.lower_oxc_expr(&call.callee, pp);
+                let args: Vec<ValueId> = call
+                    .arguments
+                    .iter()
+                    .map(|a| self.lower_oxc_argument(a, pp))
+                    .collect();
+                if call.optional {
+                    // Optional call: callee?.()
+                    let is_null = self.fb.system_call(
+                        "SugarCube.Engine",
+                        "is_nullish",
+                        &[callee],
+                        Type::Bool,
+                    );
+                    let call_block = self.fb.create_block();
+                    let merge_block = self.fb.create_block();
+                    let null = self.fb.const_null();
+                    let merge_params =
+                        self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+                    let merge_param = merge_params[0];
+                    self.fb
+                        .br_if(is_null, merge_block, &[null], call_block, &[]);
+                    self.fb.switch_to_block(call_block);
+                    let result = self.fb.call_indirect(callee, &args, Type::Dynamic);
+                    self.fb.br(merge_block, &[result]);
+                    self.fb.switch_to_block(merge_block);
+                    merge_param
+                } else {
+                    self.fb.call_indirect(callee, &args, Type::Dynamic)
+                }
+            }
+            js::ChainElement::StaticMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                if mem.optional {
+                    let is_null = self.fb.system_call(
+                        "SugarCube.Engine",
+                        "is_nullish",
+                        &[obj],
+                        Type::Bool,
+                    );
+                    let access_block = self.fb.create_block();
+                    let merge_block = self.fb.create_block();
+                    let null = self.fb.const_null();
+                    let merge_params =
+                        self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+                    let merge_param = merge_params[0];
+                    self.fb
+                        .br_if(is_null, merge_block, &[null], access_block, &[]);
+                    self.fb.switch_to_block(access_block);
+                    let result =
+                        self.fb.get_field(obj, mem.property.name.as_str(), Type::Dynamic);
+                    self.fb.br(merge_block, &[result]);
+                    self.fb.switch_to_block(merge_block);
+                    merge_param
+                } else {
+                    self.fb.get_field(obj, mem.property.name.as_str(), Type::Dynamic)
+                }
+            }
+            js::ChainElement::ComputedMemberExpression(mem) => {
+                let obj = self.lower_oxc_expr(&mem.object, pp);
+                let idx = self.lower_oxc_expr(&mem.expression, pp);
+                if mem.optional {
+                    let is_null = self.fb.system_call(
+                        "SugarCube.Engine",
+                        "is_nullish",
+                        &[obj],
+                        Type::Bool,
+                    );
+                    let access_block = self.fb.create_block();
+                    let merge_block = self.fb.create_block();
+                    let null = self.fb.const_null();
+                    let merge_params =
+                        self.fb.add_block_params(merge_block, &[Type::Dynamic]);
+                    let merge_param = merge_params[0];
+                    self.fb
+                        .br_if(is_null, merge_block, &[null], access_block, &[]);
+                    self.fb.switch_to_block(access_block);
+                    let result = self.fb.get_index(obj, idx, Type::Dynamic);
+                    self.fb.br(merge_block, &[result]);
+                    self.fb.switch_to_block(merge_block);
+                    merge_param
+                } else {
+                    self.fb.get_index(obj, idx, Type::Dynamic)
+                }
+            }
+            js::ChainElement::PrivateFieldExpression(_) => {
+                let m = self.fb.const_string("unsupported: private field");
+                self.fb
+                    .system_call("SugarCube.Engine", "error", &[m], Type::Dynamic)
+            }
+            js::ChainElement::TSNonNullExpression(e) => {
+                // TypeScript non-null assertion (x!) — just lower the inner expression
+                self.lower_oxc_expr(&e.expression, pp)
+            }
+        }
+    }
+
+    fn oxc_property_key_name(&mut self, key: &js::PropertyKey<'_>, _pp: &Preprocessed) -> String {
+        match key {
+            js::PropertyKey::StaticIdentifier(ident) => ident.name.to_string(),
+            js::PropertyKey::StringLiteral(s) => s.value.to_string(),
+            js::PropertyKey::NumericLiteral(n) => format!("{}", n.value),
+            _ => {
+                // Computed property — emit as __computed__
+                "__computed__".to_string()
+            }
+        }
     }
 
     // ── Node lowering ──────────────────────────────────────────────────
@@ -737,33 +1157,26 @@ impl TranslateCtx {
             let setter_name = format!("{}_setter_{}", self.func_name, self.setter_count);
             self.setter_count += 1;
 
-            // Save current fb, build setter function in a fresh builder
             let sig = FunctionSig {
                 params: vec![],
                 return_ty: Type::Void,
                 defaults: vec![],
                 has_rest_param: false,
             };
-            let mut setter_fb = FunctionBuilder::new(&setter_name, sig, Visibility::Public);
+            let setter_fb = FunctionBuilder::new(&setter_name, sig, Visibility::Public);
 
-            // Swap in the setter builder
             let saved_fb = std::mem::replace(&mut self.fb, setter_fb);
             let saved_temps = std::mem::take(&mut self.temp_vars);
 
-            // Lower setter expressions into the setter function
             for setter_expr in &link.setters {
                 self.lower_expr(setter_expr);
             }
             self.fb.ret(None);
 
-            // Swap back the original builder
-            setter_fb = std::mem::replace(&mut self.fb, saved_fb);
+            let built_fb = std::mem::replace(&mut self.fb, saved_fb);
             self.temp_vars = saved_temps;
+            self.setter_callbacks.push(built_fb.build());
 
-            // Store the built setter function
-            self.setter_callbacks.push(setter_fb.build());
-
-            // Emit a GlobalRef to the setter function in the main function
             let setter_ref = self.fb.global_ref(&setter_name, Type::Dynamic);
             args.push(setter_ref);
         }
@@ -780,8 +1193,6 @@ impl TranslateCtx {
         if mac.clauses.is_empty() {
             &mac.args
         } else {
-            // Block macros: args are in clauses[0].args
-            // mac.args is always None for block macros
             &mac.clauses[0].args
         }
     }
@@ -801,8 +1212,6 @@ impl TranslateCtx {
             "for" => self.lower_for(mac),
             "switch" => self.lower_switch(mac),
             "break" => {
-                // Break is handled in the loop lowering via IR break
-                // For now, emit as a system call that the runtime handles
                 self.fb
                     .system_call("SugarCube.Engine", "break", &[], Type::Void);
             }
@@ -903,22 +1312,20 @@ impl TranslateCtx {
     }
 
     fn lower_unset_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::StoryVar(name) => {
-                let n = self.fb.const_string(name.as_str());
-                self.fb
-                    .system_call("SugarCube.State", "unset", &[n], Type::Void);
-            }
-            ExprKind::TempVar(name) => {
-                // Remove from temp vars by storing null
-                let alloc = self.get_or_create_temp(name);
+        let src = self.source.clone();
+        let text = expr.text(&src).trim();
+        if let Some(var_name) = text.strip_prefix('$') {
+            let n = self.fb.const_string(var_name);
+            self.fb
+                .system_call("SugarCube.State", "unset", &[n], Type::Void);
+        } else if let Some(stripped) = text.strip_prefix('_') {
+            if !stripped.is_empty() {
+                let alloc = self.get_or_create_temp(stripped);
                 let null = self.fb.const_null();
                 self.fb.store(alloc, null);
             }
-            _ => {
-                // Just evaluate for side effects
-                self.lower_expr(expr);
-            }
+        } else {
+            self.lower_expr(expr);
         }
     }
 
@@ -952,7 +1359,6 @@ impl TranslateCtx {
         merge_block: BlockId,
     ) {
         if index >= clauses.len() {
-            // Fell through all clauses — branch to merge
             self.fb.br(merge_block, &[]);
             return;
         }
@@ -960,13 +1366,11 @@ impl TranslateCtx {
         let clause = &clauses[index];
 
         if clause.kind == "else" {
-            // Unconditional — lower body and branch to merge
             self.lower_nodes(&clause.body);
             self.fb.br(merge_block, &[]);
             return;
         }
 
-        // if/elseif — evaluate condition
         let cond = match &clause.args {
             MacroArgs::Expr(expr) => self.lower_expr(expr),
             _ => self.fb.const_bool(true),
@@ -978,12 +1382,10 @@ impl TranslateCtx {
         self.fb
             .br_if(cond, then_block, &[], else_block, &[]);
 
-        // Then branch
         self.fb.switch_to_block(then_block);
         self.lower_nodes(&clause.body);
         self.fb.br(merge_block, &[]);
 
-        // Else branch — continue to next clause
         self.fb.switch_to_block(else_block);
         self.lower_if_clauses(clauses, index + 1, merge_block);
     }
@@ -1005,7 +1407,6 @@ impl TranslateCtx {
                 self.lower_for_in(value_var, key_var.as_deref(), collection, &mac.clauses);
             }
             _ => {
-                // Fallback: just lower body
                 for clause in &mac.clauses {
                     self.lower_nodes(&clause.body);
                 }
@@ -1020,7 +1421,6 @@ impl TranslateCtx {
         update: &Option<Box<Expr>>,
         clauses: &[MacroClause],
     ) {
-        // Init
         if let Some(init_expr) = init {
             self.lower_expr(init_expr);
         }
@@ -1032,7 +1432,6 @@ impl TranslateCtx {
 
         self.fb.br(header_block, &[]);
 
-        // Header: evaluate condition
         self.fb.switch_to_block(header_block);
         let cond_val = if let Some(cond_expr) = cond {
             self.lower_expr(cond_expr)
@@ -1042,21 +1441,18 @@ impl TranslateCtx {
         self.fb
             .br_if(cond_val, body_block, &[], exit_block, &[]);
 
-        // Body
         self.fb.switch_to_block(body_block);
         for clause in clauses {
             self.lower_nodes(&clause.body);
         }
         self.fb.br(latch_block, &[]);
 
-        // Latch: update + loop back
         self.fb.switch_to_block(latch_block);
         if let Some(update_expr) = update {
             self.lower_expr(update_expr);
         }
         self.fb.br(header_block, &[]);
 
-        // Exit
         self.fb.switch_to_block(exit_block);
     }
 
@@ -1079,21 +1475,18 @@ impl TranslateCtx {
 
         self.fb.br(header_block, &[]);
 
-        // Header: check if current < end
         self.fb.switch_to_block(header_block);
         let current = self.fb.load(alloc, Type::Dynamic);
         let cond = self.fb.cmp(CmpKind::Lt, current, end_val);
         self.fb
             .br_if(cond, body_block, &[], exit_block, &[]);
 
-        // Body
         self.fb.switch_to_block(body_block);
         for clause in clauses {
             self.lower_nodes(&clause.body);
         }
         self.fb.br(latch_block, &[]);
 
-        // Latch: increment
         self.fb.switch_to_block(latch_block);
         let cur = self.fb.load(alloc, Type::Dynamic);
         let one = self.fb.const_float(1.0);
@@ -1101,7 +1494,6 @@ impl TranslateCtx {
         self.fb.store(alloc, next);
         self.fb.br(header_block, &[]);
 
-        // Exit
         self.fb.switch_to_block(exit_block);
     }
 
@@ -1114,7 +1506,6 @@ impl TranslateCtx {
     ) {
         let coll = self.lower_expr(collection);
 
-        // Create iterator via SystemCall
         let iter = self.fb.system_call(
             "SugarCube.Engine",
             "iterate",
@@ -1128,7 +1519,6 @@ impl TranslateCtx {
 
         self.fb.br(header_block, &[]);
 
-        // Header: check iterator.hasNext()
         self.fb.switch_to_block(header_block);
         let has_next = self.fb.system_call(
             "SugarCube.Engine",
@@ -1139,7 +1529,6 @@ impl TranslateCtx {
         self.fb
             .br_if(has_next, body_block, &[], exit_block, &[]);
 
-        // Body: get next value/key
         self.fb.switch_to_block(body_block);
         let next_val = self.fb.system_call(
             "SugarCube.Engine",
@@ -1166,7 +1555,6 @@ impl TranslateCtx {
         }
         self.fb.br(header_block, &[]);
 
-        // Exit
         self.fb.switch_to_block(exit_block);
     }
 
@@ -1178,14 +1566,11 @@ impl TranslateCtx {
         };
 
         let exit_block = self.fb.create_block();
-
-        // Collect case/default clauses
         let mut case_blocks: Vec<(Vec<ValueId>, BlockId)> = Vec::new();
         let mut default_block: Option<BlockId> = None;
 
         for clause in &mac.clauses {
             let block = self.fb.create_block();
-
             match clause.kind.as_str() {
                 "case" => {
                     let vals = match &clause.args {
@@ -1200,7 +1585,6 @@ impl TranslateCtx {
                     default_block = Some(block);
                 }
                 _ => {
-                    // Treat "switch" (main clause) as the first case if it has a body
                     if !clause.body.is_empty() {
                         case_blocks.push((vec![], block));
                     }
@@ -1208,11 +1592,9 @@ impl TranslateCtx {
             }
         }
 
-        // Build if-else chain for case matching (since case values are expressions, not constants)
         let default = default_block.unwrap_or(exit_block);
         self.lower_switch_chain(&case_blocks, switch_val, default, 0);
 
-        // Lower each case body
         for (i, clause) in mac.clauses.iter().enumerate() {
             let block = if clause.kind == "default" {
                 default_block.unwrap()
@@ -1244,21 +1626,15 @@ impl TranslateCtx {
 
         let (vals, target) = &cases[index];
         if vals.is_empty() {
-            // No case values — skip to next
             self.lower_switch_chain(cases, switch_val, default_block, index + 1);
             return;
         }
 
-        // Check if switch_val matches any of the case values
         let mut combined: Option<ValueId> = None;
         for &v in vals {
             let eq = self.fb.cmp(CmpKind::Eq, switch_val, v);
             combined = Some(match combined {
-                Some(prev) => {
-                    // OR the conditions together using a block-based short circuit
-                    // For simplicity, use a non-short-circuit OR via bit_or on bools
-                    self.fb.bit_or(prev, eq)
-                }
+                Some(prev) => self.fb.bit_or(prev, eq),
                 None => eq,
             });
         }
@@ -1272,22 +1648,26 @@ impl TranslateCtx {
     }
 
     fn lower_goto(&mut self, mac: &MacroNode) {
-        if let MacroArgs::Expr(expr) = &mac.args {
-            let target = self.lower_expr(expr);
-            self.fb.system_call(
-                "SugarCube.Navigation",
-                "goto",
-                &[target],
-                Type::Void,
-            );
-        } else if let MacroArgs::Raw(s) = &mac.args {
-            let target = self.fb.const_string(s.trim());
-            self.fb.system_call(
-                "SugarCube.Navigation",
-                "goto",
-                &[target],
-                Type::Void,
-            );
+        match &mac.args {
+            MacroArgs::Expr(expr) => {
+                let target = self.lower_expr(expr);
+                self.fb.system_call(
+                    "SugarCube.Navigation",
+                    "goto",
+                    &[target],
+                    Type::Void,
+                );
+            }
+            MacroArgs::Raw(s) => {
+                let target = self.fb.const_string(s.trim());
+                self.fb.system_call(
+                    "SugarCube.Navigation",
+                    "goto",
+                    &[target],
+                    Type::Void,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -1325,8 +1705,6 @@ impl TranslateCtx {
 
     fn lower_link_macro(&mut self, mac: &MacroNode) {
         let variant = mac.name.as_str();
-
-        // Extract link text and optional passage target from args
         let args = self.primary_args(mac).clone();
         let (text_val, passage_val) = match &args {
             MacroArgs::LinkArgs { text, passage } => {
@@ -1357,7 +1735,6 @@ impl TranslateCtx {
             args.push(p);
         }
 
-        // Start link block
         self.fb.system_call(
             "SugarCube.Output",
             "link_block_start",
@@ -1365,12 +1742,10 @@ impl TranslateCtx {
             Type::Void,
         );
 
-        // Lower body
         for clause in &mac.clauses {
             self.lower_nodes(&clause.body);
         }
 
-        // End link block
         self.fb.system_call(
             "SugarCube.Output",
             "link_block_end",
@@ -1422,8 +1797,6 @@ impl TranslateCtx {
     }
 
     fn lower_capture(&mut self, mac: &MacroNode) {
-        // <<capture>> creates a closure scope for the listed variables.
-        // For IR, we just lower the body — the runtime handles scoping.
         for clause in &mac.clauses {
             self.lower_nodes(&clause.body);
         }
@@ -1432,18 +1805,15 @@ impl TranslateCtx {
     fn lower_widget(&mut self, mac: &MacroNode) {
         let args = self.primary_args(mac).clone();
         if let MacroArgs::WidgetDef { name } = &args {
-            // Collect body nodes for the widget
             let mut body_nodes = Vec::new();
             for clause in &mac.clauses {
                 body_nodes.extend(clause.body.clone());
             }
-            self.widgets.push((name.clone(), body_nodes));
+            self.widgets.push((name.clone(), body_nodes, self.source.clone()));
         }
     }
 
     fn lower_script(&mut self, mac: &MacroNode) {
-        // <<script>> contains raw JS. The first clause body is typically a single
-        // Text node with the raw script content.
         for clause in &mac.clauses {
             for node in &clause.body {
                 if let NodeKind::Text(code) = &node.kind {
@@ -1470,16 +1840,13 @@ impl TranslateCtx {
         let method = mac.name.as_str();
         let args = self.collect_macro_args(mac);
 
-        // Start DOM block
         self.fb
             .system_call("SugarCube.DOM", format!("{method}_start"), &args, Type::Void);
 
-        // Lower body if it's a block macro
         for clause in &mac.clauses {
             self.lower_nodes(&clause.body);
         }
 
-        // End DOM block
         self.fb
             .system_call("SugarCube.DOM", format!("{method}_end"), &[], Type::Void);
     }
@@ -1490,7 +1857,6 @@ impl TranslateCtx {
         self.fb
             .system_call("SugarCube.Input", method, &args, Type::Void);
 
-        // Lower body for block variants (listbox, cycle)
         for clause in &mac.clauses {
             self.lower_nodes(&clause.body);
         }
@@ -1540,7 +1906,6 @@ impl TranslateCtx {
     }
 
     fn lower_unknown_macro(&mut self, mac: &MacroNode) {
-        // Unknown macro → widget invocation
         let name_val = self.fb.const_string(mac.name.as_str());
         let args = self.collect_macro_args(mac);
         let mut all_args = vec![name_val];
@@ -1553,7 +1918,6 @@ impl TranslateCtx {
             Type::Void,
         );
 
-        // If it has a body, lower it within the widget's content block
         if !mac.clauses.is_empty() {
             self.fb.system_call(
                 "SugarCube.Widget",
@@ -1573,7 +1937,6 @@ impl TranslateCtx {
         }
     }
 
-    /// Collect macro arguments as a vec of ValueIds.
     fn collect_macro_args(&mut self, mac: &MacroNode) -> Vec<ValueId> {
         let args = self.primary_args(mac).clone();
         match &args {
@@ -1646,8 +2009,8 @@ impl TranslateCtx {
 pub struct TranslateResult {
     /// The main passage function.
     pub func: Function,
-    /// Widget definitions extracted from the passage.
-    pub widgets: Vec<(String, Vec<Node>)>,
+    /// Widget definitions extracted from the passage (name, body, source).
+    pub widgets: Vec<(String, Vec<Node>, String)>,
     /// Setter callback functions generated for link setters.
     pub setter_callbacks: Vec<Function>,
 }
@@ -1655,7 +2018,7 @@ pub struct TranslateResult {
 /// Translate a parsed passage AST into an IR Function.
 pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
     let func_name = passage_func_name(name);
-    let mut ctx = TranslateCtx::new(&func_name);
+    let mut ctx = TranslateCtx::new(&func_name, &ast.source);
 
     ctx.lower_nodes(&ast.body);
 
@@ -1671,13 +2034,12 @@ pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
     }
 }
 
-/// Translate a widget body into an IR Function plus any auxiliary functions
-/// (setter callbacks, arrow functions) generated during translation.
-pub fn translate_widget(name: &str, body: &[Node]) -> (Function, Vec<Function>) {
+/// Translate a widget body into an IR Function plus any auxiliary functions.
+pub fn translate_widget(name: &str, body: &[Node], source: &str) -> (Function, Vec<Function>) {
     let func_name = format!("widget_{name}");
-    let mut ctx = TranslateCtx::new(&func_name);
+    let mut ctx = TranslateCtx::new(&func_name, source);
 
-    // Initialize _args from State (set by Widget.call before invocation)
+    // Initialize _args from State
     let args_name = ctx.fb.const_string("_args");
     let args_val = ctx
         .fb
@@ -1695,7 +2057,7 @@ pub fn translate_widget(name: &str, body: &[Node]) -> (Function, Vec<Function>) 
 /// Translate a user `<script>` block into an IR Function that evals the code.
 pub fn translate_user_script(index: usize, code: &str) -> Function {
     let func_name = format!("__user_script_{index}");
-    let mut ctx = TranslateCtx::new(&func_name);
+    let mut ctx = TranslateCtx::new(&func_name, "");
     let code_val = ctx.fb.const_string(code);
     ctx.fb
         .system_call("SugarCube.Engine", "eval", &[code_val], Type::Void);
@@ -1728,14 +2090,12 @@ mod tests {
     #[test]
     fn plain_text_emits_output() {
         let func = translate("Hello, world!");
-        // Should have at least the entry block with some instructions
         assert!(!func.blocks.values().next().unwrap().insts.is_empty());
     }
 
     #[test]
     fn story_var_read() {
         let func = translate("<<print $name>>");
-        // Should produce SystemCall instructions for state get + output print
         let inst_count: usize = func.blocks.values().map(|b| b.insts.len()).sum();
         assert!(inst_count >= 2, "expected at least 2 instructions, got {inst_count}");
     }
@@ -1750,7 +2110,6 @@ mod tests {
     #[test]
     fn if_else_creates_blocks() {
         let func = translate("<<if $x>>yes<<else>>no<</if>>");
-        // Should have multiple blocks for the if/else branches
         assert!(func.blocks.len() >= 3, "expected at least 3 blocks, got {}", func.blocks.len());
     }
 
@@ -1764,7 +2123,6 @@ mod tests {
     #[test]
     fn for_loop_creates_blocks() {
         let func = translate("<<for _i to 0; _i lt 10; _i to _i + 1>>item<</for>>");
-        // header + body + latch + exit = at least 4 blocks beyond entry
         assert!(func.blocks.len() >= 4, "expected at least 4 blocks, got {}", func.blocks.len());
     }
 
@@ -1773,11 +2131,9 @@ mod tests {
         let source = "<<widget \"myWidget\">>body<</widget>>";
         let ast = parser::parse(source);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
-        // Verify parser produces a widget macro node
         assert_eq!(ast.body.len(), 1, "expected 1 node, got: {:#?}", ast.body);
         if let NodeKind::Macro(m) = &ast.body[0].kind {
             assert_eq!(m.name, "widget");
-            // Block macros: args are in clauses[0].args, not m.args
             assert!(!m.clauses.is_empty(), "expected clauses");
             assert!(
                 matches!(&m.clauses[0].args, MacroArgs::WidgetDef { name } if name == "myWidget"),
@@ -1793,15 +2149,11 @@ mod tests {
 
     #[test]
     fn arrow_params_not_resolved() {
-        // Arrow function parameters should be referenced directly, not via resolve().
-        // e.g. `<<run [1,2].forEach((x) => x + 1)>>` should NOT produce resolve("x").
         let source = "<<run [1,2].forEach((x) => x + 1)>>";
         let ast = parser::parse(source);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         let result = translate_passage("test", &ast);
 
-        // The arrow body is emitted as a closure callback function.
-        // Check that none of the callbacks contain a resolve("x") SystemCall.
         for cb in &result.setter_callbacks {
             for block in cb.blocks.values() {
                 for &inst_id in &block.insts {
@@ -1818,7 +2170,6 @@ mod tests {
             }
         }
 
-        // Arrow callbacks should be marked as closures for inline emission.
         let arrow_cbs: Vec<_> = result
             .setter_callbacks
             .iter()
@@ -1829,7 +2180,6 @@ mod tests {
             "expected arrow callback marked as Closure"
         );
 
-        // The parent function should contain a closure SystemCall, not a GlobalRef.
         let has_closure_syscall = result.func.blocks.values().any(|block| {
             block.insts.iter().any(|&inst_id| {
                 let inst = &result.func.insts[inst_id];
@@ -1849,13 +2199,11 @@ mod tests {
 
     #[test]
     fn arrow_bare_param_not_resolved() {
-        // Un-parenthesized arrow: `x => x + 1` (no parens around param)
         let source = "<<run [1,2].forEach(x => x + 1)>>";
         let ast = parser::parse(source);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         let result = translate_passage("test", &ast);
 
-        // Should produce a Closure callback, same as parenthesized form.
         let arrow_cbs: Vec<_> = result
             .setter_callbacks
             .iter()
@@ -1866,7 +2214,6 @@ mod tests {
             "bare-param arrow should produce a Closure callback"
         );
 
-        // No resolve("x") in the closure body.
         for cb in &arrow_cbs {
             for block in cb.blocks.values() {
                 for &inst_id in &block.insts {

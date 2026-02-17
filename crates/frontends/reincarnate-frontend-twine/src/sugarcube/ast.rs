@@ -1,8 +1,9 @@
 //! AST node types for SugarCube passage content.
 //!
 //! The AST represents parsed SugarCube markup: macros, links, variable
-//! interpolation, inline HTML, and plain text. Expression nodes use a
-//! separate `Expr`/`ExprKind` hierarchy for TwineScript (JS superset).
+//! interpolation, inline HTML, and plain text. Expressions are stored as
+//! raw source byte ranges — actual parsing happens at translation time
+//! via oxc.
 
 use std::fmt;
 
@@ -48,6 +49,8 @@ impl fmt::Display for ParseError {
 pub struct PassageAst {
     pub body: Vec<Node>,
     pub errors: Vec<ParseError>,
+    /// The full passage source text. Expressions reference byte ranges into this.
+    pub source: String,
 }
 
 /// A single AST node in a passage body.
@@ -190,228 +193,26 @@ pub enum LinkTarget {
 
 // ── Expressions (TwineScript) ──────────────────────────────────────────
 
-/// A TwineScript expression with span.
+/// A TwineScript expression — stored as a raw source byte range.
+///
+/// The actual expression text is `&source[start..end]` where `source` is the
+/// passage source from `PassageAst::source`. Parsing happens at translation
+/// time via the oxc JavaScript parser.
 #[derive(Debug, Clone)]
 pub struct Expr {
-    pub kind: ExprKind,
-    pub span: Span,
+    /// Byte offset of the expression start in the passage source.
+    pub start: usize,
+    /// Byte offset of the expression end in the passage source.
+    pub end: usize,
 }
 
-#[derive(Debug, Clone)]
-pub enum ExprKind {
-    /// A literal value (bool, number, null, undefined).
-    Literal(Literal),
-    /// A string literal (`"hello"`, `'world'`).
-    Str(String),
-    /// An identifier (variable name without `$`/`_` prefix).
-    Ident(String),
-    /// A SugarCube story variable: `$name` or `$name.prop.chain`.
-    StoryVar(String),
-    /// A SugarCube temporary variable: `_name` or `_name.prop.chain`.
-    TempVar(String),
-    /// Property access: `expr.name`.
-    Member {
-        object: Box<Expr>,
-        property: String,
-    },
-    /// Computed property access: `expr[index]`.
-    Index {
-        object: Box<Expr>,
-        index: Box<Expr>,
-    },
-    /// Function/method call: `expr(args)`.
-    Call {
-        callee: Box<Expr>,
-        args: Vec<Expr>,
-    },
-    /// `new Constructor(args)`.
-    New {
-        callee: Box<Expr>,
-        args: Vec<Expr>,
-    },
-    /// Unary operation: `!x`, `-x`, `++x`, `--x`, `typeof x`, etc.
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
-    /// Postfix operation: `x++`, `x--`.
-    Postfix {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
-    /// Binary operation: `x + y`, `x is y`, etc.
-    Binary {
-        op: BinaryOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
-    /// Ternary: `cond ? then : else`.
-    Ternary {
-        cond: Box<Expr>,
-        then_expr: Box<Expr>,
-        else_expr: Box<Expr>,
-    },
-    /// Assignment: `$x to 1`, `$x = 1`.
-    Assign {
-        op: Option<CompoundOp>,
-        target: Box<Expr>,
-        value: Box<Expr>,
-    },
-    /// Comma-separated expression (multiple assignments in `<<set>>`).
-    Comma(Vec<Expr>),
-    /// Array literal: `[1, 2, 3]`.
-    Array(Vec<Expr>),
-    /// Object literal: `{a: 1, b: 2}`.
-    Object(Vec<(Expr, Expr)>),
-    /// Template literal: `` `text ${expr} more` ``.
-    Template {
-        parts: Vec<TemplatePart>,
-    },
-    /// Arrow function: `(args) => expr` or `(args) => { ... }`.
-    Arrow {
-        params: Vec<String>,
-        body: Box<Expr>,
-    },
-    /// `delete expr`.
-    Delete(Box<Expr>),
-    /// `typeof expr`.
-    TypeOf(Box<Expr>),
-    /// `clone expr` (SugarCube-specific).
-    Clone(Box<Expr>),
-    /// `def expr` — tests if variable is defined (SugarCube-specific).
-    Def(Box<Expr>),
-    /// `ndef expr` — tests if variable is NOT defined (SugarCube-specific).
-    Ndef(Box<Expr>),
-    /// Grouped expression: `(expr)`.
-    Paren(Box<Expr>),
-    /// Spread: `...expr` (in arrays, objects, and call arguments).
-    Spread(Box<Expr>),
-    /// Error placeholder for malformed expressions.
-    Error(String),
-}
-
-/// A template literal part.
-#[derive(Debug, Clone)]
-pub enum TemplatePart {
-    /// Raw text segment.
-    Str(String),
-    /// Interpolated expression (`${...}`).
-    Expr(Expr),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Literal {
-    /// `true` or `false`.
-    Bool(bool),
-    /// Integer or float (stored as f64 for JS semantics).
-    Number(NumberLit),
-    /// `null`.
-    Null,
-    /// `undefined`.
-    Undefined,
-}
-
-/// A number literal (stored as bits for Debug/Clone/PartialEq).
-#[derive(Clone, Copy)]
-pub struct NumberLit {
-    bits: u64,
-}
-
-impl NumberLit {
-    pub fn new(v: f64) -> Self {
-        Self { bits: v.to_bits() }
+impl Expr {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
     }
 
-    pub fn value(self) -> f64 {
-        f64::from_bits(self.bits)
+    /// Extract the expression source text from the passage source.
+    pub fn text<'a>(&self, source: &'a str) -> &'a str {
+        &source[self.start..self.end]
     }
 }
-
-impl fmt::Debug for NumberLit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value())
-    }
-}
-
-impl PartialEq for NumberLit {
-    fn eq(&self, other: &Self) -> bool {
-        self.bits == other.bits
-    }
-}
-
-impl Eq for NumberLit {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
-    /// `!` or `not`
-    Not,
-    /// `-` (negation)
-    Neg,
-    /// `+` (numeric coercion)
-    Pos,
-    /// `~` (bitwise NOT)
-    BitNot,
-    /// `++` (pre/post increment)
-    Inc,
-    /// `--` (pre/post decrement)
-    Dec,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryOp {
-    // Arithmetic
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Exp, // **
-
-    // Comparison (desugared from SugarCube keywords)
-    Eq,        // == (or `eq`)
-    Neq,       // != (or `neq`)
-    StrictEq,  // === (or `is`)
-    StrictNeq, // !== (or `isnot`)
-    Lt,        // < (or `lt`)
-    Lte,       // <= (or `lte`)
-    Gt,        // > (or `gt`)
-    Gte,       // >= (or `gte`)
-
-    // Logical (desugared from SugarCube keywords)
-    And, // && (or `and`)
-    Or,  // || (or `or`)
-
-    // Nullish coalescing
-    NullishCoalesce, // ??
-
-    // Bitwise
-    BitAnd, // &
-    BitOr,  // |
-    BitXor, // ^
-    Shl,    // <<
-    Shr,    // >>
-    UShr,   // >>>
-
-    // Membership
-    In,         // `in`
-    InstanceOf, // `instanceof`
-}
-
-/// Compound assignment operators (`+=`, `-=`, etc.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompoundOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Exp,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    UShr,
-    NullishCoalesce,
-}
-

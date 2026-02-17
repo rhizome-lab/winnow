@@ -4,13 +4,14 @@
 //! macros (`<<...>>`), links (`[[...]]`), variable interpolation
 //! (`$var`, `_tmp`), inline HTML, and plain text.
 //!
+//! Expressions are stored as raw source byte ranges (`Expr { start, end }`)
+//! — actual parsing happens at translation time via oxc.
+//!
 //! Error recovery: errors are accumulated in `PassageAst.errors` and
 //! parsing continues. A single broken passage must not prevent parsing
 //! the other 9,999.
 
 use super::ast::*;
-use super::expr;
-use super::lexer::ExprLexer;
 use super::macros::{self, MacroKind};
 use crate::html_util;
 
@@ -21,6 +22,7 @@ pub fn parse(source: &str) -> PassageAst {
     PassageAst {
         body,
         errors: parser.errors,
+        source: source.to_string(),
     }
 }
 
@@ -306,56 +308,49 @@ impl<'a> Parser<'a> {
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let list = expr::parse_assignment_list(&mut lexer);
-                MacroArgs::AssignList(list)
+                let base = self.pos - args_src.len();
+                let exprs = split_assignment_list(args_src, base);
+                MacroArgs::AssignList(exprs)
             }
             "run" => {
                 let args_src = self.capture_args_src();
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let e = expr::parse_expr(&mut lexer);
-                MacroArgs::Expr(e)
+                let base = self.pos - args_src.len();
+                MacroArgs::Expr(make_trimmed_expr(args_src, base))
             }
             "if" | "elseif" => {
                 let args_src = self.capture_args_src();
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let e = expr::parse_expr(&mut lexer);
-                MacroArgs::Expr(e)
+                let base = self.pos - args_src.len();
+                MacroArgs::Expr(make_trimmed_expr(args_src, base))
             }
             "print" | "=" | "-" => {
                 let args_src = self.capture_args_src();
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let e = expr::parse_expr(&mut lexer);
-                MacroArgs::Expr(e)
+                let base = self.pos - args_src.len();
+                MacroArgs::Expr(make_trimmed_expr(args_src, base))
             }
             "switch" => {
                 let args_src = self.capture_args_src();
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let e = expr::parse_expr(&mut lexer);
-                MacroArgs::Switch(e)
+                let base = self.pos - args_src.len();
+                MacroArgs::Switch(make_trimmed_expr(args_src, base))
             }
             "case" => {
                 let args_src = self.capture_args_src();
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let mut values = vec![expr::parse_single_expr(&mut lexer)];
-                while lexer.peek().kind != super::lexer::TokenKind::Eof {
-                    values.push(expr::parse_single_expr(&mut lexer));
-                }
+                let base = self.pos - args_src.len();
+                let values = split_case_values(args_src, base);
                 MacroArgs::CaseValues(values)
             }
             "for" => {
@@ -387,22 +382,19 @@ impl<'a> Parser<'a> {
                 if args_src.trim().is_empty() {
                     return MacroArgs::None;
                 }
-                let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                let list = expr::parse_assignment_list(&mut lexer);
-                MacroArgs::AssignList(list)
+                let base = self.pos - args_src.len();
+                let exprs = split_assignment_list(args_src, base);
+                MacroArgs::AssignList(exprs)
             }
             "back" | "return" | "goto" | "include" => {
                 // Navigation macros: detect [[...]] link syntax before
-                // falling through to expression parsing. Without this,
-                // [[text|passage]] is misinterpreted as nested array
-                // literals with bitwise-OR by parse_expr.
+                // falling through to expression parsing.
                 if self.remaining().starts_with("[[") {
                     let args_src = self.capture_args_src();
                     let trimmed = args_src.trim();
                     if let Some(inner) = trimmed.strip_prefix("[[") {
                         if let Some(inner) = inner.strip_suffix("]]") {
-                            // Extract passage target:
-                            //   text|passage, text->passage, passage<-text, or passage
+                            // Extract passage target
                             let passage_str = if let Some(pipe) = inner.rfind('|') {
                                 inner[pipe + 1..].trim()
                             } else if let Some(arrow) = inner.find("->") {
@@ -413,20 +405,20 @@ impl<'a> Parser<'a> {
                                 inner.trim()
                             };
                             let base = self.pos - args_src.len();
-                            let passage_expr = if passage_str.starts_with('$')
+                            if passage_str.starts_with('$')
                                 || passage_str.starts_with('_')
                             {
-                                // Variable reference — use expression parser
-                                let mut lexer = ExprLexer::new(passage_str, base);
-                                expr::parse_expr(&mut lexer)
+                                // Variable reference — store as expression
+                                let offset = base + (passage_str.as_ptr() as usize
+                                    - args_src.as_ptr() as usize);
+                                return MacroArgs::Expr(Expr::new(
+                                    offset,
+                                    offset + passage_str.len(),
+                                ));
                             } else {
-                                // Literal passage name
-                                Expr {
-                                    kind: ExprKind::Str(passage_str.to_string()),
-                                    span: Span::new(base, self.pos),
-                                }
-                            };
-                            return MacroArgs::Expr(passage_expr);
+                                // Literal passage name — store as Raw
+                                return MacroArgs::Raw(passage_str.to_string());
+                            }
                         }
                     }
                     MacroArgs::Raw(args_src.to_string())
@@ -436,31 +428,20 @@ impl<'a> Parser<'a> {
                     if trimmed.is_empty() {
                         MacroArgs::None
                     } else {
-                        let mut lexer =
-                            ExprLexer::new(args_src, self.pos - args_src.len());
-                        let e = expr::parse_expr(&mut lexer);
-                        if matches!(e.kind, ExprKind::Error(_)) {
-                            MacroArgs::Raw(args_src.to_string())
-                        } else {
-                            MacroArgs::Expr(e)
-                        }
+                        let base = self.pos - args_src.len();
+                        MacroArgs::Expr(make_trimmed_expr(args_src, base))
                     }
                 }
             }
             _ => {
-                // Generic: parse as expression if possible, or raw
+                // Generic: store as expression if non-empty, else Raw
                 let args_src = self.capture_args_src();
                 let trimmed = args_src.trim();
                 if trimmed.is_empty() {
                     MacroArgs::None
                 } else {
-                    let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-                    let e = expr::parse_expr(&mut lexer);
-                    if matches!(e.kind, ExprKind::Error(_)) {
-                        MacroArgs::Raw(args_src.to_string())
-                    } else {
-                        MacroArgs::Expr(e)
-                    }
+                    let base = self.pos - args_src.len();
+                    MacroArgs::Expr(make_trimmed_expr(args_src, base))
                 }
             }
         }
@@ -783,19 +764,18 @@ impl<'a> Parser<'a> {
                 if s.is_empty() {
                     None
                 } else {
-                    let mut lex = ExprLexer::new(s, base);
-                    Some(Box::new(expr::parse_expr(&mut lex)))
+                    let offset = base + (s.as_ptr() as usize - args_src.as_ptr() as usize);
+                    Some(Box::new(Expr::new(offset, offset + s.len())))
                 }
             };
 
             let cond = if parts.len() > 1 {
                 let s = parts[1].trim();
-                let offset = base + parts[0].len() + 1;
                 if s.is_empty() {
                     None
                 } else {
-                    let mut lex = ExprLexer::new(s, offset);
-                    Some(Box::new(expr::parse_expr(&mut lex)))
+                    let offset = base + (s.as_ptr() as usize - args_src.as_ptr() as usize);
+                    Some(Box::new(Expr::new(offset, offset + s.len())))
                 }
             } else {
                 None
@@ -803,12 +783,11 @@ impl<'a> Parser<'a> {
 
             let update = if parts.len() > 2 {
                 let s = parts[2].trim();
-                let offset = base + parts[0].len() + 1 + parts[1].len() + 1;
                 if s.is_empty() {
                     None
                 } else {
-                    let mut lex = ExprLexer::new(s, offset);
-                    Some(Box::new(expr::parse_expr(&mut lex)))
+                    let offset = base + (s.as_ptr() as usize - args_src.as_ptr() as usize);
+                    Some(Box::new(Expr::new(offset, offset + s.len())))
                 }
             } else {
                 None
@@ -822,14 +801,17 @@ impl<'a> Parser<'a> {
             let before = trimmed[..range_idx].trim();
             let after = trimmed[range_idx + 7..].trim();
             let base = self.pos - args_src.len();
+            let trimmed_offset = base + (trimmed.as_ptr() as usize - args_src.as_ptr() as usize);
 
             if before.contains(',') {
                 // For-in: _val, _key range collection
                 let parts: Vec<&str> = before.splitn(2, ',').collect();
                 let value_var = parts[0].trim().to_string();
                 let key_var = Some(parts[1].trim().to_string());
-                let mut lex = ExprLexer::new(after, base + range_idx + 7);
-                let collection = Box::new(expr::parse_expr(&mut lex));
+                let after_offset = trimmed_offset + range_idx + 7
+                    + (after.as_ptr() as usize
+                        - trimmed[range_idx + 7..].as_ptr() as usize);
+                let collection = Box::new(Expr::new(after_offset, after_offset + after.len()));
                 MacroArgs::ForIn {
                     value_var,
                     key_var,
@@ -838,8 +820,10 @@ impl<'a> Parser<'a> {
             } else {
                 // Range for: _var range expr
                 let var = before.to_string();
-                let mut lex = ExprLexer::new(after, base + range_idx + 7);
-                let collection = Box::new(expr::parse_expr(&mut lex));
+                let after_offset = trimmed_offset + range_idx + 7
+                    + (after.as_ptr() as usize
+                        - trimmed[range_idx + 7..].as_ptr() as usize);
+                let collection = Box::new(Expr::new(after_offset, after_offset + after.len()));
                 MacroArgs::ForIn {
                     value_var: var,
                     key_var: None,
@@ -849,9 +833,7 @@ impl<'a> Parser<'a> {
         } else {
             // Simple condition: <<for expr>>
             let base = self.pos - args_src.len();
-            let mut lex = ExprLexer::new(trimmed, base);
-            let e = expr::parse_expr(&mut lex);
-            MacroArgs::Expr(e)
+            MacroArgs::Expr(make_trimmed_expr(args_src, base))
         }
     }
 
@@ -875,10 +857,13 @@ impl<'a> Parser<'a> {
                     return MacroArgs::LinkArgs {
                         text: LinkText::Plain(text.to_string()),
                         passage: passage.map(|p| {
-                            Box::new(Expr {
-                                kind: ExprKind::Str(p.to_string()),
-                                span: Span::empty(self.pos),
-                            })
+                            // Store passage as Raw string — it's a literal name
+                            // wrapped in an Expr-like structure, but we use the
+                            // existing passage name approach
+                            let base = self.pos - args_src.len();
+                            let offset = base
+                                + (p.as_ptr() as usize - args_src.as_ptr() as usize);
+                            Box::new(Expr::new(offset, offset + p.len()))
                         }),
                     };
                 }
@@ -892,19 +877,31 @@ impl<'a> Parser<'a> {
             return MacroArgs::None;
         }
 
-        let mut lexer = ExprLexer::new(args_src, self.pos - args_src.len());
-        let text_expr = expr::parse_single_expr(&mut lexer);
+        let base = self.pos - args_src.len();
+        let values = split_link_args(args_src, base);
+
+        if values.is_empty() {
+            return MacroArgs::None;
+        }
+
+        // First value is the text expression
+        let text_expr = values[0].clone();
+        let text_str = text_expr.text(self.src);
 
         // Check for optional passage arg
-        let passage = if lexer.peek().kind != super::lexer::TokenKind::Eof {
-            Some(Box::new(expr::parse_single_expr(&mut lexer)))
+        let passage = if values.len() > 1 {
+            Some(Box::new(values[1].clone()))
         } else {
             None
         };
 
-        let text = match text_expr.kind {
-            ExprKind::Str(ref s) => LinkText::Plain(s.clone()),
-            _ => LinkText::Expr(Box::new(text_expr)),
+        // Determine if text is a plain string literal
+        let text = if (text_str.starts_with('"') && text_str.ends_with('"'))
+            || (text_str.starts_with('\'') && text_str.ends_with('\''))
+        {
+            LinkText::Plain(text_str[1..text_str.len() - 1].to_string())
+        } else {
+            LinkText::Expr(Box::new(text_expr))
         };
 
         MacroArgs::LinkArgs { text, passage }
@@ -995,7 +992,6 @@ impl<'a> Parser<'a> {
         }
 
         // Parse link content: text|passage or just passage
-        // Also handle reversed form: passage|text (SugarCube supports both)
         let (text, target) = if let Some(pipe) = content.rfind('|') {
             let left = &content[..pipe];
             let right = &content[pipe + 1..];
@@ -1029,12 +1025,10 @@ impl<'a> Parser<'a> {
                 }
             }
             let setter_end = self.snap_to_char_boundary(self.pos);
-            let setter_src = &self.src[setter_start..setter_end];
             if !self.at_end() {
                 self.pos += 1; // skip closing ]
             }
-            let mut lexer = ExprLexer::new(setter_src, setter_start);
-            setters.push(expr::parse_expr(&mut lexer));
+            setters.push(Expr::new(setter_start, setter_end));
         }
 
         // Consume the final `]` (closing bracket of the link)
@@ -1044,9 +1038,12 @@ impl<'a> Parser<'a> {
 
         // Determine target kind: if it starts with $ or _, it's an expression
         let link_target = if target.starts_with('$') || target.starts_with('_') {
-            let mut lexer = ExprLexer::new(&target, content_start);
-            let e = expr::parse_expr(&mut lexer);
-            LinkTarget::Expr(Box::new(e))
+            let target_offset = content_start
+                + (target.as_ptr() as usize - content.as_ptr() as usize);
+            LinkTarget::Expr(Box::new(Expr::new(
+                target_offset,
+                target_offset + target.len(),
+            )))
         } else {
             LinkTarget::Name(target)
         };
@@ -1064,23 +1061,13 @@ impl<'a> Parser<'a> {
     /// Parse variable interpolation: `$name.prop[idx]` or `_temp.prop`.
     fn parse_var_interp(&mut self) -> Node {
         let start = self.pos;
-        // Use expression lexer to parse the full variable reference
-        let remaining = self.remaining();
-
         // Find the extent of the variable reference — scan until we hit
         // something that can't be part of a member/index chain.
         let var_end = self.scan_var_extent();
-        let var_src = &self.src[start..var_end];
         self.pos = var_end;
 
-        let mut lexer = ExprLexer::new(var_src, start);
-        let e = expr::parse_expr(&mut lexer);
-
-        // Adjust pos for any unconsumed input in the lexer
-        let _ = remaining;
-
         Node {
-            kind: NodeKind::VarInterp(e),
+            kind: NodeKind::VarInterp(Expr::new(start, var_end)),
             span: Span::new(start, self.pos),
         }
     }
@@ -1287,6 +1274,152 @@ impl<'a> Parser<'a> {
     }
 }
 
+// ── Expression splitting helpers ──────────────────────────────────────────
+
+/// Create a trimmed Expr from a source slice with a base offset.
+fn make_trimmed_expr(src: &str, base: usize) -> Expr {
+    let trimmed = src.trim();
+    let offset = base + (trimmed.as_ptr() as usize - src.as_ptr() as usize);
+    Expr::new(offset, offset + trimmed.len())
+}
+
+/// Split a comma-separated assignment list into individual Expr spans.
+/// Respects bracket/paren/string depth — commas inside nested expressions
+/// are not treated as separators.
+fn split_assignment_list(src: &str, base: usize) -> Vec<Expr> {
+    let mut result = Vec::new();
+    let bytes = src.as_bytes();
+    let mut start = 0;
+    let mut depth = 0i32;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'"' | b'\'' => {
+                i = skip_string_in(bytes, i);
+            }
+            b'`' => {
+                i = skip_template_in(bytes, i);
+            }
+            b',' if depth == 0 => {
+                let piece = src[start..i].trim();
+                if !piece.is_empty() {
+                    let offset =
+                        base + (piece.as_ptr() as usize - src.as_ptr() as usize);
+                    result.push(Expr::new(offset, offset + piece.len()));
+                }
+                start = i + 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    // Last piece
+    let piece = src[start..].trim();
+    if !piece.is_empty() {
+        let offset = base + (piece.as_ptr() as usize - src.as_ptr() as usize);
+        result.push(Expr::new(offset, offset + piece.len()));
+    }
+
+    result
+}
+
+/// Split `<<case val1 val2>>` values on whitespace at depth 0.
+/// Each value is parsed as a separate expression.
+fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
+    let mut result = Vec::new();
+    let bytes = src.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Skip whitespace
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+
+        // Scan one value
+        let val_start = i;
+        let mut depth = 0i32;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    i += 1;
+                }
+                b'"' | b'\'' => {
+                    i = skip_string_in(bytes, i);
+                }
+                b'`' => {
+                    i = skip_template_in(bytes, i);
+                }
+                b' ' | b'\t' | b'\n' if depth == 0 => break,
+                _ => i += 1,
+            }
+        }
+
+        if i > val_start {
+            result.push(Expr::new(base + val_start, base + i));
+        }
+    }
+
+    result
+}
+
+/// Split link macro arguments into individual expression spans.
+/// Handles: <<link "text">> and <<link "text" "passage">>
+/// Splits on whitespace at depth 0, treating quoted strings as single tokens.
+fn split_link_args(src: &str, base: usize) -> Vec<Expr> {
+    // Link args are similar to case values — split on whitespace at depth 0
+    split_case_values(src, base)
+}
+
+/// Skip a string literal starting at position `i`, returning the position after.
+fn skip_string_in(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == quote {
+            return i + 1;
+        }
+        if bytes[i] == b'\\' {
+            i += 1;
+        }
+        i += 1;
+    }
+    i
+}
+
+/// Skip a template literal starting at position `i`, returning the position after.
+fn skip_template_in(bytes: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            return i + 1;
+        }
+        if bytes[i] == b'\\' {
+            i += 1;
+        }
+        i += 1;
+    }
+    i
+}
+
 /// Extract `@attr="expr"` dynamic attributes from an HTML tag string.
 /// Returns the cleaned tag string (with @attrs removed) and the dynamic attrs.
 fn extract_dynamic_attrs(raw: &str) -> (String, Vec<(String, String)>) {
@@ -1423,9 +1556,10 @@ mod tests {
 
     #[test]
     fn chained_var_interpolation() {
-        let node = first_node("$obj.prop.sub");
+        let ast = parse_str("$obj.prop.sub");
+        let node = &ast.body[0];
         if let NodeKind::VarInterp(e) = &node.kind {
-            assert!(matches!(e.kind, ExprKind::Member { .. }));
+            assert_eq!(e.text(&ast.source), "$obj.prop.sub");
         } else {
             panic!("expected VarInterp");
         }
@@ -1936,7 +2070,8 @@ mod tests {
     // ── Navigation macro [[...]] link syntax ─────────────────────────
 
     fn extract_macro_args(src: &str) -> MacroArgs {
-        let node = first_node(src);
+        let ast = parse_str(src);
+        let node = ast.body.into_iter().next().expect("expected node");
         match node.kind {
             NodeKind::Macro(m) => m.args,
             other => panic!("expected macro, got {:?}", other),
@@ -1945,97 +2080,88 @@ mod tests {
 
     #[test]
     fn back_link_pipe_variable() {
-        // <<back [[game|$return]]>> → Expr(StoryVar("return"))
-        let args = extract_macro_args("<<back [[game|$return]]>>");
-        match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::StoryVar(n) if n == "return"),
-                    "expected StoryVar(\"return\"), got {:?}",
-                    e.kind
-                );
+        // <<back [[game|$return]]>> → Expr pointing to "$return"
+        let src = "<<back [[game|$return]]>>";
+        let ast = parse_str(src);
+        let node = ast.body.into_iter().next().unwrap();
+        if let NodeKind::Macro(m) = node.kind {
+            if let MacroArgs::Expr(e) = &m.args {
+                assert_eq!(e.text(&ast.source), "$return");
+            } else {
+                panic!("expected Expr, got {:?}", m.args);
             }
-            other => panic!("expected Expr, got {:?}", other),
+        } else {
+            panic!("expected macro");
         }
     }
 
     #[test]
     fn goto_link_bare_passage() {
-        // <<goto [[Room]]>> → Expr(Str("Room"))
+        // <<goto [[Room]]>> → Raw("Room") since it's a literal passage name
         let args = extract_macro_args("<<goto [[Room]]>>");
         match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::Str(s) if s == "Room"),
-                    "expected Str(\"Room\"), got {:?}",
-                    e.kind
-                );
+            MacroArgs::Raw(s) => {
+                assert_eq!(s, "Room");
             }
-            other => panic!("expected Expr, got {:?}", other),
+            other => panic!("expected Raw, got {:?}", other),
         }
     }
 
     #[test]
     fn include_link_arrow_right() {
-        // <<include [[text->Target]]>> → Expr(Str("Target"))
+        // <<include [[text->Target]]>> → Raw("Target")
         let args = extract_macro_args("<<include [[text->Target]]>>");
         match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::Str(s) if s == "Target"),
-                    "expected Str(\"Target\"), got {:?}",
-                    e.kind
-                );
+            MacroArgs::Raw(s) => {
+                assert_eq!(s, "Target");
             }
-            other => panic!("expected Expr, got {:?}", other),
+            other => panic!("expected Raw, got {:?}", other),
         }
     }
 
     #[test]
     fn return_link_arrow_left() {
-        // <<return [[Target<-text]]>> → Expr(Str("Target"))
+        // <<return [[Target<-text]]>> → Raw("Target")
         let args = extract_macro_args("<<return [[Target<-text]]>>");
         match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::Str(s) if s == "Target"),
-                    "expected Str(\"Target\"), got {:?}",
-                    e.kind
-                );
+            MacroArgs::Raw(s) => {
+                assert_eq!(s, "Target");
             }
-            other => panic!("expected Expr, got {:?}", other),
+            other => panic!("expected Raw, got {:?}", other),
         }
     }
 
     #[test]
     fn back_link_temp_variable() {
-        // <<back [[game|_dest]]>> → Expr(TempVar("dest"))
-        let args = extract_macro_args("<<back [[game|_dest]]>>");
-        match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::TempVar(n) if n == "dest"),
-                    "expected TempVar(\"dest\"), got {:?}",
-                    e.kind
-                );
+        // <<back [[game|_dest]]>> → Expr pointing to "_dest"
+        let src = "<<back [[game|_dest]]>>";
+        let ast = parse_str(src);
+        let node = ast.body.into_iter().next().unwrap();
+        if let NodeKind::Macro(m) = node.kind {
+            if let MacroArgs::Expr(e) = &m.args {
+                assert_eq!(e.text(&ast.source), "_dest");
+            } else {
+                panic!("expected Expr, got {:?}", m.args);
             }
-            other => panic!("expected Expr, got {:?}", other),
+        } else {
+            panic!("expected macro");
         }
     }
 
     #[test]
     fn back_quoted_string_still_works() {
-        // <<back "Lobby">> → Expr(Str("Lobby"))
-        let args = extract_macro_args(r#"<<back "Lobby">>"#);
-        match args {
-            MacroArgs::Expr(e) => {
-                assert!(
-                    matches!(&e.kind, ExprKind::Str(s) if s == "Lobby"),
-                    "expected Str(\"Lobby\"), got {:?}",
-                    e.kind
-                );
+        // <<back "Lobby">> → Expr pointing to `"Lobby"`
+        let src = r#"<<back "Lobby">>"#;
+        let ast = parse_str(src);
+        let node = ast.body.into_iter().next().unwrap();
+        if let NodeKind::Macro(m) = node.kind {
+            if let MacroArgs::Expr(e) = &m.args {
+                assert_eq!(e.text(&ast.source), "\"Lobby\"");
+            } else {
+                panic!("expected Expr, got {:?}", m.args);
             }
-            other => panic!("expected Expr, got {:?}", other),
+        } else {
+            panic!("expected macro");
         }
     }
 

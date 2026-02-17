@@ -110,9 +110,9 @@ impl TwineFrontend {
             }
 
             // Translate extracted widgets as separate functions
-            for (widget_name, widget_body) in &result.widgets {
+            for (widget_name, widget_body, widget_source) in &result.widgets {
                 let (widget_func, widget_callbacks) =
-                    translate::translate_widget(widget_name, widget_body);
+                    translate::translate_widget(widget_name, widget_body, widget_source);
                 let widget_func_name = format!("widget_{widget_name}");
                 mb.add_passage_name(widget_name.clone(), widget_func_name);
                 mb.add_function(widget_func);
