@@ -185,22 +185,15 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
 
 ### SugarCube oxc Parse Errors
 
-Remaining after default-`_`-to-Raw and LinkTarget fixes (DoL: 290→24, TRC: 974 pre-existing):
+Status: DoL 290→4, TRC 974→0. Fixed: default-to-Raw, LinkTarget, preprocessor context
+(identifiers, property names, object literals), HTML entity decoding (html-escape crate),
+UTF-8 preservation in preprocessor, template literal `${...}` preprocessing, `<<run>>`
+statement parsing, trailing comma stripping in case values.
 
-- [ ] **Preprocessor `to`/`is`/`isnot` context-blind** — Replaces keywords inside
-  object literals (`{ from: 0, to: 200 }` → `{ from: 0, =: 200 }`) and variable
-  names (`_is` → `_===`). Fix: context-aware preprocessing that skips property
-  names, identifiers starting with `_`, and string contents.
-- [ ] **`split_case_values` whitespace splitting breaks expressions** — TRC has
-  974 errors from `<<case>>` values containing complex expressions like
-  `` `"Examine " + _item.name `` being split on spaces. SugarCube's own case
-  parser uses a greedy expression parser, not whitespace splitting. Fix: parse
-  case values with oxc's expression parser directly (try consuming one expression
-  at a time from the arg string).
-- [ ] **`<<macro>>` inside template literals** — DoL uses SugarCube macros inside
-  backtick template literals (`` `...<<he>> says.` ``). These are SugarCube-level
-  interpolation, not JS. Fix: pre-expand macro invocations inside template
-  literals before oxc parsing, or replace them with placeholder expressions.
+- [ ] **DoL `<<case lte N>>` range comparisons** (4 errors) — DoL uses
+  `<<case lte 6000>>` inside `<<switch>>` as range comparisons. This is NOT standard
+  SugarCube semantics (standard `<<case>>` uses `===` comparison per value). Likely a
+  DoL custom extension. Low priority — fallback to `SugarCube.Engine.error()` is acceptable.
 
 ### Harlowe Correctness Bugs
 
