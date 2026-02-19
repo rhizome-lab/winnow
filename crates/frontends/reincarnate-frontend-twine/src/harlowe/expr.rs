@@ -15,6 +15,84 @@
 use super::ast::*;
 use super::lexer::{ExprLexer, TokenKind};
 
+/// Interpret a property-name string as an ordinal expression.
+/// Handles all Harlowe ordinal forms: `1st`, `2ndlast`, `last`, `length`,
+/// `1stto4th`, `2ndto2ndlast`, `lasttolast`, etc.
+/// Returns `None` if the string is not an ordinal form (caller treats as plain ident).
+fn interpret_property_string(s: &str, span: Span) -> Option<Expr> {
+    let ord = if s == "last" {
+        Ordinal::Last
+    } else if s == "length" {
+        Ordinal::Length
+    } else if let Some((from, to)) = try_parse_range_str(s) {
+        Ordinal::Range { from, to }
+    } else if let Some(n) = try_parse_nth_last_str(s) {
+        Ordinal::NthLast(n)
+    } else if let Some(n) = try_parse_nth_str(s) {
+        Ordinal::Nth(n)
+    } else {
+        return None;
+    };
+    Some(Expr {
+        kind: ExprKind::Ordinal(ord),
+        span,
+    })
+}
+
+/// Try to parse a range ordinal string like `1stto4th`, `2ndto2ndlast`, `lasttolast`.
+/// Finds the `to` separator and parses both endpoints.
+fn try_parse_range_str(s: &str) -> Option<(RangeEnd, RangeEnd)> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        if &bytes[i..i + 2] == b"to" {
+            let before = &s[..i];
+            let after = &s[i + 2..];
+            if let (Some(from), Some(to)) =
+                (parse_range_end_str(before), parse_range_end_str(after))
+            {
+                return Some((from, to));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse one endpoint of a range: `last`, `2ndlast`, `1st`, etc.
+fn parse_range_end_str(s: &str) -> Option<RangeEnd> {
+    if s == "last" {
+        return Some(RangeEnd::Last);
+    }
+    if let Some(rest) = s.strip_suffix("last") {
+        if let Some(n) = try_parse_nth_str(rest) {
+            return Some(RangeEnd::NthLast(n));
+        }
+    }
+    try_parse_nth_str(s).map(RangeEnd::Nth)
+}
+
+/// Parse a reverse ordinal string: `2ndlast` → `Some(2)`, `3rdlast` → `Some(3)`.
+fn try_parse_nth_last_str(s: &str) -> Option<u32> {
+    s.strip_suffix("last").and_then(try_parse_nth_str)
+}
+
+/// Parse a forward ordinal string: `1st` → `Some(1)`, `2nd` → `Some(2)`, etc.
+fn try_parse_nth_str(s: &str) -> Option<u32> {
+    if s.len() < 3 {
+        return None;
+    }
+    let (num_part, suffix) = s.split_at(s.len() - 2);
+    if matches!(suffix, "st" | "nd" | "rd" | "th") {
+        if let Ok(n) = num_part.parse::<u32>() {
+            if n > 0 {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 /// Precedence levels for Harlowe operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -58,11 +136,19 @@ fn parse_prec(lexer: &mut ExprLexer, min_prec: Prec) -> Expr {
     loop {
         let tok = lexer.peek_token();
 
-        // Handle possessive `'s` — property is an atom, not a full expression.
-        // The Apostrophe token is emitted only for `'s\s+` (per Harlowe's regex).
+        // Handle possessive `'s` — the Apostrophe token is emitted only for `'s\s+`.
+        // Scan the property name as a whole word (Harlowe captures the entire compound
+        // string like `2ndlast` or `1stto4th` as one unit via regex).
         if matches!(tok.kind, TokenKind::Apostrophe) && min_prec <= Prec::Access {
             lexer.next_token(); // consume `'s`
-            let property = parse_prefix(lexer);
+            let property = if let Some((word, word_span)) = lexer.scan_word() {
+                // Interpret the entire property string (handles ordinal, range, named property)
+                interpret_property_string(&word, word_span)
+                    .unwrap_or(Expr { kind: ExprKind::Ident(word), span: word_span })
+            } else {
+                // Computed property: `$arr's (expr)`
+                parse_prefix(lexer)
+            };
             let span = Span::new(left.span.start, property.span.end);
             left = Expr {
                 kind: ExprKind::Possessive {
@@ -214,13 +300,6 @@ fn maybe_distribute_comparison(left: &Expr, right: Expr) -> Expr {
 fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
     let tok = lexer.peek_token();
     match tok.kind {
-        TokenKind::Number(n) => {
-            lexer.next_token();
-            Expr {
-                kind: ExprKind::Number(n),
-                span: tok.span,
-            }
-        }
         TokenKind::String(ref s) => {
             let s = s.clone();
             lexer.next_token();
@@ -346,15 +425,43 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
                 span,
             }
         }
+        TokenKind::Number(n) => {
+            // Numbers can be the start of compound ordinals like `2ndlast` or `1stto4th`.
+            // The lexer splits `2ndlast` as Number(2) + Ident("ndlast") because the ordinal guard
+            // rejects suffixes followed by more alpha. Detect and reassemble here.
+            lexer.next_token();
+            let n_int = n as u32;
+            if n_int > 0 && n == f64::from(n_int) {
+                let next = lexer.peek_token();
+                if let TokenKind::Ident(ref suffix) = next.kind {
+                    // Ordinal suffix idents start with st/nd/rd/th (the part after the digits)
+                    if suffix.starts_with("st")
+                        || suffix.starts_with("nd")
+                        || suffix.starts_with("rd")
+                        || suffix.starts_with("th")
+                    {
+                        let combined = format!("{n_int}{suffix}");
+                        let end_span = next.span.end;
+                        lexer.next_token(); // consume the suffix ident
+                        if let Some(expr) =
+                            interpret_property_string(&combined, Span::new(tok.span.start, end_span))
+                        {
+                            return expr;
+                        }
+                    }
+                }
+            }
+            Expr {
+                kind: ExprKind::Number(n),
+                span: tok.span,
+            }
+        }
         TokenKind::Ident(ref s) => {
             let s = s.clone();
             lexer.next_token();
-            // Check for ordinal
-            if let Some(ord) = parse_ordinal(&s) {
-                return Expr {
-                    kind: ExprKind::Ordinal(ord),
-                    span: tok.span,
-                };
+            // Try to interpret as ordinal (handles `last`, `length`, `lasttolast`, etc.)
+            if let Some(expr) = interpret_property_string(&s, tok.span) {
+                return expr;
             }
             // Check for color names
             if is_color_name(&s) {
@@ -509,27 +616,6 @@ fn try_parse_inline_macro(lexer: &mut ExprLexer, start: usize) -> Option<Expr> {
     None
 }
 
-/// Parse an ordinal string like `1st`, `2nd`, `3rd`, `4th`, `last`.
-fn parse_ordinal(s: &str) -> Option<Ordinal> {
-    if s == "last" {
-        return Some(Ordinal::Last);
-    }
-    if s == "length" {
-        return Some(Ordinal::Length);
-    }
-    // Try to parse `Nth` + suffix
-    if s.len() >= 3 {
-        let (num_part, suffix) = s.split_at(s.len() - 2);
-        if matches!(suffix, "st" | "nd" | "rd" | "th") {
-            if let Ok(n) = num_part.parse::<u32>() {
-                if n > 0 {
-                    return Some(Ordinal::Nth(n));
-                }
-            }
-        }
-    }
-    None
-}
 
 /// Check if a name is a Harlowe color keyword.
 fn is_color_name(name: &str) -> bool {
@@ -734,6 +820,62 @@ mod tests {
     fn test_negative_number() {
         let expr = parse("-5");
         assert!(matches!(expr.kind, ExprKind::Unary { op: UnaryOp::Neg, .. }));
+    }
+
+    #[test]
+    fn test_nth_last_ordinal() {
+        let expr = parse("$arr's 2ndlast");
+        if let ExprKind::Possessive { property, .. } = &expr.kind {
+            assert!(matches!(property.kind, ExprKind::Ordinal(Ordinal::NthLast(2))));
+        } else {
+            panic!("expected Possessive, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_range_ordinal() {
+        // `1stto4th of $arr`
+        let expr = parse("1stto4th of $arr");
+        if let ExprKind::Of { property, .. } = &expr.kind {
+            if let ExprKind::Ordinal(Ordinal::Range { from, to }) = &property.kind {
+                assert_eq!(*from, RangeEnd::Nth(1));
+                assert_eq!(*to, RangeEnd::Nth(4));
+            } else {
+                panic!("expected Range ordinal");
+            }
+        } else {
+            panic!("expected Of, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_range_to_last_ordinal() {
+        let expr = parse("2ndto2ndlast of $arr");
+        if let ExprKind::Of { property, .. } = &expr.kind {
+            if let ExprKind::Ordinal(Ordinal::Range { from, to }) = &property.kind {
+                assert_eq!(*from, RangeEnd::Nth(2));
+                assert_eq!(*to, RangeEnd::NthLast(2));
+            } else {
+                panic!("expected Range ordinal");
+            }
+        } else {
+            panic!("expected Of, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_range_last_to_last() {
+        let expr = parse("lasttolast of $arr");
+        if let ExprKind::Of { property, .. } = &expr.kind {
+            if let ExprKind::Ordinal(Ordinal::Range { from, to }) = &property.kind {
+                assert_eq!(*from, RangeEnd::Last);
+                assert_eq!(*to, RangeEnd::Last);
+            } else {
+                panic!("expected Range ordinal");
+            }
+        } else {
+            panic!("expected Of, got {:?}", expr.kind);
+        }
     }
 
     #[test]

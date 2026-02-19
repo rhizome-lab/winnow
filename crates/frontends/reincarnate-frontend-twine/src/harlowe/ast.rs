@@ -245,13 +245,28 @@ pub enum UnaryOp {
     Neg,
 }
 
-/// Ordinal accessor (`1st`, `2nd`, `3rd`, `last`, etc.).
+/// Ordinal accessor (`1st`, `2nd`, `3rd`, `last`, `2ndlast`, `1stto4th`, etc.).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ordinal {
-    /// 1-based index: `1st` = Nth(1), `2nd` = Nth(2), etc.
+    /// 1-based forward index: `1st` = Nth(1), `2nd` = Nth(2), etc.
     Nth(u32),
-    /// `last`
+    /// Reverse index: `2ndlast` = NthLast(2) — second from the end.
+    NthLast(u32),
+    /// `last` — last element (shorthand for NthLast(1)).
     Last,
-    /// `length`
+    /// `length` — the number of elements.
     Length,
+    /// Range slice: `1stto4th`, `2ndto2ndlast`, `lasttolast`.
+    Range { from: RangeEnd, to: RangeEnd },
+}
+
+/// One endpoint of a range slice ordinal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RangeEnd {
+    /// 1-based forward position.
+    Nth(u32),
+    /// Reverse position from end: `2ndlast` = NthLast(2).
+    NthLast(u32),
+    /// The last element (`-1`).
+    Last,
 }

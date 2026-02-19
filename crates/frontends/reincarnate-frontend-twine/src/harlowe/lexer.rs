@@ -123,6 +123,28 @@ impl<'a> ExprLexer<'a> {
         Span::new(self.base_offset + start, self.base_offset + self.pos)
     }
 
+    /// Scan a property-name word from the current position, skipping leading whitespace.
+    /// Captures `[a-zA-Z0-9_-]+` as a single string — the entire compound property name
+    /// (e.g. `2ndlast`, `1stto4th`, `lasttolast`) without normal tokenization.
+    /// Returns `None` if the next non-whitespace character is not a word character.
+    pub fn scan_word(&mut self) -> Option<(String, Span)> {
+        self.skip_whitespace();
+        let start = self.pos;
+        while self.pos < self.bytes.len() {
+            let b = self.bytes[self.pos];
+            if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if self.pos > start {
+            Some((self.input[start..self.pos].to_string(), self.span(start)))
+        } else {
+            None
+        }
+    }
+
     /// Peek at the next token without consuming it.
     pub fn peek_token(&mut self) -> Token {
         let saved = self.pos;

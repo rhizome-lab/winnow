@@ -178,6 +178,11 @@ export class HarloweEngine {
     set_property(obj, prop, value);
   }
 
+  /** Build a range descriptor for `1stto4th`, `2ndto2ndlast`, etc. */
+  make_range(first: number, last: number): HarloweRange {
+    return make_range(first, last);
+  }
+
   // --- Math ---
 
   /** `(lerp: a, b, t)` */
@@ -597,26 +602,50 @@ function contains(collection: any, value: any): boolean {
   return false;
 }
 
+type HarloweRange = { first: number; last: number };
+
+/** Resolve a numeric ordinal (positive = 1-based, negative = from-end) to a 0-based index. */
+function resolve_index(n: number, len: number): number {
+  return n >= 0 ? n - 1 : len + n;
+}
+
+/** Create a range descriptor for slice access. */
+function make_range(first: number, last: number): HarloweRange {
+  return { first, last };
+}
+
+/** Apply a range to a sequential collection. */
+function apply_range(obj: any[], range: HarloweRange): any[] {
+  const len = obj.length;
+  const from = resolve_index(range.first, len);
+  const to = resolve_index(range.last, len);
+  return obj.slice(from, to + 1);
+}
+
 /** `$var's property` or `(nth: n) of $arr` */
 function get_property(obj: any, prop: any): any {
   if (obj instanceof Map) return obj.get(prop);
-  if (obj instanceof Set) {
-    const arr = Array.from(obj);
-    if (typeof prop === "number") return arr[prop - 1];
-    if (prop === "length") return arr.length;
-    if (prop === "last") return arr[arr.length - 1];
-    return undefined;
-  }
-  if (Array.isArray(obj)) {
-    if (typeof prop === "number") return obj[prop - 1];
-    if (prop === "length") return obj.length;
-    if (prop === "last") return obj[obj.length - 1];
-    return obj[prop];
-  }
-  if (typeof obj === "string") {
-    if (typeof prop === "number") return obj[prop - 1];
-    if (prop === "length") return obj.length;
-    if (prop === "last") return obj[obj.length - 1];
+  const arr_like = obj instanceof Set ? Array.from(obj)
+    : Array.isArray(obj) ? obj
+    : typeof obj === "string" ? obj
+    : null;
+  if (arr_like !== null) {
+    const len = arr_like.length;
+    if (typeof prop === "number") {
+      // positive = 1-based forward, negative = from end (-1 = last, -2 = 2ndlast)
+      return arr_like[resolve_index(prop, len)];
+    }
+    if (prop === "length") return len;
+    if (typeof prop === "object" && prop !== null && "first" in prop) {
+      // Range slice: return sub-array/string
+      if (typeof arr_like === "string") {
+        const from = resolve_index(prop.first, len);
+        const to = resolve_index(prop.last, len);
+        return arr_like.slice(from, to + 1);
+      }
+      return apply_range(arr_like as any[], prop);
+    }
+    if (Array.isArray(arr_like)) return arr_like[prop];
     return undefined;
   }
   if (typeof obj === "object" && obj !== null) return obj[prop];
@@ -629,7 +658,7 @@ function set_property(obj: any, prop: any, value: any): void {
     obj.set(prop, value);
   } else if (Array.isArray(obj)) {
     if (typeof prop === "number") {
-      obj[prop - 1] = value;
+      obj[resolve_index(prop, obj.length)] = value;
     } else {
       obj[prop] = value;
     }

@@ -1369,17 +1369,7 @@ impl TranslateCtx {
             }
             ExprKind::ColorLiteral(color) => self.fb.const_string(color.as_str()),
             ExprKind::TimeLiteral(secs) => self.fb.const_float(*secs),
-            ExprKind::Ordinal(ord) => {
-                match ord {
-                    Ordinal::Nth(n) => self.fb.const_int(*n as i64),
-                    Ordinal::Last => {
-                        self.fb.const_string("last")
-                    }
-                    Ordinal::Length => {
-                        self.fb.const_string("length")
-                    }
-                }
-            }
+            ExprKind::Ordinal(ord) => self.lower_ordinal(ord),
             ExprKind::Binary { op, left, right } => self.lower_binary(op, left, right),
             ExprKind::Unary { op, operand } => self.lower_unary(op, operand),
             ExprKind::Assign { target, value } => {
@@ -1419,6 +1409,36 @@ impl TranslateCtx {
             // emit a placeholder for Lambda if encountered unexpectedly.
             ExprKind::Spread(inner) => self.lower_expr(inner),
             ExprKind::Lambda { .. } | ExprKind::Error(_) => self.fb.const_bool(false),
+        }
+    }
+
+    fn lower_ordinal(&mut self, ord: &Ordinal) -> ValueId {
+        match ord {
+            // 1-based forward: runtime does `obj[prop - 1]`
+            Ordinal::Nth(n) => self.fb.const_int(*n as i64),
+            // Reverse: runtime does `obj[obj.length + prop]` (prop is negative)
+            Ordinal::NthLast(n) => self.fb.const_int(-(*n as i64)),
+            // last = -1
+            Ordinal::Last => self.fb.const_int(-1),
+            Ordinal::Length => self.fb.const_string("length"),
+            Ordinal::Range { from, to } => {
+                let from_val = self.lower_range_end(from);
+                let to_val = self.lower_range_end(to);
+                self.fb.system_call(
+                    "Harlowe.Engine",
+                    "make_range",
+                    &[from_val, to_val],
+                    Type::Dynamic,
+                )
+            }
+        }
+    }
+
+    fn lower_range_end(&mut self, end: &RangeEnd) -> ValueId {
+        match end {
+            RangeEnd::Nth(n) => self.fb.const_int(*n as i64),
+            RangeEnd::NthLast(n) => self.fb.const_int(-(*n as i64)),
+            RangeEnd::Last => self.fb.const_int(-1),
         }
     }
 
