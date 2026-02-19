@@ -233,6 +233,7 @@ pub enum BinaryOp {
     // Membership
     Contains,
     IsIn,
+    IsNotIn,
 
     // String/changer composition
     Plus, // `+` on changers composes them (reuses Add for arithmetic)

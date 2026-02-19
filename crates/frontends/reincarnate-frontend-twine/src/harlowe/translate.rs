@@ -1856,6 +1856,12 @@ impl TranslateCtx {
                 self.fb
                     .system_call("Harlowe.Engine", "is_in", &[lhs, rhs], Type::Bool)
             }
+            BinaryOp::IsNotIn => {
+                let is_in =
+                    self.fb
+                        .system_call("Harlowe.Engine", "is_in", &[lhs, rhs], Type::Bool);
+                self.fb.not(is_in)
+            }
             BinaryOp::And | BinaryOp::Or => unreachable!(),
         }
     }

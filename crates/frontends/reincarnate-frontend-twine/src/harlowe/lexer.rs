@@ -32,6 +32,7 @@ pub enum TokenKind {
     Is,
     IsNot,
     IsIn,
+    IsNotIn,
     Contains,
     And,
     Or,
@@ -513,7 +514,26 @@ impl<'a> ExprLexer<'a> {
                         || !self.bytes[after_not].is_ascii_alphanumeric()
                     {
                         self.pos = after_not;
-                        TokenKind::IsNot
+                        // Check for "is not in" (3-word membership negation operator)
+                        let saved_after_not = self.pos;
+                        self.skip_whitespace();
+                        if self.pos + 2 <= self.bytes.len()
+                            && &self.input[self.pos..self.pos + 2] == "in"
+                        {
+                            let after_in = self.pos + 2;
+                            if after_in >= self.bytes.len()
+                                || !self.bytes[after_in].is_ascii_alphanumeric()
+                            {
+                                self.pos = after_in;
+                                TokenKind::IsNotIn
+                            } else {
+                                self.pos = saved_after_not;
+                                TokenKind::IsNot
+                            }
+                        } else {
+                            self.pos = saved_after_not;
+                            TokenKind::IsNot
+                        }
                     } else {
                         self.pos = saved;
                         TokenKind::Is
@@ -613,6 +633,29 @@ mod tests {
                 TokenKind::String("x".to_string()),
                 TokenKind::IsIn,
                 TokenKind::StoryVar("arr".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_is_not_in() {
+        let tokens = lex_all("\"x\" is not in $arr");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::String("x".to_string()),
+                TokenKind::IsNotIn,
+                TokenKind::StoryVar("arr".to_string()),
+            ]
+        );
+        // "is not" (without "in") still produces IsNot
+        let tokens2 = lex_all("$x is not 0");
+        assert_eq!(
+            tokens2,
+            vec![
+                TokenKind::StoryVar("x".to_string()),
+                TokenKind::IsNot,
+                TokenKind::Number(0.0),
             ]
         );
     }

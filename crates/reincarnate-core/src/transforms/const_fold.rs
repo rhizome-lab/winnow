@@ -320,7 +320,73 @@ fn fold_function(func: &mut Function) -> bool {
     // since it doesn't create new folding opportunities.
     any_changed |= fold_not_cmp(func);
 
+    // Fold BrIf with a constant condition → unconditional Br.
+    any_changed |= fold_brif_constants(func);
+
     any_changed
+}
+
+/// JavaScript-style truthiness for IR constants.
+///
+/// Returns `Some(true)` if the constant is always truthy, `Some(false)` if
+/// always falsy, or `None` if undetermined.
+fn is_constant_truthy(c: &Constant) -> Option<bool> {
+    match c {
+        Constant::Bool(b) => Some(*b),
+        Constant::Int(x) => Some(*x != 0),
+        Constant::UInt(x) => Some(*x != 0),
+        Constant::Float(x) => Some(*x != 0.0 && !x.is_nan()),
+        Constant::String(s) => Some(!s.is_empty()),
+        Constant::Null => Some(false),
+    }
+}
+
+/// Fold `BrIf(const_cond, then, else)` → `Br(then)` or `Br(else)`.
+///
+/// Runs after the main constant-folding loop so that any conditions that were
+/// just folded to constants are handled.  The resulting dead branch will be
+/// pruned by DCE.
+fn fold_brif_constants(func: &mut Function) -> bool {
+    let consts = build_const_map(func);
+
+    let updates: Vec<(InstId, Op)> = func
+        .insts
+        .keys()
+        .filter_map(|inst_id| {
+            let inst = &func.insts[inst_id];
+            if let Op::BrIf {
+                cond,
+                then_target,
+                then_args,
+                else_target,
+                else_args,
+            } = &inst.op
+            {
+                let c = consts.get(cond)?;
+                let truthy = is_constant_truthy(c)?;
+                let new_op = if truthy {
+                    Op::Br {
+                        target: *then_target,
+                        args: then_args.clone(),
+                    }
+                } else {
+                    Op::Br {
+                        target: *else_target,
+                        args: else_args.clone(),
+                    }
+                };
+                Some((inst_id, new_op))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let changed = !updates.is_empty();
+    for (inst_id, new_op) in updates {
+        func.insts[inst_id].op = new_op;
+    }
+    changed
 }
 
 impl Transform for ConstantFolding {
