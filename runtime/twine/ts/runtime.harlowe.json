@@ -3,7 +3,8 @@
     "Harlowe.State": { "path": "harlowe/state", "stateful": true },
     "Harlowe.H": { "path": "harlowe/context" },
     "Harlowe.Navigation": { "path": "harlowe/navigation", "stateful": true },
-    "Harlowe.Engine": { "path": "harlowe/engine", "stateful": true }
+    "Harlowe.Engine": { "path": "harlowe/engine", "stateful": true },
+    "Harlowe.Audio": { "path": "harlowe/audio", "stateful": true }
   },
   "runtime_type": {
     "name": "HarloweRuntime",

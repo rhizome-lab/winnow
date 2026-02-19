@@ -9,21 +9,29 @@ import type { PassageFn } from "./navigation";
 import { HarloweState } from "./state";
 import { HarloweNavigation } from "./navigation";
 import { HarloweEngine } from "./engine";
+import { HarloweAudio, type HarloweAudioOpts } from "./audio";
 import * as Platform from "../platform";
 import type { PersistenceOpts } from "../platform";
+
+export interface HarloweRuntimeOpts {
+  /** Audio subsystem options. Set `enabled: false` to disable HAL audio. */
+  audio?: HarloweAudioOpts;
+}
 
 export class HarloweRuntime {
   readonly State: HarloweState;
   readonly Navigation: HarloweNavigation;
   readonly Engine: HarloweEngine;
+  readonly Audio: HarloweAudio;
 
-  constructor(persistence?: PersistenceOpts) {
+  constructor(persistence?: PersistenceOpts, opts?: HarloweRuntimeOpts) {
     const history = persistence?.history === "diff"
       ? Platform.diffHistory()
       : Platform.snapshotHistory();
     this.State = new HarloweState(history);
     this.Navigation = new HarloweNavigation(this);
     this.Engine = new HarloweEngine(this);
+    this.Audio = new HarloweAudio(opts?.audio);
   }
 
   /**
