@@ -2366,7 +2366,7 @@ mod tests {
 
     /// Helper: parse a passage and translate it, returning the Function.
     fn translate(source: &str) -> Function {
-        let ast = parser::parse(source);
+        let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         let result = translate_passage("test", &ast);
         result.func
@@ -2414,7 +2414,7 @@ mod tests {
     #[test]
     fn widget_extraction() {
         let source = "<<widget \"myWidget\">>body<</widget>>";
-        let ast = parser::parse(source);
+        let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         assert_eq!(ast.body.len(), 1, "expected 1 node, got: {:#?}", ast.body);
         if let NodeKind::Macro(m) = &ast.body[0].kind {
@@ -2435,7 +2435,7 @@ mod tests {
     #[test]
     fn arrow_params_not_resolved() {
         let source = "<<run [1,2].forEach((x) => x + 1)>>";
-        let ast = parser::parse(source);
+        let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         let result = translate_passage("test", &ast);
 
@@ -2485,7 +2485,7 @@ mod tests {
     #[test]
     fn arrow_bare_param_not_resolved() {
         let source = "<<run [1,2].forEach(x => x + 1)>>";
-        let ast = parser::parse(source);
+        let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
         let result = translate_passage("test", &ast);
 

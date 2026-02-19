@@ -62,6 +62,15 @@ impl TwineFrontend {
             .find(|p| p.pid == story.start_pid)
             .map(|p| p.name.clone());
 
+        // Build custom macro registry from user scripts before parsing passages.
+        let custom_macro_registry = story
+            .user_scripts
+            .iter()
+            .fold(sugarcube::CustomMacroRegistry::new(), |mut reg, script| {
+                reg.extend(sugarcube::extract_custom_macros(script));
+                reg
+            });
+
         // Translate each passage → Function
         for passage in &story.passages {
             // Collect stylesheet passages as assets
@@ -89,7 +98,10 @@ impl TwineFrontend {
                 continue;
             }
 
-            let ast = sugarcube::parse_passage(&passage.source);
+            let ast = sugarcube::parse_passage_with_registry(
+                &passage.source,
+                &custom_macro_registry,
+            );
 
             let func_name = translate::passage_func_name(&passage.name);
             let result = translate::translate_passage(&passage.name, &ast);

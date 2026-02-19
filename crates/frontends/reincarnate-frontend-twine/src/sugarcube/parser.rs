@@ -12,12 +12,17 @@
 //! the other 9,999.
 
 use super::ast::*;
+use super::custom_macros::CustomMacroRegistry;
 use super::macros::{self, MacroKind};
 use crate::html_util;
 
 /// Parse a SugarCube passage source string into an AST.
-pub fn parse(source: &str) -> PassageAst {
-    let mut parser = Parser::new(source);
+///
+/// When `registry` is `Some`, custom macro definitions extracted from
+/// `Macro.add()` calls are used to determine block/self-closing kind
+/// and `skipArgs` semantics.
+pub fn parse(source: &str, registry: Option<&CustomMacroRegistry>) -> PassageAst {
+    let mut parser = Parser::new(source, registry);
     let body = parser.parse_body(&[]);
     PassageAst {
         body,
@@ -31,15 +36,17 @@ struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
     errors: Vec<ParseError>,
+    custom_macros: Option<&'a CustomMacroRegistry>,
 }
 
 impl<'a> Parser<'a> {
-    fn new(src: &'a str) -> Self {
+    fn new(src: &'a str, custom_macros: Option<&'a CustomMacroRegistry>) -> Self {
         Self {
             src,
             bytes: src.as_bytes(),
             pos: 0,
             errors: Vec::new(),
+            custom_macros,
         }
     }
 
@@ -254,12 +261,23 @@ impl<'a> Parser<'a> {
             });
         }
 
-        // Determine macro kind
-        let kind = macros::macro_kind(&name);
+        // Determine macro kind: built-in table first, then custom registry.
+        let builtin_kind = macros::macro_kind(&name);
+        // Custom registry may override built-in entries (e.g. game redefines "button").
+        let custom_def = self
+            .custom_macros
+            .and_then(|r| r.get(name.as_str()));
 
-        match kind {
+        // Effective kind: custom registry shadows built-ins.
+        let effective_kind = match custom_def {
+            Some(def) if def.is_block => Some(MacroKind::Block),
+            Some(_) => Some(MacroKind::SelfClosing),
+            None => builtin_kind,
+        };
+
+        match effective_kind {
             Some(MacroKind::SelfClosing) => {
-                let args = self.parse_macro_args(&name);
+                let args = self.parse_macro_args_with_custom(&name, custom_def);
                 let end = self.skip_to_close_tag();
                 Some(Node {
                     kind: NodeKind::Macro(MacroNode {
@@ -270,7 +288,7 @@ impl<'a> Parser<'a> {
                     span: Span::new(start, end),
                 })
             }
-            Some(MacroKind::Block) => self.parse_block_macro(start, &name),
+            Some(MacroKind::Block) => self.parse_block_macro(start, &name, custom_def),
             Some(MacroKind::Raw) => self.parse_raw_macro(start, &name),
             None => {
                 // Unknown macro: could be a widget or user-defined macro.
@@ -460,6 +478,33 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Dispatch to `parse_macro_args` with custom-def awareness.
+    ///
+    /// When a custom def with `skipArgs: true` is provided, the entire arg
+    /// string is parsed as a single TwineScript expression (`MacroArgs::Expr`).
+    /// Otherwise falls through to the standard `parse_macro_args` dispatch.
+    fn parse_macro_args_with_custom(
+        &mut self,
+        name: &str,
+        custom_def: Option<&super::custom_macros::CustomMacroDef>,
+    ) -> MacroArgs {
+        if custom_def.is_some_and(|d| d.skip_args) {
+            self.skip_whitespace();
+            if self.remaining().starts_with(">>") {
+                return MacroArgs::None;
+            }
+            let args_src = self.capture_args_src();
+            let trimmed = args_src.trim();
+            if trimmed.is_empty() {
+                return MacroArgs::None;
+            }
+            let base = self.pos - args_src.len();
+            MacroArgs::Expr(make_trimmed_expr(args_src, base))
+        } else {
+            self.parse_macro_args(name)
+        }
+    }
+
     /// Capture the raw argument source text between current pos and `>>`.
     /// Advances pos past the args but NOT past `>>`.
     fn capture_args_src(&mut self) -> &'a str {
@@ -590,8 +635,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a block macro: <<name args>>...body...<</name>>
-    fn parse_block_macro(&mut self, start: usize, name: &str) -> Option<Node> {
-        let args = self.parse_macro_args(name);
+    fn parse_block_macro(
+        &mut self,
+        start: usize,
+        name: &str,
+        custom_def: Option<&super::custom_macros::CustomMacroDef>,
+    ) -> Option<Node> {
+        let args = self.parse_macro_args_with_custom(name, custom_def);
         self.skip_to_close_tag();
 
         let mut clauses = Vec::new();
@@ -1618,7 +1668,7 @@ mod tests {
     use super::*;
 
     fn parse_str(src: &str) -> PassageAst {
-        parse(src)
+        parse(src, None)
     }
 
     fn first_node(src: &str) -> Node {
