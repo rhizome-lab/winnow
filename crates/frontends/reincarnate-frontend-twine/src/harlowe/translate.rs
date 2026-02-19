@@ -950,14 +950,14 @@ impl TranslateCtx {
         );
     }
 
-    /// Build a predicate/transform callback for collection ops like (find:), (some-pass:), etc.
-    /// Signature: `(item: Dynamic) => Dynamic`
-    /// Binds `_var` to `item`, returns `filter_expr` (or the item itself if no filter).
+    /// Build a predicate callback for collection ops like (find:), (some-pass:), etc.
+    /// Signature: `(item: Dynamic) => Bool`
+    /// Binds `_var` to `item`, evaluates `filter_expr` (or returns `true` if no filter).
     fn build_lambda_callback(&mut self, var: &str, filter: Option<&Expr>) -> ValueId {
         let cb_name = self.make_callback_name("lambda");
         let sig = FunctionSig {
             params: vec![Type::Dynamic],
-            return_ty: Type::Dynamic,
+            return_ty: Type::Bool,
             defaults: vec![],
             has_rest_param: false,
         };
@@ -976,8 +976,8 @@ impl TranslateCtx {
         let result = if let Some(filter_expr) = filter {
             self.lower_expr(filter_expr)
         } else {
-            // No filter: identity (return item). Used for `each _x` without `where`.
-            item_param
+            // No filter clause: pass all items (e.g. `each _x` without `where`).
+            self.fb.const_bool(true)
         };
         self.fb.ret(Some(result));
 
@@ -2026,7 +2026,7 @@ You're at the **plaza**
         let cb = &result.callbacks[0];
         assert_eq!(cb.sig.params.len(), 1, "lambda callback takes one param");
         assert_eq!(cb.sig.params[0], Type::Dynamic);
-        assert_eq!(cb.sig.return_ty, Type::Dynamic);
+        assert_eq!(cb.sig.return_ty, Type::Bool);
         // Main func should have a collection_op("find", ...) call
         let func = &result.func;
         let has_find = func.blocks.values().any(|block| {
