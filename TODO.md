@@ -149,7 +149,7 @@ in runtime.json for any newly referenced but unimplemented functions.
 
 ## Twine Frontend
 
-- [ ] **Use a proper HTML parser for extraction** — `extract_tagged_blocks` uses manual string search which is fragile. The bug where `</script>` was preferred over an earlier `</style>` is one example of what hand-rolled HTML parsing gets wrong. Switch to `html5ever` or `scraper` crate for robust extraction of `<script id="...">` / `<style id="...">` blocks.
+- [x] **Use a proper HTML parser for extraction** — Replaced `extract_tagged_blocks` and `extract_format_css` with `extract_script_style_blocks`, a tokenizer-based implementation using `html5ever`. Returns `TokenSinkResult::RawData(ScriptData/Rawtext)` on script/style start tags, so the tokenizer handles raw content exactly as a browser would — no manual closing-tag search, no cross-element contamination.
 
 - [ ] **Passage rendering strategy** — Implement `passage_rendering`
   manifest option (`auto`/`compiled`/`wikifier`). In `wikifier` mode,

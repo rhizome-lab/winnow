@@ -108,12 +108,10 @@ pub fn extract_story(html: &str) -> Result<Story, ExtractError> {
         return Err(ExtractError::NoPassages);
     }
 
-    // Extract user scripts
-    let user_scripts = extract_tagged_blocks(html, "twine-user-script");
-    let user_styles = extract_tagged_blocks(html, "twine-user-stylesheet");
-
-    // Extract format CSS (e.g. Harlowe's built-in stylesheet)
-    let format_css = extract_format_css(html);
+    // Extract user scripts, user styles, and format CSS using the html5ever tokenizer.
+    // This handles <script>/<style> content robustly by switching to ScriptData/Rawtext
+    // mode, avoiding all the fragility of manual string-based closing-tag search.
+    let (user_scripts, user_styles, format_css) = extract_script_style_blocks(html);
 
     Ok(Story {
         name,
@@ -144,39 +142,132 @@ fn extract_attr(tag: &str, attr_name: &str) -> Option<String> {
     None
 }
 
-/// Extract content from `<script id="ID">` or `<style id="ID">` blocks.
-fn extract_tagged_blocks(html: &str, id: &str) -> Vec<String> {
-    let mut blocks = Vec::new();
-    let pattern = format!("id=\"{id}\"");
-    let mut search_from = 0;
-    while let Some(attr_pos) = html[search_from..].find(&pattern) {
-        let abs_pos = search_from + attr_pos;
-        // Find the end of the opening tag
-        if let Some(tag_end) = html[abs_pos..].find('>') {
-            let content_start = abs_pos + tag_end + 1;
-            // Find whichever closing tag (</script> or </style>) comes first.
-            // We must pick the minimum to avoid crossing into sibling blocks.
-            let rest = &html[content_start..];
-            let close = match (rest.find("</script>"), rest.find("</style>")) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
-            if let Some(close) = close {
-                blocks.push(rest[..close].to_string());
-                search_from = content_start + close;
-                continue;
-            }
-        }
-        search_from = abs_pos + pattern.len();
-    }
-    blocks
-}
-
 /// Decode HTML entities in passage source.
 fn decode_html_entities(s: &str) -> String {
     html_escape::decode_html_entities(s).into_owned()
+}
+
+/// Extract `<script id="twine-user-script">`, `<style id="twine-user-stylesheet">`,
+/// and `<style title="Twine CSS">` content from a Twine HTML document using the
+/// html5ever tokenizer.
+///
+/// By returning `TokenSinkResult::RawData(ScriptData)` / `RawData(Rawtext)` when
+/// opening script/style tags are encountered, the tokenizer switches to the
+/// appropriate raw-content mode — exactly as a browser would. Content is then
+/// collected verbatim until the matching closing tag is seen, with no manual
+/// closing-tag search and no risk of cross-element contamination.
+///
+/// Returns `(user_scripts, user_styles, format_css)`.
+fn extract_script_style_blocks(html: &str) -> (Vec<String>, Vec<String>, Option<String>) {
+    use std::cell::RefCell;
+
+    use html5ever::tendril::StrTendril;
+    use html5ever::tokenizer::{
+        states, BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer,
+        TokenizerOpts,
+    };
+
+    #[derive(Clone, Copy)]
+    enum Collecting {
+        UserScript,
+        UserStyle,
+        FormatCss,
+    }
+
+    #[derive(Default)]
+    struct State {
+        user_scripts: Vec<String>,
+        user_styles: Vec<String>,
+        format_css: Option<String>,
+        collecting: Option<Collecting>,
+        current: String,
+    }
+
+    struct Sink(RefCell<State>);
+
+    impl TokenSink for Sink {
+        type Handle = ();
+
+        fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<()> {
+            match token {
+                Token::TagToken(tag) => match tag.kind {
+                    TagKind::StartTag => {
+                        let get_attr = |key: &str| -> Option<String> {
+                            tag.attrs
+                                .iter()
+                                .find(|a| a.name.local.as_ref() == key)
+                                .map(|a| a.value.to_string())
+                        };
+                        match tag.name.as_ref() {
+                            "script" => {
+                                if get_attr("id").as_deref()
+                                    == Some("twine-user-script")
+                                {
+                                    let mut s = self.0.borrow_mut();
+                                    s.collecting = Some(Collecting::UserScript);
+                                    s.current.clear();
+                                }
+                                TokenSinkResult::RawData(states::ScriptData)
+                            }
+                            "style" => {
+                                if get_attr("id").as_deref()
+                                    == Some("twine-user-stylesheet")
+                                {
+                                    let mut s = self.0.borrow_mut();
+                                    s.collecting = Some(Collecting::UserStyle);
+                                    s.current.clear();
+                                } else if get_attr("title").as_deref() == Some("Twine CSS")
+                                {
+                                    let mut s = self.0.borrow_mut();
+                                    s.collecting = Some(Collecting::FormatCss);
+                                    s.current.clear();
+                                }
+                                TokenSinkResult::RawData(states::Rawtext)
+                            }
+                            _ => TokenSinkResult::Continue,
+                        }
+                    }
+                    TagKind::EndTag => {
+                        if matches!(tag.name.as_ref(), "script" | "style") {
+                            let mut s = self.0.borrow_mut();
+                            if let Some(kind) = s.collecting.take() {
+                                let text = std::mem::take(&mut s.current);
+                                match kind {
+                                    Collecting::UserScript => s.user_scripts.push(text),
+                                    Collecting::UserStyle => s.user_styles.push(text),
+                                    Collecting::FormatCss => {
+                                        let trimmed = text.trim().to_string();
+                                        if !trimmed.is_empty() && s.format_css.is_none() {
+                                            s.format_css = Some(trimmed);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        TokenSinkResult::Continue
+                    }
+                },
+                Token::CharacterTokens(chars) => {
+                    let mut s = self.0.borrow_mut();
+                    if s.collecting.is_some() {
+                        s.current.push_str(&chars);
+                    }
+                    TokenSinkResult::Continue
+                }
+                _ => TokenSinkResult::Continue,
+            }
+        }
+    }
+
+    let sink = Sink(RefCell::new(State::default()));
+    let tokenizer = Tokenizer::new(sink, TokenizerOpts::default());
+    let input = BufferQueue::default();
+    input.push_back(StrTendril::from(html));
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+
+    let state = tokenizer.sink.0.into_inner();
+    (state.user_scripts, state.user_styles, state.format_css)
 }
 
 #[derive(Debug)]
@@ -199,25 +290,6 @@ impl std::fmt::Display for ExtractError {
 }
 
 impl std::error::Error for ExtractError {}
-
-/// Extract the story format's built-in CSS from `<style title="Twine CSS">`.
-///
-/// Harlowe (and potentially other formats) embed a large built-in stylesheet
-/// in the compiled HTML under this title. Returns `None` if not found.
-fn extract_format_css(html: &str) -> Option<String> {
-    let marker = "title=\"Twine CSS\"";
-    let attr_pos = html.find(marker)?;
-    // Walk backward to find the opening `<style` tag
-    let style_start = html[..attr_pos].rfind("<style")?;
-    let tag_end = html[style_start..].find('>')? + style_start + 1;
-    let close = html[tag_end..].find("</style>")?;
-    let css = html[tag_end..tag_end + close].trim();
-    if css.is_empty() {
-        None
-    } else {
-        Some(css.to_string())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -296,8 +368,9 @@ mod tests {
     }
 
     /// Regression test: stylesheet block must not capture past </style> into a later </script>.
-    /// extract_tagged_blocks used to prefer </script> regardless of order, causing the entire
-    /// user-script block to be swept into user_styles when </script> appeared after </style>.
+    /// The old string-based implementation had to manually pick the minimum of the two closing
+    /// tag positions. The tokenizer-based implementation handles this correctly by returning
+    /// RawData(Rawtext) for <style> — the tokenizer ends collection at </style> naturally.
     #[test]
     fn stylesheet_block_stops_at_style_not_script() {
         let html = r#"
@@ -312,5 +385,35 @@ mod tests {
         assert_eq!(story.user_styles[0], "body { color: red; }");
         assert_eq!(story.user_scripts.len(), 1);
         assert_eq!(story.user_scripts[0], "window.setup = {};");
+    }
+
+    /// The tokenizer correctly handles JS that contains </style> in a string literal,
+    /// something the old string-search approach could not handle reliably.
+    #[test]
+    fn script_content_with_style_closing_tag() {
+        let html = r#"
+<tw-storydata name="S" startnode="1" format="SugarCube" format-version="2.0" ifid="X" hidden>
+<tw-passagedata pid="1" name="Start" tags="">Hi</tw-passagedata>
+</tw-storydata>
+<script id="twine-user-script" type="text/twine-javascript">var s = "</style>"; var x = 1;</script>
+"#;
+        let story = extract_story(html).unwrap();
+        assert_eq!(story.user_scripts.len(), 1);
+        assert_eq!(story.user_scripts[0], r#"var s = "</style>"; var x = 1;"#);
+    }
+
+    /// Harlowe embeds script/style blocks inside <tw-storydata>.
+    #[test]
+    fn script_style_inside_storydata() {
+        let html = r#"
+<tw-storydata name="S" startnode="1" format="Harlowe" format-version="3.3.9" ifid="X" hidden>
+<style role="stylesheet" id="twine-user-stylesheet" type="text/twine-css">body { margin: 0; }</style>
+<script role="script" id="twine-user-script" type="text/twine-javascript">setup.foo = 1;</script>
+<tw-passagedata pid="1" name="Start" tags="">Hello</tw-passagedata>
+</tw-storydata>
+"#;
+        let story = extract_story(html).unwrap();
+        assert_eq!(story.user_styles, vec!["body { margin: 0; }"]);
+        assert_eq!(story.user_scripts, vec!["setup.foo = 1;"]);
     }
 }
