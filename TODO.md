@@ -212,9 +212,9 @@ statement parsing, trailing comma stripping in case values.
   Custom entries shadow built-ins (DoL redefines `button`, `link`). Dynamic registrations
   (variable names) skipped silently. No `<<switch>>` override exists in DoL.
 
-- [ ] **CRITICAL: `assets/styles/user_0.css` for DoL contains JavaScript** — Our passage
-  extraction appears to be treating this as a CSS asset but it includes JS, causing broken
-  parsing. Investigate what this passage actually contains and handle it correctly.
+- [x] **CRITICAL: `assets/styles/user_0.css` for DoL contains JavaScript** — Fixed in `57e02a9`.
+  `extract_tagged_blocks` preferred `</script>` unconditionally over `</style>`, so the user
+  stylesheet block captured 1.5 MB of JS. Fix: pick whichever closing tag appears first.
 
 ### Harlowe Correctness Bugs
 
