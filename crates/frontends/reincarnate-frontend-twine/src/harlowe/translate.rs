@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use reincarnate_core::ir::{BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, Type, ValueId, Visibility};
+use reincarnate_core::ir::{BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, MethodKind, Type, ValueId, Visibility};
 
 use super::ast::*;
 use super::macros::{self, MacroKind};
@@ -971,7 +971,11 @@ impl TranslateCtx {
             defaults: vec![],
             has_rest_param: false,
         };
-        let cb_fb = FunctionBuilder::new(&cb_name, sig, Visibility::Public);
+        let mut cb_fb = FunctionBuilder::new(&cb_name, sig, Visibility::Public);
+        // Mark as Closure so the backend collects it into closure_bodies and can
+        // inline it as an arrow function at the call site rather than emitting it
+        // as a named top-level export.
+        cb_fb.set_method_kind(MethodKind::Closure);
         let item_param = cb_fb.param(0);
 
         let saved_fb = std::mem::replace(&mut self.fb, cb_fb);

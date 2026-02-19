@@ -7,8 +7,11 @@
 //! - `not(x)` → `!x` (JS operator)
 //! - `color_op("rgb", r, g, b)` → `Colors.rgb(r, g, b)` (namespace object)
 //! - `collection_op("sorted", ...)` → `Collections.sorted(...)` (namespace object)
+//! - `collection_op("find", pred_ref, ...)` → `Collections.find((x) => ..., ...)` (inlined closure)
 
-use crate::js_ast::JsExpr;
+use std::collections::HashMap;
+
+use crate::js_ast::{JsExpr, JsFunction};
 use reincarnate_core::ir::value::Constant;
 
 /// Returns the bare function/namespace names that a `Harlowe.Engine` rewrite
@@ -24,12 +27,16 @@ pub(super) fn rewrite_introduced_calls(method: &str) -> &'static [&'static str] 
 }
 
 /// Try to rewrite a `Harlowe.Engine.*` SystemCall.
-pub(super) fn try_rewrite(method: &str, args: &mut Vec<JsExpr>) -> Option<JsExpr> {
+pub(super) fn try_rewrite(
+    method: &str,
+    args: &mut Vec<JsExpr>,
+    closures: &HashMap<String, JsFunction>,
+) -> Option<JsExpr> {
     match method {
         "not" => try_rewrite_not(args),
         "math" => try_rewrite_math(args),
         "color_op" => try_rewrite_color_op(args),
-        "collection_op" => try_rewrite_collection_op(args),
+        "collection_op" => try_rewrite_collection_op(args, closures),
         _ => None,
     }
 }
@@ -136,16 +143,63 @@ fn kebab_to_camel(name: &str) -> String {
 }
 
 /// `collection_op("sorted", ...)` → `Collections.sorted(...)`
-fn try_rewrite_collection_op(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
+/// `collection_op("find", pred_ref, ...)` → `Collections.find((x) => ..., ...)`
+///
+/// When the predicate argument is a `Var` referencing a closure in the
+/// `closures` map, it is inlined as an arrow function at the call site.
+/// This produces readable output and enables TypeScript contextual inference.
+fn try_rewrite_collection_op(
+    args: &mut Vec<JsExpr>,
+    closures: &HashMap<String, JsFunction>,
+) -> Option<JsExpr> {
     let name = extract_dispatch_name(args)?;
-    let remaining = std::mem::take(args);
+    let mut remaining = std::mem::take(args);
     let field = kebab_to_camel(&name);
+
+    // For predicate ops, try to inline a closure reference as an arrow function.
+    if is_predicate_op(&name) && !remaining.is_empty() {
+        if let Some(arrow) = try_inline_closure(&remaining[0], closures) {
+            remaining[0] = arrow;
+        }
+    }
+
     Some(JsExpr::Call {
         callee: Box::new(JsExpr::Field {
             object: Box::new(JsExpr::Var("Collections".into())),
             field,
         }),
         args: remaining,
+    })
+}
+
+/// Returns true for collection ops whose first arg is a predicate lambda.
+fn is_predicate_op(name: &str) -> bool {
+    matches!(
+        name,
+        "find" | "some-pass" | "all-pass" | "none-pass" | "count" | "altered"
+    )
+}
+
+/// If `expr` is a `Var` referencing a closure in `closures`, return an
+/// inlined `ArrowFunction` with `infer_param_types: true`.
+fn try_inline_closure(
+    expr: &JsExpr,
+    closures: &HashMap<String, JsFunction>,
+) -> Option<JsExpr> {
+    let name = match expr {
+        JsExpr::Var(n) => n,
+        _ => return None,
+    };
+    let closure = closures.get(name.as_str())?;
+    // Inline: use the closure's params/return_ty/body as an arrow function.
+    // infer_param_types: true lets TypeScript infer Dynamic params contextually.
+    Some(JsExpr::ArrowFunction {
+        params: closure.params.clone(),
+        return_ty: closure.return_ty.clone(),
+        body: closure.body.clone(),
+        has_rest_param: closure.has_rest_param,
+        cast_as: None,
+        infer_param_types: true,
     })
 }
 
@@ -395,5 +449,85 @@ mod tests {
         assert_eq!(rewrite_introduced_calls("color_op"), &["Colors"]);
         assert_eq!(rewrite_introduced_calls("collection_op"), &["Collections"]);
         assert!(rewrite_introduced_calls("plus").is_empty());
+    }
+
+    fn make_pred_closure(name: &str) -> JsFunction {
+        use crate::js_ast::JsStmt;
+        use reincarnate_core::ir::MethodKind;
+        JsFunction {
+            name: name.into(),
+            params: vec![("_x".into(), Type::Dynamic)],
+            return_ty: Type::Bool,
+            body: vec![JsStmt::Return(Some(JsExpr::Literal(Constant::Bool(true))))],
+            is_generator: false,
+            visibility: Visibility::Public,
+            method_kind: MethodKind::Closure,
+            has_rest_param: false,
+        }
+    }
+
+    #[test]
+    fn rewrite_collection_op_inlines_closure() {
+        // collection_op("find", pred_lambda_ref, arr) where pred_lambda_ref is in closures
+        // → Collections.find((x) => { return true; }, arr) with infer_param_types: true
+        let pred_name = "passage_test_lambda_1";
+        let mut closures = std::collections::HashMap::new();
+        closures.insert(pred_name.to_string(), make_pred_closure(pred_name));
+
+        let expr = engine_call(
+            "collection_op",
+            vec![str_lit("find"), var(pred_name), var("arr")],
+        );
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &closures);
+        match extract_expr(&func) {
+            JsExpr::Call { callee, args } => {
+                // Callee is Collections.find
+                match callee.as_ref() {
+                    JsExpr::Field { object, field } => {
+                        assert!(matches!(object.as_ref(), JsExpr::Var(n) if n == "Collections"));
+                        assert_eq!(field, "find");
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                assert_eq!(args.len(), 2, "should be (arrow_fn, arr)");
+                // First arg should now be an inlined arrow function
+                match &args[0] {
+                    JsExpr::ArrowFunction {
+                        params,
+                        return_ty,
+                        infer_param_types,
+                        ..
+                    } => {
+                        assert_eq!(params.len(), 1);
+                        assert!(
+                            matches!(&params[0].1, Type::Dynamic),
+                            "param should be Dynamic (inferred by TS)"
+                        );
+                        assert_eq!(*return_ty, Type::Bool);
+                        assert!(infer_param_types, "should omit `: any` for TS inference");
+                    }
+                    other => panic!("expected ArrowFunction, got {other:?}"),
+                }
+                // Second arg is arr
+                assert!(matches!(&args[1], JsExpr::Var(n) if n == "arr"));
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_collection_op_no_inline_for_non_closure_var() {
+        // When pred arg is a Var NOT in closures, pass it through unchanged.
+        let expr = engine_call(
+            "collection_op",
+            vec![str_lit("find"), var("myPred"), var("arr")],
+        );
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        match extract_expr(&func) {
+            JsExpr::Call { args, .. } => {
+                assert!(matches!(&args[0], JsExpr::Var(n) if n == "myPred"));
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
     }
 }

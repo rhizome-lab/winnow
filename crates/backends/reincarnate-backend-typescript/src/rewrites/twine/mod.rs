@@ -235,7 +235,7 @@ fn try_rewrite_system_call(
         return harlowe::try_rewrite(method, args);
     }
     if system == "Harlowe.Engine" {
-        return engine::try_rewrite(method, args);
+        return engine::try_rewrite(method, args, closures);
     }
     if system == "SugarCube.Engine" {
         return sugarcube::try_rewrite(method, args, closures);

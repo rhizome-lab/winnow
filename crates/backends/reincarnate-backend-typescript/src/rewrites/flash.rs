@@ -488,6 +488,7 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
                     }))],
                     has_rest_param: true,
                     cast_as,
+                    infer_param_types: false,
                 };
             }
             return;
@@ -998,12 +999,14 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             body,
             has_rest_param,
             cast_as,
+            infer_param_types,
         } => JsExpr::ArrowFunction {
             params,
             return_ty,
             body: rewrite_stmts(body, ctx),
             has_rest_param,
             cast_as,
+            infer_param_types,
         },
     }
 }
@@ -1048,6 +1051,7 @@ fn rewrite_system_call(
                     body: rewritten.body,
                     has_rest_param: rewritten.has_rest_param,
                     cast_as: None,
+                    infer_param_types: false,
                 });
             }
             // Fallback: non-compiled closure → this.$closureN

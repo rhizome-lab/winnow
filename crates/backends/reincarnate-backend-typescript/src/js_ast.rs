@@ -151,6 +151,15 @@ pub enum JsExpr {
         has_rest_param: bool,
         /// Optional type assertion: `(arrow) as <cast_as>`.
         cast_as: Option<String>,
+        /// When true, omit `: any` annotations so TypeScript can infer
+        /// param types contextually from the call site.  Only applicable
+        /// when a param's IR type is `Dynamic`; non-Dynamic types are
+        /// always printed regardless of this flag.
+        ///
+        /// This is a TS-backend display optimization only.  Correctness
+        /// lives in the IR `FunctionSig` — this flag never changes what type
+        /// a value actually has, only whether the TS printer emits `: any`.
+        infer_param_types: bool,
     },
 
     // --- Fallback ---

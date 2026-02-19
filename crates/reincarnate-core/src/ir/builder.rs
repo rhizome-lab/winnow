@@ -125,6 +125,14 @@ impl FunctionBuilder {
         self.func.method_kind = kind;
     }
 
+    /// Set just the method kind, leaving namespace/class unchanged.
+    ///
+    /// Used for callback functions that need a non-default kind (e.g. `Closure`)
+    /// without belonging to a class.
+    pub fn set_method_kind(&mut self, kind: MethodKind) {
+        self.func.method_kind = kind;
+    }
+
     /// Attach a debug name to a value (from source-level variable/parameter names).
     pub fn name_value(&mut self, v: ValueId, name: String) {
         self.func.value_names.insert(v, name);

@@ -169,6 +169,7 @@ fn make_with_instances(target: JsExpr, body: Vec<JsStmt>) -> JsStmt {
                 body,
                 has_rest_param: false,
                 cast_as: None,
+                infer_param_types: false,
             },
         ],
     })

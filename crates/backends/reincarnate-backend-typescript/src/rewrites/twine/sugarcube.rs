@@ -30,6 +30,7 @@ pub(super) fn try_rewrite(
                         body: rewritten.body,
                         has_rest_param: rewritten.has_rest_param,
                         cast_as: None,
+                        infer_param_types: false,
                     });
                 }
             }
