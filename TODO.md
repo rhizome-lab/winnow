@@ -198,6 +198,12 @@ statement parsing, trailing comma stripping in case values.
   in arg position to a link object. Currently not handled by `classify_case_token` at all.
   Rare in practice as a case value (object identity comparison with `===` would never match).
 
+- [ ] **`parseArgs()` semantics for media/audio macros** — When `<<audio>>`, `<<playlist>>`,
+  `<<cacheaudio>>`, `<<track>>` etc. are eventually lowered to the platform audio layer, their
+  args must use `parseArgs()` token semantics (discrete values: track ID, command string, volume)
+  not the full-expression path. Currently fall to `Raw` which is safe but means audio is not
+  preserved in output.
+
 - [ ] **CRITICAL: Extract `Macro.add()` from JavaScript passages** — SugarCube custom
   macros (including potential `<<switch>>` overrides in DoL) are defined via `Macro.add()`
   in JavaScript passages (StoryScript, script-tagged passages). We currently ignore these.
