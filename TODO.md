@@ -190,6 +190,14 @@ Status: DoL 290→4, TRC 974→0. Fixed: default-to-Raw, LinkTarget, preprocesso
 UTF-8 preservation in preprocessor, template literal `${...}` preprocessing, `<<run>>`
 statement parsing, trailing comma stripping in case values.
 
+- [ ] **`settings.x` / `setup.x` in `<<case>>` args** — SugarCube's `parseArgs()`
+  evaluates `settings.x` and `setup.x` barewords via `evalTwineScript()`, not as string
+  constants. Currently falls through to `Bareword` in `classify_case_token`.
+
+- [ ] **`[[...]]` SquareBracket token in `<<case>>` args** — SugarCube converts `[[text|passage]]`
+  in arg position to a link object. Currently not handled by `classify_case_token` at all.
+  Rare in practice as a case value (object identity comparison with `===` would never match).
+
 - [ ] **CRITICAL: Extract `Macro.add()` from JavaScript passages** — SugarCube custom
   macros (including potential `<<switch>>` overrides in DoL) are defined via `Macro.add()`
   in JavaScript passages (StoryScript, script-tagged passages). We currently ignore these.

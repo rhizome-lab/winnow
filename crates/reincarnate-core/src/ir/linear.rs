@@ -1305,6 +1305,12 @@ impl<'a> EmitCtx<'a> {
         // Mem2Reg names the stored value (e.g. Cast(src)), but if the Cast
         // is single-use and gets lazily inlined, its name is never used.
         // Propagating to `src` ensures the materialized variable gets the name.
+        // Track which sources received propagated names — these are excluded
+        // from shared_names since they are absorbed (side-effecting inlines)
+        // and never produce their own statements.
+        // Track sources that received names AND will be absorbed (single-use
+        // values become lazy or side-effecting inlines — never standalone stmts).
+        let mut propagated_sources: HashSet<ValueId> = HashSet::new();
         for (_, inst) in func.insts.iter() {
             if let Some(result) = inst.result {
                 if let Some(name) = value_names.get(&result).cloned() {
@@ -1313,7 +1319,13 @@ impl<'a> EmitCtx<'a> {
                         _ => None,
                     };
                     if let Some(src) = src {
-                        value_names.entry(src).or_insert(name);
+                        if let std::collections::hash_map::Entry::Vacant(e) = value_names.entry(src) {
+                            e.insert(name);
+                            let src_uses = resolve.use_counts.get(&src).copied().unwrap_or(0);
+                            if src_uses <= 1 {
+                                propagated_sources.insert(src);
+                            }
+                        }
                     }
                 }
             }
@@ -1337,9 +1349,14 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
-        // Find names shared by 2+ ValueIds.
+        // Find names shared by 2+ ValueIds, excluding values whose names were
+        // propagated from Cast/Copy results — those values are absorbed as
+        // side-effecting inlines and never produce standalone statements.
         let mut name_counts: HashMap<&str, usize> = HashMap::new();
-        for name in value_names.values() {
+        for (vid, name) in &value_names {
+            if propagated_sources.contains(vid) {
+                continue;
+            }
             *name_counts.entry(name.as_str()).or_default() += 1;
         }
         let shared_names: HashSet<String> = name_counts

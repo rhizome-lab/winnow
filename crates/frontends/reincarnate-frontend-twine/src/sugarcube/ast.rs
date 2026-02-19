@@ -178,6 +178,9 @@ pub enum CaseArg {
     Number(f64),
     /// Any other bareword — treated as a string value (not desugared).
     Bareword(String),
+    /// `[[text|passage]]` or `[[passage]]` link markup in arg position.
+    /// SugarCube converts this to a link object. Rare as a case value.
+    SquareBracket(String),
 }
 
 /// A clause in a block macro (the body between opening and closing/next clause).

@@ -1438,6 +1438,16 @@ fn classify_case_token(token: &str, start: usize, end: usize) -> CaseArg {
         "NaN" => return CaseArg::Nan,
         _ => {}
     }
+    // settings.x / setup.x property access → evalTwineScript (not a string constant)
+    if token.starts_with("settings.") || token.starts_with("settings[")
+        || token.starts_with("setup.") || token.starts_with("setup[")
+    {
+        return CaseArg::Variable(Expr::new(start, end));
+    }
+    // [[...]] link markup in arg position
+    if token.starts_with("[[") && token.ends_with("]]") {
+        return CaseArg::SquareBracket(token.to_string());
+    }
     // Numeric literal
     if let Ok(n) = token.parse::<f64>() {
         return CaseArg::Number(n);

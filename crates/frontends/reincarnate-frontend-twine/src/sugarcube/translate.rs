@@ -209,6 +209,13 @@ impl TranslateCtx {
             CaseArg::Nan => self.fb.const_float(f64::NAN),
             CaseArg::Number(n) => self.fb.const_float(*n),
             CaseArg::Bareword(s) => self.fb.const_string(s.as_str()),
+            CaseArg::SquareBracket(s) => {
+                // [[text|passage]] or [[passage]] — create a link object.
+                // Comparing a link object with === in a switch is almost never meaningful,
+                // but we emit correctly for completeness.
+                let src = self.fb.const_string(s.as_str());
+                self.fb.system_call("SugarCube.Engine", "parseLink", &[src], Type::Dynamic)
+            }
         }
     }
 
