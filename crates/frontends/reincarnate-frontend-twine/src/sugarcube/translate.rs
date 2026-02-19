@@ -194,6 +194,24 @@ impl TranslateCtx {
         self.lower_raw_expr_str(text)
     }
 
+    /// Lower a `CaseArg` per SugarCube's `parseArgs()` tokenizer semantics.
+    ///
+    /// Case values are NOT TwineScript expressions — they are matched with `===`.
+    /// Variables and backtick expressions are evaluated; barewords are literal values.
+    fn lower_case_arg(&mut self, arg: &CaseArg) -> ValueId {
+        match arg {
+            CaseArg::Variable(expr) => self.lower_expr(expr),
+            CaseArg::BacktickExpr(expr) => self.lower_expr(expr),
+            CaseArg::StringLit(expr) => self.lower_expr(expr),
+            CaseArg::Null | CaseArg::Undefined => self.fb.const_null(),
+            CaseArg::True => self.fb.const_bool(true),
+            CaseArg::False => self.fb.const_bool(false),
+            CaseArg::Nan => self.fb.const_float(f64::NAN),
+            CaseArg::Number(n) => self.fb.const_float(*n),
+            CaseArg::Bareword(s) => self.fb.const_string(s.as_str()),
+        }
+    }
+
     /// Lower a raw expression string through the preprocess → oxc → IR pipeline.
     fn lower_raw_expr_str(&mut self, text: &str) -> ValueId {
         let trimmed = text.trim();
@@ -1828,8 +1846,8 @@ impl TranslateCtx {
             match clause.kind.as_str() {
                 "case" => {
                     let vals = match &clause.args {
-                        MacroArgs::CaseValues(exprs) => {
-                            exprs.iter().map(|e| self.lower_expr(e)).collect()
+                        MacroArgs::CaseValues(args) => {
+                            args.iter().map(|a| self.lower_case_arg(a)).collect()
                         }
                         _ => vec![],
                     };
@@ -2223,8 +2241,8 @@ impl TranslateCtx {
                 args
             }
             MacroArgs::Switch(expr) => vec![self.lower_expr(expr)],
-            MacroArgs::CaseValues(exprs) => {
-                exprs.iter().map(|e| self.lower_expr(e)).collect()
+            MacroArgs::CaseValues(args) => {
+                args.iter().map(|a| self.lower_case_arg(a)).collect()
             }
             MacroArgs::WidgetDef { name } => {
                 vec![self.fb.const_string(name.as_str())]

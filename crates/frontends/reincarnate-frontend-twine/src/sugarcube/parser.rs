@@ -1348,8 +1348,10 @@ fn split_assignment_list(src: &str, base: usize) -> Vec<Expr> {
 }
 
 /// Split `<<case val1 val2>>` values on whitespace at depth 0.
-/// Each value is parsed as a separate expression.
-fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
+///
+/// Classifies each token per SugarCube's `parseArgs()` tokenizer — case values are NOT
+/// TwineScript expressions. Keywords (`lte`, `is`, etc.) are barewords here.
+fn split_case_values(src: &str, base: usize) -> Vec<CaseArg> {
     let mut result = Vec::new();
     let bytes = src.as_bytes();
     let mut i = 0;
@@ -1363,7 +1365,7 @@ fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
             break;
         }
 
-        // Scan one value
+        // Scan one token
         let val_start = i;
         let mut depth = 0i32;
         while i < bytes.len() {
@@ -1390,11 +1392,13 @@ fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
         if i > val_start {
             // Strip trailing comma (DoL uses `<<case "a", "b">>` with commas)
             let mut end = i;
-            while end > val_start && src.as_bytes()[end - 1] == b',' {
+            while end > val_start && bytes[end - 1] == b',' {
                 end -= 1;
             }
             if end > val_start {
-                result.push(Expr::new(base + val_start, base + end));
+                let token = src[val_start..end].trim();
+                let arg = classify_case_token(token, base + val_start, base + end);
+                result.push(arg);
             }
         }
     }
@@ -1402,12 +1406,78 @@ fn split_case_values(src: &str, base: usize) -> Vec<Expr> {
     result
 }
 
+/// Classify a single case value token per SugarCube's `parseArgs()` logic.
+fn classify_case_token(token: &str, start: usize, end: usize) -> CaseArg {
+    if token.is_empty() {
+        return CaseArg::Null;
+    }
+    let b = token.as_bytes();
+    // Variable reference: $name or _name
+    if (b[0] == b'$' || b[0] == b'_')
+        && token.len() > 1
+        && b[1].is_ascii_alphanumeric()
+    {
+        return CaseArg::Variable(Expr::new(start, end));
+    }
+    // Backtick expression: `expr`
+    if b[0] == b'`' && b[b.len() - 1] == b'`' && token.len() >= 2 {
+        return CaseArg::BacktickExpr(Expr::new(start + 1, end - 1));
+    }
+    // Quoted string: "text" or 'text'
+    if (b[0] == b'"' && b[b.len() - 1] == b'"')
+        || (b[0] == b'\'' && b[b.len() - 1] == b'\'')
+    {
+        return CaseArg::StringLit(Expr::new(start, end));
+    }
+    // Keyword literals
+    match token {
+        "null" => return CaseArg::Null,
+        "undefined" => return CaseArg::Undefined,
+        "true" => return CaseArg::True,
+        "false" => return CaseArg::False,
+        "NaN" => return CaseArg::Nan,
+        _ => {}
+    }
+    // Numeric literal
+    if let Ok(n) = token.parse::<f64>() {
+        return CaseArg::Number(n);
+    }
+    // Anything else: bareword — NOT desugared (not a TwineScript operator here)
+    CaseArg::Bareword(token.to_string())
+}
+
 /// Split link macro arguments into individual expression spans.
 /// Handles: <<link "text">> and <<link "text" "passage">>
 /// Splits on whitespace at depth 0, treating quoted strings as single tokens.
 fn split_link_args(src: &str, base: usize) -> Vec<Expr> {
-    // Link args are similar to case values — split on whitespace at depth 0
-    split_case_values(src, base)
+    let bytes = src.as_bytes();
+    let mut result = Vec::new();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let val_start = i;
+        let mut depth = 0i32;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => { depth += 1; i += 1; }
+                b')' | b']' | b'}' => { depth -= 1; i += 1; }
+                b'"' | b'\'' => { i = skip_string_in(bytes, i); }
+                b'`' => { i = skip_template_in(bytes, i); }
+                b' ' | b'\t' | b'\n' if depth == 0 => break,
+                _ => i += 1,
+            }
+        }
+        if i > val_start {
+            result.push(Expr::new(base + val_start, base + i));
+        }
+    }
+    result
 }
 
 /// Skip a string literal starting at position `i`, returning the position after.

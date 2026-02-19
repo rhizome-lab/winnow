@@ -190,10 +190,17 @@ Status: DoL 290→4, TRC 974→0. Fixed: default-to-Raw, LinkTarget, preprocesso
 UTF-8 preservation in preprocessor, template literal `${...}` preprocessing, `<<run>>`
 statement parsing, trailing comma stripping in case values.
 
-- [ ] **DoL `<<case lte N>>` range comparisons** (4 errors) — DoL uses
-  `<<case lte 6000>>` inside `<<switch>>` as range comparisons. This is NOT standard
-  SugarCube semantics (standard `<<case>>` uses `===` comparison per value). Likely a
-  DoL custom extension. Low priority — fallback to `SugarCube.Engine.error()` is acceptable.
+- [ ] **CRITICAL: Extract `Macro.add()` from JavaScript passages** — SugarCube custom
+  macros (including potential `<<switch>>` overrides in DoL) are defined via `Macro.add()`
+  in JavaScript passages (StoryScript, script-tagged passages). We currently ignore these.
+  Correct fix: scan JavaScript passages for `Macro.add(name, ...)` calls, build a custom
+  macro registry, and consult it during lowering. Macros with unknown arg schemas should
+  fall back to a runtime call rather than hardcoded structural lowering (e.g. if `<<switch>>`
+  is redefined, emit a call rather than an if-elseif chain).
+
+- [ ] **CRITICAL: `assets/styles/user_0.css` for DoL contains JavaScript** — Our passage
+  extraction appears to be treating this as a CSS asset but it includes JS, causing broken
+  parsing. Investigate what this passage actually contains and handle it correctly.
 
 ### Harlowe Correctness Bugs
 

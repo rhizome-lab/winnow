@@ -146,9 +146,38 @@ pub enum MacroArgs {
     /// Switch expression: `<<switch expr>>`.
     Switch(Expr),
     /// Case value(s): `<<case val1 val2>>`.
-    CaseValues(Vec<Expr>),
+    CaseValues(Vec<CaseArg>),
     /// Raw unparsed argument string (for unknown/custom macros).
     Raw(String),
+}
+
+/// A single token in `<<case val1 val2>>` argument list.
+///
+/// Mirrors SugarCube's `parseArgs()` tokenizer categories. Case values are NOT
+/// TwineScript expressions — they are compared with `===` against the switch value.
+/// Keywords like `lte`, `is`, etc. are barewords here, not operators.
+#[derive(Debug, Clone)]
+pub enum CaseArg {
+    /// `$name` or `_name` — SugarCube/temp variable reference.
+    Variable(Expr),
+    /// `` `expr` `` — backtick-wrapped TwineScript expression.
+    BacktickExpr(Expr),
+    /// `"text"` or `'text'` — quoted string literal.
+    StringLit(Expr),
+    /// `null` literal.
+    Null,
+    /// `undefined` literal.
+    Undefined,
+    /// `true` literal.
+    True,
+    /// `false` literal.
+    False,
+    /// `NaN` literal.
+    Nan,
+    /// Numeric literal.
+    Number(f64),
+    /// Any other bareword — treated as a string value (not desugared).
+    Bareword(String),
 }
 
 /// A clause in a block macro (the body between opening and closing/next clause).
