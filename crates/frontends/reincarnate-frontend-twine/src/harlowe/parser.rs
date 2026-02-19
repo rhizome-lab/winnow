@@ -105,7 +105,7 @@ impl<'a> Parser<'a> {
     /// Parse a single node from the current position.
     fn parse_node(&mut self, in_hook: bool) -> Option<Node> {
         match self.peek()? {
-            b'(' => self.parse_macro(),
+            b'(' => self.parse_macro(in_hook),
             b'[' => {
                 if self.peek_at(1) == Some(b'[') {
                     self.parse_link()
@@ -166,7 +166,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a macro: `(name: args)` with optional trailing `[hook]`.
-    fn parse_macro(&mut self) -> Option<Node> {
+    fn parse_macro(&mut self, in_hook: bool) -> Option<Node> {
         let start = self.pos;
         self.pos += 1; // skip `(`
 
@@ -184,7 +184,7 @@ impl<'a> Parser<'a> {
         if name.is_empty() {
             // Not a macro — could be a parenthesized expression in text, restore
             self.pos = start;
-            return self.parse_text(false);
+            return self.parse_text(in_hook);
         }
 
         // Skip whitespace
@@ -209,7 +209,7 @@ impl<'a> Parser<'a> {
         } else {
             // Not a real macro
             self.pos = start;
-            return self.parse_text(false);
+            return self.parse_text(in_hook);
         };
 
         // Expect closing `)`
@@ -272,17 +272,40 @@ impl<'a> Parser<'a> {
                     }
                     // Don't advance past the final `)` — caller handles it
                 }
-                b'"' | b'\'' => {
-                    let quote = self.bytes[self.pos];
+                b'"' => {
                     self.pos += 1;
-                    while !self.at_end() && self.bytes[self.pos] != quote {
+                    while !self.at_end() && self.bytes[self.pos] != b'"' {
                         if self.bytes[self.pos] == b'\\' {
                             self.pos += 1; // skip escape
                         }
                         self.pos += 1;
                     }
                     if !self.at_end() {
-                        self.pos += 1; // skip closing quote
+                        self.pos += 1; // skip closing `"`
+                    }
+                }
+                b'\'' => {
+                    // Harlowe `'s` possessive — NOT a string delimiter.
+                    // Only enter string-scan mode for `'non-s...'` or `'s` followed by
+                    // an identifier character (e.g. `'stop'`). A bare `'s ` / `'s(` / `'s,`
+                    // is the possessive operator, not a string.
+                    let is_possessive = self.bytes.get(self.pos + 1) == Some(&b's')
+                        && !self.bytes
+                            .get(self.pos + 2)
+                            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
+                    if is_possessive {
+                        self.pos += 1; // skip `'` as plain text; `s` scanned next iteration
+                    } else {
+                        self.pos += 1; // skip opening `'`
+                        while !self.at_end() && self.bytes[self.pos] != b'\'' {
+                            if self.bytes[self.pos] == b'\\' {
+                                self.pos += 1;
+                            }
+                            self.pos += 1;
+                        }
+                        if !self.at_end() {
+                            self.pos += 1; // skip closing `'`
+                        }
                     }
                 }
                 _ => self.pos += 1,
@@ -1011,6 +1034,106 @@ mod tests {
         } else {
             panic!("expected if macro");
         }
+    }
+
+    #[test]
+    fn test_elseif_alias_clause() {
+        // (elseif:) is an alias for (else-if:) and must be collected as a clause
+        let ast = parse("(if: $x < 4)[(A)](elseif: $x < 8)[(B)](elseif: $x < 12)[(C)](else:)[(D)]");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1, "elseif/else should be clauses, not siblings");
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "if");
+            assert_eq!(m.clauses.len(), 3);
+            assert_eq!(m.clauses[0].kind, "elseif");
+            assert_eq!(m.clauses[1].kind, "elseif");
+            assert_eq!(m.clauses[2].kind, "else");
+        } else {
+            panic!("expected if macro");
+        }
+    }
+
+    #[test]
+    fn test_inline_macro_in_args_then_else() {
+        // (if: (passage:)'s tags contains "x")[(set: $t to (passage:)'s tags)](else:)[(set: $t to "")]
+        // The nested (passage:) macro in the expression must not confuse else-clause collection.
+        let ast = parse(r#"(if: (passage:)'s tags contains "x")[(set: $t to (passage:)'s tags)](else:)[(set: $t to "")]"#);
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1, "(else:) must be a clause, not a sibling");
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "if");
+            assert_eq!(m.clauses.len(), 1);
+            assert_eq!(m.clauses[0].kind, "else");
+        } else {
+            panic!("expected if macro");
+        }
+    }
+
+    #[test]
+    fn test_prose_parens_in_hook_followed_by_else() {
+        // Bug: parse_macro called parse_text(false) instead of parse_text(in_hook),
+        // so prose like `(Some text)` inside a hook consumed the closing `]` and
+        // left `(else:)` as a standalone sibling instead of a clause.
+        let ast = parse("(if: $x)[Some text (in parens)](else:)[fallback]");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1, "(else:) must be a clause, not a sibling");
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "if");
+            assert_eq!(m.clauses.len(), 1);
+            assert_eq!(m.clauses[0].kind, "else");
+        } else {
+            panic!("expected if macro");
+        }
+    }
+
+    #[test]
+    fn test_elseif_after_changer_and_interp() {
+        // Reproduces: (text-colour:)[text] $var (if: cond)[...](elseif: cond)[...]
+        // The (elseif:) must still be a clause of (if:), not a standalone node
+        let src = r#"(text-colour: "Pink")[Label:] $val (if: $val < 4)[(A)](elseif: $val < 8)[(B)](elseif: $val < 12)[(C)](else:)[(D)]"#;
+        let ast = parse(src);
+        assert_eq!(ast.errors.len(), 0);
+        // Should have 3 top-level nodes: changer-apply, var-interp, and if
+        // (The exact structure depends on changer lowering, but if-node must have 3 clauses)
+        let if_node = ast.body.iter().find(|n| matches!(&n.kind, NodeKind::Macro(m) if m.name == "if"));
+        let m = match if_node.map(|n| &n.kind) {
+            Some(NodeKind::Macro(m)) => m,
+            _ => panic!("expected if macro in AST"),
+        };
+        assert_eq!(m.clauses.len(), 3, "elseif/else must be clauses of if, not siblings");
+        assert_eq!(m.clauses[0].kind, "elseif");
+        assert_eq!(m.clauses[1].kind, "elseif");
+        assert_eq!(m.clauses[2].kind, "else");
+        // No standalone elseif/else nodes
+        for node in &ast.body {
+            if let NodeKind::Macro(mac) = &node.kind {
+                assert_ne!(mac.name, "elseif", "standalone (elseif:) found");
+                assert_ne!(mac.name, "else", "standalone (else:) found");
+            }
+        }
+    }
+
+    #[test]
+    fn test_elseif_exact_thoughts_main() {
+        // Exact excerpt from ThoughtsMain passage in the-experiment
+        let src = r#"(text-colour: "Red")[Defiance:] $Defiance (if: $Defiance < 4)[(Next Trait at 4)](elseif: $Defiance < 8)[(Next Trait at 8)](elseif: $Defiance < 12)[(Next Trait at 12)](elseif: $Defiance < 17)[(Next Trait at 17)](else:)[(All Defiance Traits Active)]"#;
+        let ast = parse(src);
+        assert_eq!(ast.errors.len(), 0);
+        // Verify no standalone elseif/else
+        for node in &ast.body {
+            if let NodeKind::Macro(mac) = &node.kind {
+                assert!(
+                    mac.name != "elseif" && mac.name != "else-if" && mac.name != "else",
+                    "standalone clause macro '{}' found in top-level body", mac.name
+                );
+            }
+        }
+        let if_node = ast.body.iter().find(|n| matches!(&n.kind, NodeKind::Macro(m) if m.name == "if"));
+        let m = match if_node.map(|n| &n.kind) {
+            Some(NodeKind::Macro(m)) => m,
+            _ => panic!("expected if macro"),
+        };
+        assert_eq!(m.clauses.len(), 4, "expected 3 elseif + 1 else");
     }
 
     #[test]

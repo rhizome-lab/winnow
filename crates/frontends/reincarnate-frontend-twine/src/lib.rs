@@ -13,6 +13,28 @@ use reincarnate_core::project::{Asset, AssetCatalog, AssetKind, EngineOrigin};
 
 use sugarcube::translate;
 
+/// Extract a single line of source context around `[start..end]`, truncated to 80 chars.
+fn source_context_snippet(source: &str, start: usize, end: usize) -> String {
+    let src = source.as_bytes();
+    let len = src.len();
+    let line_start = src[..start.min(len)]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let line_end = src[end.min(len)..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|i| end + i)
+        .unwrap_or(len);
+    let line = source[line_start..line_end.min(len)].trim();
+    if line.len() > 80 {
+        format!("{}…", &line[..80])
+    } else {
+        line.to_string()
+    }
+}
+
 /// Twine frontend — extracts stories from compiled Twine HTML files.
 ///
 /// Supports SugarCube and Harlowe story formats. The story format is
@@ -211,9 +233,14 @@ impl TwineFrontend {
 
             // Log parse errors but continue
             for err in &ast.errors {
+                let snippet = source_context_snippet(
+                    &passage.source,
+                    err.span.start,
+                    err.span.end,
+                );
                 eprintln!(
-                    "warning: parse error in passage '{}': {}",
-                    passage.name, err
+                    "warning: parse error in passage '{}': {}\n  {}",
+                    passage.name, err, snippet
                 );
                 parse_errors += 1;
             }
