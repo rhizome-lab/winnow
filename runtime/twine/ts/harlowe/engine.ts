@@ -266,9 +266,10 @@ export class HarloweEngine {
     return m;
   }
 
-  /** `(passage:)` — returns the current passage name. */
-  current_passage(): string {
-    return this.rt.Navigation.current();
+  /** `(passage:)` — returns the current (or named) passage info. */
+  current_passage(name?: string): any {
+    const title = name ?? this.rt.Navigation.current();
+    return { name: title, source: "", tags: [] };
   }
 
   // --- Meta queries ---
@@ -898,12 +899,18 @@ function nonePass(...args: any[]): boolean {
   if (typeof pred !== "function") return false;
   return !items.some(pred);
 }
+function altered(...args: any[]): any[] {
+  const fn = args[0];
+  const items = args.slice(1).flat();
+  if (typeof fn !== "function") return items;
+  return items.map(fn);
+}
 
 export const Collections = {
   sorted, reversed, rotated, shuffled, count, range,
   find, joined, subarray, substring, lowercase, uppercase,
   datanames, datavalues, dataentries,
-  somePass, allPass, nonePass,
+  somePass, allPass, nonePass, altered,
 } as const;
 
 // --- Color operations (pure) ---

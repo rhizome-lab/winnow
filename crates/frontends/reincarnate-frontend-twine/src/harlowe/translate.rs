@@ -1064,6 +1064,8 @@ impl TranslateCtx {
                         elem_ty,
                         pred_return_ty,
                     )
+                } else if let ExprKind::ViaLambda(body) = &pred_expr.kind {
+                    self.build_lambda_callback("it", Some(body), elem_ty, pred_return_ty)
                 } else {
                     self.lower_expr(pred_expr)
                 }
@@ -1722,6 +1724,10 @@ impl TranslateCtx {
             ExprKind::Str(s) => self.fb.const_string(s.as_str()),
             ExprKind::Bool(b) => self.fb.const_bool(*b),
             ExprKind::It => {
+                // Inside a `via` lambda, `it` is the closure parameter stored as "it".
+                if let Some(&alloc) = self.temp_vars.get("it") {
+                    return self.fb.load(alloc, Type::Dynamic);
+                }
                 if let Some(ref target) = self.set_target.clone() {
                     self.lower_expr(target)
                 } else {
@@ -1797,6 +1803,10 @@ impl TranslateCtx {
             // dynamic macro args) where no context type is available.
             ExprKind::Lambda { var, filter } => {
                 self.build_lambda_callback(var, filter.as_deref(), Type::Dynamic, Type::Dynamic)
+            }
+            ExprKind::ViaLambda(body) => {
+                // `via expr` — transform lambda: `(it) => expr`.
+                self.build_lambda_callback("it", Some(body), Type::Dynamic, Type::Dynamic)
             }
             ExprKind::Error(_) => self.fb.const_bool(false),
         }

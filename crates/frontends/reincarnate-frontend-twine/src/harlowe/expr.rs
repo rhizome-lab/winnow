@@ -472,6 +472,18 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
                     return parse_prefix(lexer);
                 }
             }
+            // `via expr` — Harlowe transform lambda used in `(altered:)`.
+            // Wraps the following expression; `it`/`its` inside `expr` refers
+            // to the current element being transformed.
+            if s == "via" {
+                let span_start = tok.span.start;
+                let body = parse_prec(lexer, Prec::Or);
+                let span = Span::new(span_start, body.span.end);
+                return Expr {
+                    kind: ExprKind::ViaLambda(Box::new(body)),
+                    span,
+                };
+            }
             // Try to interpret as ordinal (handles `last`, `length`, `lasttolast`, etc.)
             if let Some(expr) = interpret_property_string(&s, tok.span) {
                 return expr;

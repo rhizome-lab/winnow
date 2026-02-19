@@ -201,6 +201,9 @@ pub enum ExprKind {
         var: String,
         filter: Option<Box<Expr>>,
     },
+    /// `via` transform lambda: `via expr` — transforms each element.
+    /// Uses `it`/`its` inside `expr` to refer to the current element.
+    ViaLambda(Box<Expr>),
     /// Spread expression: `...$arr` or `...(expr)`.
     /// Expands an iterable into the surrounding argument list.
     Spread(Box<Expr>),
