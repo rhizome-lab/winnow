@@ -40,6 +40,12 @@ pub enum TokenKind {
     True,
     False,
     It,
+    /// `each` — lambda binder in `(for:)` loops
+    Each,
+    /// `where` — filter clause in lambda expressions
+    Where,
+    /// `...` — spread operator (expands iterables in `(for:)` args)
+    Ellipsis,
 
     // Punctuation
     Plus,
@@ -248,6 +254,27 @@ impl<'a> ExprLexer<'a> {
                 }
             }
             b'#' => self.lex_color_hash(start),
+            b'.' => {
+                // Check for `...` (ellipsis / spread).
+                // self.pos is at the first dot (not yet consumed), so check
+                // pos+1 and pos+2 for the second and third dots.
+                if self.pos + 2 < self.bytes.len()
+                    && self.bytes[self.pos + 1] == b'.'
+                    && self.bytes[self.pos + 2] == b'.'
+                {
+                    self.pos += 3; // consume all three dots
+                    Token {
+                        kind: TokenKind::Ellipsis,
+                        span: self.span(start),
+                    }
+                } else {
+                    self.advance();
+                    Token {
+                        kind: TokenKind::Error("unexpected '.'".to_string()),
+                        span: self.span(start),
+                    }
+                }
+            }
             c if c.is_ascii_alphabetic() => self.lex_ident_or_keyword(start),
             _ => {
                 self.advance();
@@ -470,6 +497,8 @@ impl<'a> ExprLexer<'a> {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "it" => TokenKind::It,
+            "each" => TokenKind::Each,
+            "where" => TokenKind::Where,
             "last" => TokenKind::Ident("last".to_string()),
             "length" => TokenKind::Ident("length".to_string()),
             _ => TokenKind::Ident(word.to_string()),

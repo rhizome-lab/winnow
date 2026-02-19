@@ -383,6 +383,52 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
                 span: tok.span,
             }
         }
+        TokenKind::Each => {
+            // Lambda: `each _var` or `each _var where condition`
+            let start = tok.span.start;
+            lexer.next_token(); // consume `each`
+            // Expect a temp variable (_var)
+            let var_tok = lexer.peek_token();
+            let var_name = if let TokenKind::TempVar(ref name) = var_tok.kind {
+                let n = name.clone();
+                lexer.next_token(); // consume _var
+                n
+            } else {
+                return Expr {
+                    kind: ExprKind::Error(format!(
+                        "expected temp variable after `each`, got {:?}",
+                        var_tok.kind
+                    )),
+                    span: var_tok.span,
+                };
+            };
+            // Optional `where condition`
+            let filter = if matches!(lexer.peek_token().kind, TokenKind::Where) {
+                lexer.next_token(); // consume `where`
+                Some(Box::new(parse_prec(lexer, Prec::Or)))
+            } else {
+                None
+            };
+            let span = Span::new(start, lexer.pos());
+            Expr {
+                kind: ExprKind::Lambda {
+                    var: var_name,
+                    filter,
+                },
+                span,
+            }
+        }
+        TokenKind::Ellipsis => {
+            // Spread: `...expr`
+            let start = tok.span.start;
+            lexer.next_token(); // consume `...`
+            let inner = parse_prec(lexer, Prec::Unary);
+            let span = Span::new(start, inner.span.end);
+            Expr {
+                kind: ExprKind::Spread(Box::new(inner)),
+                span,
+            }
+        }
         TokenKind::Eof => Expr {
             kind: ExprKind::Error("unexpected end of expression".to_string()),
             span: tok.span,

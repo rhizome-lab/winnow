@@ -187,6 +187,15 @@ pub enum ExprKind {
         target: Box<Expr>,
         value: Box<Expr>,
     },
+    /// Lambda expression: `each _var` or `each _var where condition`.
+    /// Used as the first argument to `(for:)`.
+    Lambda {
+        var: String,
+        filter: Option<Box<Expr>>,
+    },
+    /// Spread expression: `...$arr` or `...(expr)`.
+    /// Expands an iterable into the surrounding argument list.
+    Spread(Box<Expr>),
     /// Error placeholder for malformed expressions.
     Error(String),
 }

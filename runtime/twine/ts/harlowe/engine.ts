@@ -103,6 +103,20 @@ export class HarloweEngine {
     return contains(collection, value);
   }
 
+  // --- Iteration ---
+
+  /** `(for: each _item, ...iterable)[hook]` — iterate over items, calling `cb(h, item)` for each.
+   *  The context `h` is passed through so the callback can emit content. */
+  for_each(iterable: any, cb: (h: HarloweContext, item: any) => void, h: HarloweContext): void {
+    const arr: any[] = Array.isArray(iterable) ? iterable
+      : iterable instanceof Set ? Array.from(iterable)
+      : iterable instanceof Map ? Array.from(iterable.values())
+      : [];
+    for (const item of arr) {
+      cb(h, item);
+    }
+  }
+
   // --- Value macros ---
 
   /** `(random: min, max)` */

@@ -478,6 +478,7 @@ impl TranslateCtx {
 
             // Control flow — emit directly (no value)
             "if" | "unless" => { self.emit_if(mac); }
+            "for" => { self.emit_for(mac); }
 
             // Navigation (side effect)
             "goto" | "go-to" => self.lower_goto(mac),
@@ -588,6 +589,10 @@ impl TranslateCtx {
             // Control flow — not yet supported as value child
             "if" | "unless" => {
                 self.emit_if(mac);
+                None
+            }
+            "for" => {
+                self.emit_for(mac);
                 None
             }
 
@@ -771,6 +776,114 @@ impl TranslateCtx {
 
         self.fb.switch_to_block(next_else);
         self.emit_if_clauses(clauses, index + 1, merge_block);
+    }
+
+    // ── (for:) ─────────────────────────────────────────────────────
+
+    fn emit_for(&mut self, mac: &MacroNode) {
+        let hook = match &mac.hook {
+            Some(h) => h.clone(),
+            None => return,
+        };
+
+        // First arg must be a lambda: `each _var [where cond]`
+        let (loop_var, filter) = if let Some(first) = mac.args.first() {
+            match &first.kind {
+                ExprKind::Lambda { var, filter } => (var.clone(), filter.as_deref().cloned()),
+                _ => {
+                    self.lower_unknown_macro(mac);
+                    return;
+                }
+            }
+        } else {
+            self.lower_unknown_macro(mac);
+            return;
+        };
+
+        // Remaining args are the iterable values (each optionally wrapped in Spread).
+        // A single `...array` arg → use the array directly as the iterable.
+        // Multiple values → wrap in an array via Harlowe.Engine.array.
+        let item_args: Vec<ValueId> = mac.args[1..]
+            .iter()
+            .map(|a| match &a.kind {
+                ExprKind::Spread(inner) => self.lower_expr(inner),
+                _ => self.lower_expr(a),
+            })
+            .collect();
+
+        let iterable = if item_args.len() == 1 {
+            item_args[0]
+        } else if item_args.is_empty() {
+            // No items — nothing to iterate
+            return;
+        } else {
+            let name = self.fb.const_string("a");
+            let mut args = vec![name];
+            args.extend(item_args);
+            self.fb
+                .system_call("Harlowe.Engine", "value_macro", &args, Type::Dynamic)
+        };
+
+        // Build callback: (h: Context, _item: any) => void
+        let cb_name = self.make_callback_name("for");
+        let cb_ref = self.build_for_callback(&cb_name, &loop_var, filter.as_ref(), &hook);
+
+        // Pass h so the runtime can forward it to the callback
+        let h = self.fb.param(0);
+        self.fb.system_call(
+            "Harlowe.Engine",
+            "for_each",
+            &[iterable, cb_ref, h],
+            Type::Void,
+        );
+    }
+
+    fn build_for_callback(
+        &mut self,
+        name: &str,
+        loop_var: &str,
+        filter: Option<&Expr>,
+        body: &[Node],
+    ) -> ValueId {
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic, Type::Dynamic],
+            return_ty: Type::Void,
+            defaults: vec![],
+            has_rest_param: false,
+        };
+        let mut cb_fb = FunctionBuilder::new(name, sig, Visibility::Public);
+        let h_param = cb_fb.param(0);
+        cb_fb.name_value(h_param, "h".to_string());
+        let item_param = cb_fb.param(1);
+
+        let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
+        let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        // Store the loop variable param into an alloc so temp var accesses work.
+        let alloc = self.fb.alloc(Type::Dynamic);
+        self.fb.name_value(alloc, format!("_{loop_var}"));
+        self.fb.store(alloc, item_param);
+        self.temp_vars.insert(loop_var.to_string(), alloc);
+
+        // If a `where` filter was given, skip items that don't pass it.
+        if let Some(filter_expr) = filter {
+            let cond = self.lower_expr(filter_expr);
+            let body_block = self.fb.create_block();
+            let skip_block = self.fb.create_block();
+            self.fb.br_if(cond, body_block, &[], skip_block, &[]);
+            self.fb.switch_to_block(skip_block);
+            self.fb.ret(None);
+            self.fb.switch_to_block(body_block);
+        }
+
+        self.emit_content(body);
+        self.fb.ret(None);
+
+        let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
+        self.temp_vars = saved_temps;
+
+        self.callbacks.push(cb_fb.build());
+        self.fb.global_ref(name, Type::Dynamic)
     }
 
     // ── (goto:) ────────────────────────────────────────────────────
@@ -1282,7 +1395,11 @@ impl TranslateCtx {
                 )
             }
             ExprKind::Paren(inner) => self.lower_expr(inner),
-            ExprKind::Error(_) => self.fb.const_bool(false),
+            // Spread and Lambda should only appear as (for:) arguments, not as
+            // standalone expressions. Lower the inner value for Spread, and
+            // emit a placeholder for Lambda if encountered unexpectedly.
+            ExprKind::Spread(inner) => self.lower_expr(inner),
+            ExprKind::Lambda { .. } | ExprKind::Error(_) => self.fb.const_bool(false),
         }
     }
 
