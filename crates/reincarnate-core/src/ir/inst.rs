@@ -164,6 +164,12 @@ pub enum Op {
         func: String,
         args: Vec<ValueId>,
     },
+    /// Create a closure: packages a function with captured outer-scope values.
+    /// `captures` are bound to the function's capture params (in declaration order).
+    MakeClosure {
+        func: String,
+        captures: Vec<ValueId>,
+    },
     /// Indirect call through a value (function pointer / closure).
     CallIndirect {
         callee: ValueId,

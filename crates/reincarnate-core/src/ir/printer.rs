@@ -480,6 +480,14 @@ impl fmt::Display for Function {
                         fmt_value(*val, f)?;
                     }
 
+                    Op::MakeClosure { func, captures } => {
+                        write!(f, "make_closure {func:?}")?;
+                        for cap in captures {
+                            write!(f, ", ")?;
+                            fmt_value(*cap, f)?;
+                        }
+                    }
+
                     Op::GlobalRef(name) => {
                         write!(f, "global_ref {name:?}")?;
                     }

@@ -491,6 +491,7 @@ fn build_resume_function(
         entry,
         coroutine: None, // No longer a coroutine after lowering.
         value_names: std::collections::HashMap::new(),
+        capture_params: Vec::new(),
     }
 }
 

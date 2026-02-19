@@ -21,6 +21,23 @@ pub enum Visibility {
     Protected,
 }
 
+/// How a variable is captured in a closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CaptureMode {
+    /// Snapshot the value at closure-creation time.
+    ByValue,
+    /// Capture by reference (mutable binding shared with the outer scope).
+    ByRef,
+}
+
+/// A capture parameter declared on a closure function.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureParam {
+    pub name: String,
+    pub ty: Type,
+    pub mode: CaptureMode,
+}
+
 /// What kind of method a function represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum MethodKind {
@@ -59,6 +76,12 @@ pub struct Function {
     /// Optional debug names for values (from source-level variable names).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub value_names: HashMap<ValueId, String>,
+    /// Capture parameters for closure functions (empty for non-closures).
+    ///
+    /// In the entry block, capture params are appended after the regular
+    /// `sig.params`. Use [`FunctionBuilder::capture_param`] to access them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capture_params: Vec<CaptureParam>,
 }
 
 impl Function {

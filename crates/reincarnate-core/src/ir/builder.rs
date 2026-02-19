@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::entity::PrimaryMap;
 
 use super::block::{Block, BlockId, BlockParam};
-use super::func::{FuncId, Function, Visibility};
+use super::func::{CaptureMode, CaptureParam, FuncId, Function, Visibility};
 use super::inst::{CastKind, CmpKind, Inst, Op};
 use super::func::MethodKind;
 use super::module::{ClassDef, EnumDef, EntryPoint, ExternalImport, Global, Import, Module, StructDef};
@@ -54,6 +54,7 @@ impl FunctionBuilder {
             entry,
             coroutine: None,
             value_names: HashMap::new(),
+            capture_params: Vec::new(),
         };
 
         Self {
@@ -131,6 +132,40 @@ impl FunctionBuilder {
     /// without belonging to a class.
     pub fn set_method_kind(&mut self, kind: MethodKind) {
         self.func.method_kind = kind;
+    }
+
+    /// Declare capture parameters for a closure function.
+    ///
+    /// Appends capture params after the regular `sig.params` in the entry block
+    /// and records them in `func.capture_params`. Returns their `ValueId`s in order.
+    /// Must be called before emitting any instructions.
+    pub fn add_capture_params(
+        &mut self,
+        captures: Vec<(String, Type, CaptureMode)>,
+    ) -> Vec<ValueId> {
+        let mut values = Vec::with_capacity(captures.len());
+        for (name, ty, mode) in captures {
+            let value = self.func.value_types.push(ty.clone());
+            self.func.blocks[self.func.entry].params.push(BlockParam {
+                value,
+                ty: ty.clone(),
+            });
+            self.func.value_names.insert(value, name.clone());
+            self.func.capture_params.push(CaptureParam { name, ty, mode });
+            values.push(value);
+        }
+        values
+    }
+
+    /// Get the `ValueId` for a capture parameter by index.
+    ///
+    /// Capture params follow regular params in the entry block.
+    ///
+    /// # Panics
+    /// Panics if `index` is out of range.
+    pub fn capture_param(&self, index: usize) -> ValueId {
+        let regular = self.func.sig.params.len();
+        self.func.blocks[self.func.entry].params[regular + index].value
     }
 
     /// Attach a debug name to a value (from source-level variable/parameter names).
@@ -427,6 +462,21 @@ impl FunctionBuilder {
             Op::Call {
                 func: func.into(),
                 args: args.to_vec(),
+            },
+            ret_ty,
+        )
+    }
+
+    pub fn make_closure(
+        &mut self,
+        func: impl Into<String>,
+        captures: &[ValueId],
+        ret_ty: Type,
+    ) -> ValueId {
+        self.emit(
+            Op::MakeClosure {
+                func: func.into(),
+                captures: captures.to_vec(),
             },
             ret_ty,
         )

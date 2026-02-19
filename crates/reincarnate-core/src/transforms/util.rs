@@ -101,6 +101,7 @@ pub fn value_operands(op: &Op) -> Vec<ValueId> {
         Op::CoroutineCreate { args, .. } => args.clone(),
         Op::CoroutineResume(v) => vec![*v],
         Op::GlobalRef(_) => vec![],
+        Op::MakeClosure { captures, .. } => captures.clone(),
     }
 }
 
@@ -247,6 +248,11 @@ pub fn substitute_values_in_op(op: &mut Op, subst: &HashMap<ValueId, ValueId>) {
         }
         Op::CoroutineResume(v) => sub(v),
         Op::GlobalRef(_) => {}
+        Op::MakeClosure { captures, .. } => {
+            for c in captures {
+                sub(c);
+            }
+        }
     }
 }
 

@@ -623,7 +623,8 @@ fn generate_constraints(
                 | Op::TupleInit(_)
                 | Op::Yield(_)
                 | Op::CoroutineCreate { .. }
-                | Op::CoroutineResume(_) => {}
+                | Op::CoroutineResume(_)
+                | Op::MakeClosure { .. } => {}
             }
         }
     }

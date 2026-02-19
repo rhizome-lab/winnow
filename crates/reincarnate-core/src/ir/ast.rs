@@ -121,6 +121,12 @@ pub enum Expr {
     PostIncrement(Box<Expr>),
     /// Spread: `...expr` (in arrays, objects, and call arguments).
     Spread(Box<Expr>),
+    /// Closure value: a function packaged with its captured outer-scope values.
+    /// `captures` are bound to the function's capture params in declaration order.
+    MakeClosure {
+        func: String,
+        captures: Vec<Expr>,
+    },
 }
 
 /// Binary arithmetic/bitwise operators.

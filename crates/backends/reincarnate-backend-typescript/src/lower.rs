@@ -287,6 +287,12 @@ fn lower_expr(expr: &Expr, ctx: &LowerCtx) -> JsExpr {
         Expr::PostIncrement(inner) => JsExpr::PostIncrement(Box::new(lower_expr(inner, ctx))),
 
         Expr::Spread(inner) => JsExpr::Spread(Box::new(lower_expr(inner, ctx))),
+
+        Expr::MakeClosure { .. } => {
+            // Phase 1 stub: full capture wiring is implemented when frontends
+            // start emitting Op::MakeClosure. This path is not reachable today.
+            todo!("MakeClosure lowering: wire capture params to JsExpr::ArrowFunction")
+        }
     }
 }
 

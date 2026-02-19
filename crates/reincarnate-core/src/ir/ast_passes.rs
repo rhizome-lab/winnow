@@ -1049,6 +1049,11 @@ fn accumulate_reads_expr(expr: &Expr, counts: &mut HashMap<String, usize>) {
                 accumulate_reads_expr(e, counts);
             }
         }
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                accumulate_reads_expr(c, counts);
+            }
+        }
     }
 }
 
@@ -1096,6 +1101,7 @@ fn expr_has_side_effects(expr: &Expr) -> bool {
         Expr::StructInit { fields, .. } => {
             fields.iter().any(|(_, v)| expr_has_side_effects(v))  // closure needed: tuple destructure
         }
+        Expr::MakeClosure { captures, .. } => captures.iter().any(expr_has_side_effects),
     }
 }
 
@@ -1310,6 +1316,9 @@ fn count_var_reads_in_expr(expr: &Expr, name: &str) -> usize {
             .map(|(_, v)| count_var_reads_in_expr(v, name))
             .sum(),
         Expr::Yield(v) => v.as_ref().map_or(0, |e| count_var_reads_in_expr(e, name)),
+        Expr::MakeClosure { captures, .. } => {
+            captures.iter().map(|c| count_var_reads_in_expr(c, name)).sum()
+        }
     }
 }
 
@@ -1548,6 +1557,9 @@ fn substitute_var_in_expr(
         Expr::Yield(v) => v
             .as_mut()
             .is_some_and(|e| substitute_var_in_expr(e, name, replacement)),
+        Expr::MakeClosure { captures, .. } => captures
+            .iter_mut()
+            .any(|c| substitute_var_in_expr(c, name, replacement)),
     }
 }
 
@@ -2505,6 +2517,7 @@ fn expr_has_any_var_ref(expr: &Expr) -> bool {
         }
         Expr::StructInit { fields, .. } => fields.iter().any(|(_, v)| expr_has_any_var_ref(v)),
         Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_has_any_var_ref(e)),
+        Expr::MakeClosure { captures, .. } => captures.iter().any(expr_has_any_var_ref),
     }
 }
 
@@ -2559,6 +2572,9 @@ fn expr_references_var(expr: &Expr, name: &str) -> bool {
             fields.iter().any(|(_, v)| expr_references_var(v, name))
         }
         Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_references_var(e, name)),
+        Expr::MakeClosure { captures, .. } => {
+            captures.iter().any(|c| expr_references_var(c, name))
+        }
     }
 }
 
@@ -2882,6 +2898,11 @@ fn collect_names_in_expr(expr: &Expr, names: &mut std::collections::HashSet<Stri
         Expr::Yield(v) => {
             if let Some(e) = v {
                 collect_names_in_expr(e, names);
+            }
+        }
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                collect_names_in_expr(c, names);
             }
         }
     }
@@ -4036,6 +4057,11 @@ fn simplify_ternary_in_expr(expr: &mut Expr) {
                 simplify_ternary_in_expr(e);
             }
         }
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                simplify_ternary_in_expr(c);
+            }
+        }
     }
 
     // After recursion, check if this is a simplifiable ternary.
@@ -4269,6 +4295,9 @@ fn expr_references(expr: &Expr, name: &str) -> bool {
             fields.iter().any(|(_, v)| expr_references(v, name))
         }
         Expr::Yield(v) => v.as_ref().is_some_and(|e| expr_references(e, name)),
+        Expr::MakeClosure { captures, .. } => {
+            captures.iter().any(|c| expr_references(c, name))
+        }
     }
 }
 

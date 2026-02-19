@@ -1650,6 +1650,11 @@ impl<'a> EmitCtx<'a> {
             },
             Op::CoroutineResume(v) => Expr::CoroutineResume(Box::new(self.build_val(*v))),
 
+            Op::MakeClosure { func, captures } => Expr::MakeClosure {
+                func: func.clone(),
+                captures: captures.iter().map(|&c| self.build_val(c)).collect(),
+            },
+
             Op::GlobalRef(name) => Expr::GlobalRef(name.clone()),
             Op::Spread(v) => Expr::Spread(Box::new(self.build_val(*v))),
             Op::Copy(src) => self.build_val(*src),
