@@ -1736,7 +1736,19 @@ impl TranslateCtx {
             }
             ExprKind::TempVar(name) => self.get_or_load_temp(name),
             ExprKind::Ident(name) => {
-                self.fb.const_string(name.as_str())
+                // Harlowe keyword variables: special built-in values usable without ()
+                match name.as_str() {
+                    "visits" => self
+                        .fb
+                        .system_call("Harlowe.State", "current_visits", &[], Type::Dynamic),
+                    "time" => self
+                        .fb
+                        .system_call("Harlowe.State", "elapsed_time", &[], Type::Dynamic),
+                    "turns" => self
+                        .fb
+                        .system_call("Harlowe.State", "turns", &[], Type::Dynamic),
+                    _ => self.fb.const_string(name.as_str()),
+                }
             }
             ExprKind::ColorLiteral(color) => self.fb.const_string(color.as_str()),
             ExprKind::TimeLiteral(secs) => self.fb.const_float(*secs),

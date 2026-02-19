@@ -589,7 +589,7 @@ export class HarloweEngine {
   }
 
   /** `(scroll:)` — scroll to a named hook or the top of the page. */
-  scroll_macro(selector?: string): void {
+  scroll_macro(selector?: string, _hideSelector?: string): void {
     const container = this.story();
     if (!container) return;
     if (selector) {
@@ -637,7 +637,7 @@ export class HarloweEngine {
   }
 
   /** `(link-fullscreen:)` — link that toggles browser fullscreen. */
-  link_fullscreen(enterText: string, exitText?: string): void {
+  link_fullscreen(enterText: string, exitText?: string, _blockedText?: string): void {
     const doc = this.doc();
     const link = doc.createElement("tw-link");
     link.textContent = document.fullscreenElement ? (exitText ?? String(enterText)) : String(enterText);

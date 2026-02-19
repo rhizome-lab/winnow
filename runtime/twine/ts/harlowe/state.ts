@@ -75,6 +75,22 @@ export class HarloweState implements SaveableState {
     return this.history.peek();
   }
 
+  /** `visits` keyword — visit count for the current passage. */
+  current_visits(): number {
+    const cur = this.history.peek();
+    return cur ? this.history.countVisits(cur) : 0;
+  }
+
+  /** `time` keyword — milliseconds since the story started (stub; returns 0). */
+  elapsed_time(): number {
+    return 0;
+  }
+
+  /** `turns` keyword — number of passage transitions so far. */
+  turns(): number {
+    return this.history.length;
+  }
+
   historyTitles(): string[] {
     return this.history.titles();
   }
