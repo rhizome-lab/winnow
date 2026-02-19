@@ -103,6 +103,7 @@ generic unknown-call spam.
 
 ## Future
 
+- [ ] **IR-level closure representation** — `MethodKind::Closure` exists as a tag but captures are implicit (lexical scoping in TS handles it today). Design: `Op::MakeClosure { func: FuncId, captures: Vec<(ValueId, CaptureMode)> }` with `CaptureMode` = `ByValue | ByRef`; closure function gets capture params prepended to its signature. Also needed for correct DCE (currently can't see that a closure body keeps an outer-scope value live). **Prerequisite for Rust backend AND for correct SugarCube `<<capture>>` semantics** — without explicit capture lists, the SugarCube frontend's lift-then-inline round-trip can't model captured temp vars (outer-scope ValueIds are inaccessible from a lifted function). `<<capture _i>>` maps directly: snapshot `_i` → `ValueId`, any `Op::MakeClosure` inside the block lists it as a `ByValue` capture.
 - [ ] Rust codegen backend (emit `.rs` files from typed IR — **blocked on multi-typed locals**)
 - [ ] wgpu + winit renderer system implementation
 - [ ] Web Audio system implementation
