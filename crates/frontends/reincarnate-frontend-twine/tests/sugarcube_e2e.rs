@@ -51,7 +51,7 @@ fn translate_all_passages(html: &str) -> (usize, usize, usize) {
     for passage in &story.passages {
         let ast = sugarcube::parse_passage(&passage.source);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            sugarcube::translate::translate_passage(&passage.name, &ast)
+            sugarcube::translate::translate_passage(&passage.name, &ast, None)
         }));
         match result {
             Ok(tr) => {
@@ -59,7 +59,7 @@ fn translate_all_passages(html: &str) -> (usize, usize, usize) {
                 // Also translate widgets to catch panics there
                 for (name, body, source) in &tr.widgets {
                     let wr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        sugarcube::translate::translate_widget(name, body, source)
+                        sugarcube::translate::translate_widget(name, body, source, None)
                     }));
                     if wr.is_err() {
                         translate_panics += 1;

@@ -104,7 +104,11 @@ impl TwineFrontend {
             );
 
             let func_name = translate::passage_func_name(&passage.name);
-            let result = translate::translate_passage(&passage.name, &ast);
+            let result = translate::translate_passage(
+                &passage.name,
+                &ast,
+                Some(&custom_macro_registry),
+            );
             let func_id = mb.add_function(result.func);
 
             // Register passage name → function name mapping for the passage registry
@@ -123,8 +127,12 @@ impl TwineFrontend {
 
             // Translate extracted widgets as separate functions
             for (widget_name, widget_body, widget_source) in &result.widgets {
-                let (widget_func, widget_callbacks) =
-                    translate::translate_widget(widget_name, widget_body, widget_source);
+                let (widget_func, widget_callbacks) = translate::translate_widget(
+                    widget_name,
+                    widget_body,
+                    widget_source,
+                    Some(&custom_macro_registry),
+                );
                 let widget_func_name = format!("widget_{widget_name}");
                 mb.add_passage_name(widget_name.clone(), widget_func_name);
                 mb.add_function(widget_func);

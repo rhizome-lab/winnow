@@ -13,7 +13,7 @@
 //! - `SugarCube.Widget` — unknown macro invocation (widget call)
 //! - `SugarCube.Engine` — engine operations (eval, clone, etc.)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast as js;
@@ -52,10 +52,22 @@ pub struct TranslateCtx {
     pub setter_callbacks: Vec<Function>,
     /// The full passage source text (for slicing Expr byte ranges).
     source: String,
+    /// Set of macro names that have been overridden by the game via `Macro.add()`.
+    /// When a built-in macro name appears here, it is lowered as an unknown macro
+    /// (i.e. `SugarCube.Widget.call`) rather than using built-in lowering logic.
+    overridden_macros: HashSet<String>,
 }
 
 impl TranslateCtx {
     pub fn new(name: &str, source: &str) -> Self {
+        Self::new_with_overrides(name, source, HashSet::new())
+    }
+
+    pub fn new_with_overrides(
+        name: &str,
+        source: &str,
+        overridden_macros: HashSet<String>,
+    ) -> Self {
         let sig = FunctionSig {
             params: vec![],
             return_ty: Type::Void,
@@ -75,6 +87,7 @@ impl TranslateCtx {
             arrow_count: 0,
             setter_callbacks: Vec::new(),
             source: source.to_string(),
+            overridden_macros,
         }
     }
 
@@ -1475,6 +1488,10 @@ impl TranslateCtx {
     }
 
     pub fn lower_macro(&mut self, mac: &MacroNode) {
+        // Custom Macro.add() overrides shadow built-in lowering.
+        if self.overridden_macros.contains(mac.name.as_str()) {
+            return self.lower_unknown_macro(mac);
+        }
         match mac.name.as_str() {
             // Assignment macros
             "set" => self.lower_set(mac),
@@ -2301,9 +2318,16 @@ pub struct TranslateResult {
 }
 
 /// Translate a parsed passage AST into an IR Function.
-pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
+pub fn translate_passage(
+    name: &str,
+    ast: &PassageAst,
+    registry: Option<&super::custom_macros::CustomMacroRegistry>,
+) -> TranslateResult {
     let func_name = passage_func_name(name);
-    let mut ctx = TranslateCtx::new(&func_name, &ast.source);
+    let overrides = registry
+        .map(|r| r.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut ctx = TranslateCtx::new_with_overrides(&func_name, &ast.source, overrides);
 
     ctx.lower_nodes(&ast.body);
 
@@ -2320,9 +2344,17 @@ pub fn translate_passage(name: &str, ast: &PassageAst) -> TranslateResult {
 }
 
 /// Translate a widget body into an IR Function plus any auxiliary functions.
-pub fn translate_widget(name: &str, body: &[Node], source: &str) -> (Function, Vec<Function>) {
+pub fn translate_widget(
+    name: &str,
+    body: &[Node],
+    source: &str,
+    registry: Option<&super::custom_macros::CustomMacroRegistry>,
+) -> (Function, Vec<Function>) {
     let func_name = format!("widget_{name}");
-    let mut ctx = TranslateCtx::new(&func_name, source);
+    let overrides = registry
+        .map(|r| r.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut ctx = TranslateCtx::new_with_overrides(&func_name, source, overrides);
 
     // Initialize _args from State
     let args_name = ctx.fb.const_string("_args");
@@ -2368,7 +2400,7 @@ mod tests {
     fn translate(source: &str) -> Function {
         let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
-        let result = translate_passage("test", &ast);
+        let result = translate_passage("test", &ast, None);
         result.func
     }
 
@@ -2427,7 +2459,7 @@ mod tests {
         } else {
             panic!("expected Macro node, got: {:?}", ast.body[0].kind);
         }
-        let result = translate_passage("test", &ast);
+        let result = translate_passage("test", &ast, None);
         assert_eq!(result.widgets.len(), 1);
         assert_eq!(result.widgets[0].0, "myWidget");
     }
@@ -2437,7 +2469,7 @@ mod tests {
         let source = "<<run [1,2].forEach((x) => x + 1)>>";
         let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
-        let result = translate_passage("test", &ast);
+        let result = translate_passage("test", &ast, None);
 
         for cb in &result.setter_callbacks {
             for block in cb.blocks.values() {
@@ -2487,7 +2519,7 @@ mod tests {
         let source = "<<run [1,2].forEach(x => x + 1)>>";
         let ast = parser::parse(source, None);
         assert!(ast.errors.is_empty(), "parse errors: {:?}", ast.errors);
-        let result = translate_passage("test", &ast);
+        let result = translate_passage("test", &ast, None);
 
         let arrow_cbs: Vec<_> = result
             .setter_callbacks
