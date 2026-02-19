@@ -950,14 +950,24 @@ impl TranslateCtx {
         );
     }
 
-    /// Build a predicate callback for collection ops like (find:), (some-pass:), etc.
-    /// Signature: `(item: Dynamic) => Bool`
-    /// Binds `_var` to `item`, evaluates `filter_expr` (or returns `true` if no filter).
-    fn build_lambda_callback(&mut self, var: &str, filter: Option<&Expr>) -> ValueId {
+    /// Build a predicate/transform callback for collection ops.
+    ///
+    /// `param_ty` is the inferred element type of the collection (Dynamic if unknown).
+    /// `return_ty` is the callback return type (Bool for predicates, Dynamic for transforms).
+    ///
+    /// Binds `_var` to the item parameter and evaluates `filter_expr`, or returns
+    /// `true` (for Bool returns) / the item (for Dynamic returns) if no filter.
+    fn build_lambda_callback(
+        &mut self,
+        var: &str,
+        filter: Option<&Expr>,
+        param_ty: Type,
+        return_ty: Type,
+    ) -> ValueId {
         let cb_name = self.make_callback_name("lambda");
         let sig = FunctionSig {
-            params: vec![Type::Dynamic],
-            return_ty: Type::Bool,
+            params: vec![param_ty.clone()],
+            return_ty: return_ty.clone(),
             defaults: vec![],
             has_rest_param: false,
         };
@@ -968,7 +978,7 @@ impl TranslateCtx {
         let saved_temps = std::mem::take(&mut self.temp_vars);
 
         // Bind the loop variable to the item parameter.
-        let alloc = self.fb.alloc(Type::Dynamic);
+        let alloc = self.fb.alloc(param_ty);
         self.fb.name_value(alloc, format!("_{var}"));
         self.fb.store(alloc, item_param);
         self.temp_vars.insert(var.to_string(), alloc);
@@ -976,8 +986,14 @@ impl TranslateCtx {
         let result = if let Some(filter_expr) = filter {
             self.lower_expr(filter_expr)
         } else {
-            // No filter clause: pass all items (e.g. `each _x` without `where`).
-            self.fb.const_bool(true)
+            // No filter: pass all items.
+            match return_ty {
+                Type::Bool => self.fb.const_bool(true),
+                _ => {
+                    // Identity transform: return the item unchanged.
+                    self.fb.load(alloc, Type::Dynamic)
+                }
+            }
         };
         self.fb.ret(Some(result));
 
@@ -986,6 +1002,62 @@ impl TranslateCtx {
 
         self.callbacks.push(cb_fb.build());
         self.fb.global_ref(&cb_name, Type::Dynamic)
+    }
+
+    /// Infer the element type from a list of lowered collection values.
+    ///
+    /// If any value has type `Array(T)`, returns `T`. Otherwise returns `Dynamic`.
+    /// Used to give lambda parameters a more precise type than `Dynamic`.
+    fn infer_element_type(&self, item_vals: &[ValueId]) -> Type {
+        for &val in item_vals {
+            if let Type::Array(elem_ty) = self.fb.value_type(val) {
+                return *elem_ty;
+            }
+        }
+        Type::Dynamic
+    }
+
+    /// Lower a collection op whose first argument is a predicate lambda.
+    ///
+    /// Items (args[1..]) are lowered first so their types are known, then the
+    /// element type is inferred and the lambda is built with that param type.
+    fn lower_predicate_collection_op(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        pred_return_ty: Type,
+    ) -> ValueId {
+        // Lower items first to learn element type.
+        let item_vals: Vec<ValueId> = args
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .map(|a| self.lower_expr(a))
+            .collect();
+        let elem_ty = self.infer_element_type(&item_vals);
+
+        // Lower the predicate, inlining lambda type information if available.
+        let pred_val = match args.first() {
+            Some(pred_expr) => {
+                if let ExprKind::Lambda { var, filter } = &pred_expr.kind {
+                    self.build_lambda_callback(
+                        var,
+                        filter.as_deref(),
+                        elem_ty,
+                        pred_return_ty,
+                    )
+                } else {
+                    self.lower_expr(pred_expr)
+                }
+            }
+            None => self.fb.const_bool(true),
+        };
+
+        let n = self.fb.const_string(name);
+        let mut call_args = vec![n, pred_val];
+        call_args.extend(item_vals);
+        self.fb
+            .system_call("Harlowe.Engine", "collection_op", &call_args, Type::Dynamic)
     }
 
     fn build_for_callback(
@@ -1620,10 +1692,12 @@ impl TranslateCtx {
             // (for:) handles Spread explicitly before calling lower_expr.)
             ExprKind::Spread(inner) => self.lower_expr(inner),
             // Lambda: build a predicate callback `(item) => filter_expr`.
-            // This covers lambdas used as arguments to (find:), (some-pass:), etc.
-            // (for:) handles its own Lambda before ever calling lower_expr on it.
+            // When a lambda appears as an argument to a predicate collection op,
+            // `lower_predicate_collection_op` handles it directly with inferred types.
+            // This fallback handles lambdas in other contexts (e.g. `(altered:)`,
+            // dynamic macro args) where no context type is available.
             ExprKind::Lambda { var, filter } => {
-                self.build_lambda_callback(var, filter.as_deref())
+                self.build_lambda_callback(var, filter.as_deref(), Type::Dynamic, Type::Dynamic)
             }
             ExprKind::Error(_) => self.fb.const_bool(false),
         }
@@ -1751,6 +1825,20 @@ impl TranslateCtx {
     // ── Inline macro calls in expressions ──────────────────────────
 
     fn lower_call(&mut self, name: &str, args: &[Expr]) -> ValueId {
+        // Predicate collection ops: lower items FIRST to infer element type, then
+        // build the lambda callback with the inferred param type.
+        // This is IR-level type inference — the lambda's FunctionSig gets the right
+        // param type regardless of backend.
+        match name {
+            "find" | "some-pass" | "all-pass" | "none-pass" | "count" => {
+                return self.lower_predicate_collection_op(name, args, Type::Bool);
+            }
+            "altered" => {
+                return self.lower_predicate_collection_op(name, args, Type::Dynamic);
+            }
+            _ => {}
+        }
+
         let lowered_args: Vec<ValueId> = args.iter().map(|a| self.lower_expr(a)).collect();
 
         match name {
@@ -1794,9 +1882,8 @@ impl TranslateCtx {
                     Type::Dynamic,
                 )
             }
-            "sorted" | "reversed" | "rotated" | "shuffled" | "count" | "range" | "find"
-            | "altered" | "folded" | "interlaced" | "repeated" | "joined" | "some-pass"
-            | "all-pass" | "none-pass" | "subarray" | "substring" | "lowercase"
+            "sorted" | "reversed" | "rotated" | "shuffled" | "range" | "folded"
+            | "interlaced" | "repeated" | "joined" | "subarray" | "substring" | "lowercase"
             | "uppercase" | "datanames" | "datavalues" | "dataentries" => {
                 let n = self.fb.const_string(name);
                 let mut call_args = vec![n];
@@ -2013,7 +2100,8 @@ You're at the **plaza**
     fn test_lambda_in_find_builds_callback() {
         use reincarnate_core::ir::inst::Op;
         // (find: each _x where _x > 5, ...$arr) should produce:
-        // - a lambda callback with one Dynamic param returning Dynamic
+        // - a lambda callback: Dynamic param (since $arr is Dynamic, elem type unknown)
+        //   but Bool return type (inferred because `find` is a predicate op)
         // - a collection_op("find", ...) syscall in the main func
         let ast = parser::parse("(set: $found to (find: each _x where _x > 5, ...$arr))");
         let result = translate_passage("test_lambda_find", &ast, "");

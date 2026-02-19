@@ -16,6 +16,8 @@ Reincarnate is a legacy software lifting framework. It extracts and transforms a
 - **High-performance, maintainable emitted code** — The output is compiled TypeScript (or Rust) functions, not a bundled interpreter. Shipped output should be readable, optimisable, and auditable.
 - **Multiple backends** — The IR + transform pipeline is backend-agnostic. TypeScript is the current backend; Rust codegen is planned. Design choices that couple output to a single runtime target are wrong.
 
+**Corollary: type inference belongs in the IR, not in a backend.** When inferring types (lambda param types, return types, collection element types), that work must happen in the frontend translator, the IR transform passes, or a dedicated inference pass — not inside the TypeScript printer or any other backend-specific code. A backend may *optimize display* (e.g. omit `: any` annotations when TypeScript can contextually infer), but it must never be the *source of truth* for what type a value has. The IR's `FunctionSig` / `Type` annotations are the record of what we know — backends read from that record, they don't create it.
+
 **Corollary: never suggest bundling an existing interpreter as the lift strategy.** Tools like inkjs, Parchment, renpyweb, or libqsp-WASM produce running games but not emitted code. They are fine for one-off deployment but are not the reincarnate approach. When an engine already has a web interpreter, note it as a "quick deploy" alternative — not as the goal.
 
 ### The "Lift" Strategy
