@@ -37,6 +37,10 @@ Reincarnate works on **bytecode and script**, not native code:
 
 **Triggers:** User corrects you, 2+ failed attempts, "aha" moment, framework quirk discovered → document **before** proceeding. Never describe a bug in conversation and move on — write it to TODO.md first, then continue working.
 
+**Something unexpected is a signal, not noise.** When a result is surprising — output that's 12x larger than input, a file that shouldn't contain JS but does, a number that's off by an order of magnitude — stop immediately and ask why. Don't accept the anomaly and move on. Surprising results are almost always early evidence of a bug. Treating them as "close enough" or "probably fine" is how bugs stay hidden for sessions. Investigate before proceeding.
+
+**Update CLAUDE.md the moment you find a systematic gap.** If a bug reveals that the existing rules didn't prevent a class of mistake, add the rule immediately — not after the fix, not at the end of the session. The rule is only useful if it's written before the next similar mistake can happen.
+
 **Do the work properly.** When asked to analyze X, actually read X - don't synthesize from conversation.
 
 ## Behavioral Patterns
@@ -119,6 +123,8 @@ After editing multiple files, run the full check once — not after each edit. F
 **Minimize file churn.** When editing a file, read it once, plan all changes, and apply them in one pass. Avoid read-edit-build-fail-read-fix cycles by thinking through the complete change before starting.
 
 **Commit after every phase.** When a plan has multiple steps, commit after each step that passes `cargo clippy && cargo test`. Do not accumulate changes across phases. Do not defer commits to the end. Do not rationalize skipping commits because changes are "intertwined" or "small". Each commit should represent one logical unit of progress. This is non-negotiable.
+
+**Use `bun` for JavaScript/TypeScript scripting tasks** (e.g. inspecting HTML files, running quick JS snippets). `bun` is available in the dev environment — use it instead of `node` or `python3`.
 
 **Use `normalize view` for structural exploration:**
 ```bash

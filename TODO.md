@@ -149,6 +149,8 @@ in runtime.json for any newly referenced but unimplemented functions.
 
 ## Twine Frontend
 
+- [ ] **Use a proper HTML parser for extraction** — `extract_tagged_blocks` uses manual string search which is fragile. The bug where `</script>` was preferred over an earlier `</style>` is one example of what hand-rolled HTML parsing gets wrong. Switch to `html5ever` or `scraper` crate for robust extraction of `<script id="...">` / `<style id="...">` blocks.
+
 - [ ] **Passage rendering strategy** — Implement `passage_rendering`
   manifest option (`auto`/`compiled`/`wikifier`). In `wikifier` mode,
   Rust emitter emits passage source as string constants instead of compiled

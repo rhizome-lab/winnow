@@ -154,14 +154,17 @@ fn extract_tagged_blocks(html: &str, id: &str) -> Vec<String> {
         // Find the end of the opening tag
         if let Some(tag_end) = html[abs_pos..].find('>') {
             let content_start = abs_pos + tag_end + 1;
-            // Find closing </script> or </style>
-            if let Some(close) = html[content_start..].find("</script>") {
-                blocks.push(html[content_start..content_start + close].to_string());
-                search_from = content_start + close;
-                continue;
-            }
-            if let Some(close) = html[content_start..].find("</style>") {
-                blocks.push(html[content_start..content_start + close].to_string());
+            // Find whichever closing tag (</script> or </style>) comes first.
+            // We must pick the minimum to avoid crossing into sibling blocks.
+            let rest = &html[content_start..];
+            let close = match (rest.find("</script>"), rest.find("</style>")) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+            if let Some(close) = close {
+                blocks.push(rest[..close].to_string());
                 search_from = content_start + close;
                 continue;
             }
@@ -290,5 +293,24 @@ mod tests {
 "#;
         let story = extract_story(html).unwrap();
         assert!(story.format_css.is_none());
+    }
+
+    /// Regression test: stylesheet block must not capture past </style> into a later </script>.
+    /// extract_tagged_blocks used to prefer </script> regardless of order, causing the entire
+    /// user-script block to be swept into user_styles when </script> appeared after </style>.
+    #[test]
+    fn stylesheet_block_stops_at_style_not_script() {
+        let html = r#"
+<tw-storydata name="S" startnode="1" format="SugarCube" format-version="2.0" ifid="X" hidden>
+<tw-passagedata pid="1" name="Start" tags="">Hi</tw-passagedata>
+</tw-storydata>
+<style id="twine-user-stylesheet" type="text/twine-css">body { color: red; }</style>
+<script id="twine-user-script" type="text/twine-javascript">window.setup = {};</script>
+"#;
+        let story = extract_story(html).unwrap();
+        assert_eq!(story.user_styles.len(), 1);
+        assert_eq!(story.user_styles[0], "body { color: red; }");
+        assert_eq!(story.user_scripts.len(), 1);
+        assert_eq!(story.user_scripts[0], "window.setup = {};");
     }
 }
