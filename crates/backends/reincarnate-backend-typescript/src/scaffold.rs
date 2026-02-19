@@ -440,10 +440,12 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
 fn emit_module_imports(module: &Module, out: &mut String, heuristic_entry: &mut Option<String>) {
     if module.classes.is_empty() {
         // Flat module — import public functions directly.
+        // Skip closures: they're inlined at their call site and not emitted as
+        // top-level exports.
         let public_funcs: Vec<_> = module
             .functions
             .values()
-            .filter(|f| f.visibility == Visibility::Public)
+            .filter(|f| f.visibility == Visibility::Public && f.method_kind != MethodKind::Closure)
             .collect();
         if public_funcs.is_empty() {
             return;

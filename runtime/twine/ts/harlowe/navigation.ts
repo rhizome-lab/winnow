@@ -5,8 +5,8 @@ import type { HarloweRuntime } from "./runtime";
 import type { DocumentFactory } from "../../../shared/ts/render-root";
 import { commitSave } from "../platform";
 
-/** Passage function type — receives h context, returns void. */
-export type PassageFn = (h: HarloweContext) => void;
+/** Passage function type — receives runtime and h context, returns void. */
+export type PassageFn = (rt: HarloweRuntime, h: HarloweContext) => void;
 
 export class HarloweNavigation {
   passages: Map<string, PassageFn> = new Map();
@@ -72,7 +72,7 @@ export class HarloweNavigation {
 
     const h = new HarloweContext(passage, this.rt, doc);
     try {
-      fn(h);
+      fn(this.rt, h);
     } catch (e) {
       console.error(`[harlowe] error in passage "${target}":`, e);
       passage.appendChild(doc.createTextNode(`Error in passage "${target}": ${e}`));
@@ -104,7 +104,7 @@ export class HarloweNavigation {
       return;
     }
     try {
-      fn(h);
+      fn(this.rt, h);
     } catch (e) {
       console.error(`[harlowe] error in displayed passage "${passage}":`, e);
       h.text(`Error in passage "${passage}": ${e}`);
