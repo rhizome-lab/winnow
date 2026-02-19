@@ -51,7 +51,14 @@ pub(super) fn try_rewrite(
 
                     // Split params: first n_reg are regular, last n_cap are captures.
                     let mut all_params = rewritten.params;
-                    let cap_params = all_params.split_off(n_reg); // capture params
+                    // Cap params are `any`-typed: Harlowe/SugarCube variables are
+                    // dynamically typed and captured initial values may differ from
+                    // the inferred type used inside the closure body.
+                    let cap_params: Vec<(String, reincarnate_core::ir::Type)> =
+                        all_params.split_off(n_reg)
+                            .into_iter()
+                            .map(|(name, _)| (name, reincarnate_core::ir::Type::Dynamic))
+                            .collect();
                     let reg_params = all_params;                   // regular params
 
                     // Inner arrow: takes regular params, body unchanged.
