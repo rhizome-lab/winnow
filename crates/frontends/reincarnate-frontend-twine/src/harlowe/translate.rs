@@ -278,11 +278,18 @@ impl TranslateCtx {
                     .system_call("Harlowe.H", "br", &[], Type::Dynamic);
             }
             NodeKind::NamedHook { name, body } => {
-                let name_val = self.fb.const_string(name);
-                let children = self.lower_children_as_values(body);
-                let mut args = vec![name_val];
-                args.extend(children);
-                self.fb.system_call("Harlowe.H", "namedHook", &args, Type::Dynamic);
+                if name.is_empty() {
+                    // Anonymous right-sided hook `[content]` — render body inline
+                    for node in body {
+                        self.emit_node(node);
+                    }
+                } else {
+                    let name_val = self.fb.const_string(name);
+                    let children = self.lower_children_as_values(body);
+                    let mut args = vec![name_val];
+                    args.extend(children);
+                    self.fb.system_call("Harlowe.H", "namedHook", &args, Type::Dynamic);
+                }
             }
         }
     }
@@ -337,11 +344,19 @@ impl TranslateCtx {
                 )
             }
             NodeKind::NamedHook { name, body } => {
-                let name_val = self.fb.const_string(name);
-                let children = self.lower_children_as_values(body);
-                let mut args = vec![name_val];
-                args.extend(children);
-                Some(self.fb.system_call("Harlowe.H", "namedHook", &args, Type::Dynamic))
+                if name.is_empty() {
+                    // Anonymous right-sided hook — emit body inline, no value
+                    for node in body {
+                        self.emit_node(node);
+                    }
+                    None
+                } else {
+                    let name_val = self.fb.const_string(name);
+                    let children = self.lower_children_as_values(body);
+                    let mut args = vec![name_val];
+                    args.extend(children);
+                    Some(self.fb.system_call("Harlowe.H", "namedHook", &args, Type::Dynamic))
+                }
             }
         }
     }

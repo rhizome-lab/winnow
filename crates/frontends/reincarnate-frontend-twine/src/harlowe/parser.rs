@@ -110,13 +110,9 @@ impl<'a> Parser<'a> {
                 if self.peek_at(1) == Some(b'[') {
                     self.parse_link()
                 } else {
-                    // Bare `[` not after a macro — treat as text
-                    let start = self.pos;
-                    self.pos += 1;
-                    Some(Node {
-                        kind: NodeKind::Text("[".to_string()),
-                        span: Span::new(start, self.pos),
-                    })
+                    // Bare `[content]` — a right-sided hook (possibly `[content]<name|`).
+                    // Parse as a nested hook so the `]` doesn't close an outer hook.
+                    self.parse_right_sided_hook()
                 }
             }
             b'$' => self.parse_var_interp(),
@@ -452,6 +448,55 @@ impl<'a> Parser<'a> {
 
         Some(Node {
             kind: NodeKind::Link(LinkNode { text, passage }),
+            span: Span::new(start, self.pos),
+        })
+    }
+
+    /// Parse a right-sided hook: `[content]` or `[content]<name|`.
+    ///
+    /// Bare `[` in Harlowe content starts a right-sided hook whose body runs to
+    /// the matching `]`.  The optional `<name|` suffix gives the hook a name so
+    /// it can be targeted by `?name` selectors and `(click:)` / `(replace:)`.
+    ///
+    /// We must recurse here so that a nested `]` does NOT close an outer hook.
+    fn parse_right_sided_hook(&mut self) -> Option<Node> {
+        let start = self.pos;
+        self.pos += 1; // consume `[`
+        let body = self.parse_body(true);
+        if self.peek() == Some(b']') {
+            self.pos += 1; // consume `]`
+        }
+
+        // Check for right-sided name: `<name|`
+        if self.peek() == Some(b'<') {
+            let saved = self.pos;
+            self.pos += 1; // consume `<`
+            let name_start = self.pos;
+            while self.pos < self.bytes.len()
+                && (self.bytes[self.pos].is_ascii_alphanumeric()
+                    || self.bytes[self.pos] == b'-'
+                    || self.bytes[self.pos] == b'_')
+            {
+                self.pos += 1;
+            }
+            let name = self.source[name_start..self.pos].to_string();
+            if self.peek() == Some(b'|') && !name.is_empty() {
+                self.pos += 1; // consume `|`
+                return Some(Node {
+                    kind: NodeKind::NamedHook { name, body },
+                    span: Span::new(start, self.pos),
+                });
+            }
+            // Not a valid `<name|` — backtrack
+            self.pos = saved;
+        }
+
+        // Unnamed hook: just render the body inline (wrap in an anonymous hook)
+        Some(Node {
+            kind: NodeKind::NamedHook {
+                name: String::new(),
+                body,
+            },
             span: Span::new(start, self.pos),
         })
     }
@@ -1153,6 +1198,36 @@ You're at the **entryway**
             assert!(matches!(&mac.clauses[0].body[0].kind, NodeKind::Text(t) if t == "`[Y]`"));
         } else {
             panic!("expected macro node");
+        }
+    }
+
+    #[test]
+    fn test_right_sided_hook_named() {
+        // [content]<name| should produce a NamedHook, not close an outer hook
+        let ast = parse("[Click me]<button|");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1);
+        if let NodeKind::NamedHook { name, body } = &ast.body[0].kind {
+            assert_eq!(name, "button");
+            assert_eq!(body.len(), 1);
+        } else {
+            panic!("expected NamedHook");
+        }
+    }
+
+    #[test]
+    fn test_right_sided_hook_does_not_close_outer() {
+        // [label]<name| inside an if-hook must NOT close the if-hook early
+        let ast =
+            parse("(if: $x is 1)[\\ \n    [Sneak]<sneak|\n](else:)[no]");
+        assert_eq!(ast.errors.len(), 0);
+        assert_eq!(ast.body.len(), 1, "else should be a clause, not a sibling");
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "if");
+            assert_eq!(m.clauses.len(), 1, "should have else clause");
+            assert_eq!(m.clauses[0].kind, "else");
+        } else {
+            panic!("expected if macro");
         }
     }
 
