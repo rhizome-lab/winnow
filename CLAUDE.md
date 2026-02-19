@@ -55,6 +55,7 @@ From ecosystem-wide session analysis:
 - **Don't hand-roll what a library does.** When a well-maintained crate exists for a standard (HTML entities, Unicode normalization, MIME types, etc.), use it. Hand-rolling a partial reimplementation is not "simpler" — it's an incomplete, untested copy of someone else's work that will silently produce wrong results. The question isn't "is my list complete?" — it's "why am I writing this at all?"
 - **Pre-existing bugs are bugs.** When investigating errors and you discover a bug that existed before your change, don't dismiss it as "pre-existing" or "not caused by my changes". Fix it if possible. If fixing it would derail the current task, add it to TODO.md as **critical priority** immediately — do not assume a future session will rediscover it.
 - **Match the target's semantics.** When reimplementing a runtime's behavior (SugarCube expression parsing, GML bytecode decoding, etc.), check what the original runtime actually does. Don't guess at semantics or invent a "simplified" version. Read the source if available (SugarCube is open source, UndertaleModTool is open source).
+- **Thread configuration through every consumer.** When a registry, config, or override table governs behavior (e.g. custom macro definitions), it must be propagated to every pipeline stage that makes decisions based on that namespace — not just the first stage that processes it. Ask: "is there a later stage that hardcodes decisions this data should influence?" If yes, thread it there too before the commit.
 
 ## Design Principles
 
