@@ -304,6 +304,9 @@ impl<'a> Parser<'a> {
     /// When `macro_expects_hook` is true, a leading `[[` inside the hook is
     /// parsed as a link rather than rejecting the entire bracket as a non-hook.
     fn try_parse_hook(&mut self, macro_expects_hook: bool) -> Option<Vec<Node>> {
+        // Skip spaces/tabs between macro close `)` and opening `[`.
+        // Harlowe allows `(if: $x) [hook]` as well as `(if: $x)[hook]`.
+        self.skip_whitespace();
         if self.peek() != Some(b'[') {
             return None;
         }
@@ -763,13 +766,7 @@ impl<'a> Parser<'a> {
                 b'(' if self.looks_like_macro() => break,
                 b'$' | b'<' | b'\n' => break,
                 b'[' => {
-                    if self.peek_at(1) == Some(b'[') {
-                        break; // `[[` link
-                    }
-                    if in_hook {
-                        break; // nested hook boundary
-                    }
-                    self.pos += 1;
+                    break; // `[` always starts a hook (or `[[` link); stop text here
                 }
                 b']' if in_hook => break,
                 b'_' if self.peek_at(1).is_some_and(|c| c.is_ascii_alphanumeric()) => break,
