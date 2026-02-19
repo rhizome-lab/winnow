@@ -160,7 +160,13 @@ fn try_rewrite_collection_op(
     if is_predicate_op(&name) && !remaining.is_empty() {
         if let Some(arrow) = try_inline_closure(&remaining[0], closures) {
             remaining[0] = arrow;
+        } else if let JsExpr::ArrowFunction { infer_param_types, .. } = &mut remaining[0] {
+            // Already-inlined arrow (from MakeClosure → closure rewrite with zero captures):
+            // enable contextual type inference so TypeScript omits `: any` on params.
+            *infer_param_types = true;
         }
+        // IIFE (captures present): TypeScript can still infer the inner arrow's param
+        // types from context, so no annotation fixup is needed.
     }
 
     Some(JsExpr::Call {

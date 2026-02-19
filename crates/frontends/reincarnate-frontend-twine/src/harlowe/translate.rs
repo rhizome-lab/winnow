@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use reincarnate_core::ir::{BlockId, CmpKind, Function, FunctionBuilder, FunctionSig, MethodKind, Type, ValueId, Visibility};
+use reincarnate_core::ir::{BlockId, CaptureMode, CmpKind, Function, FunctionBuilder, FunctionSig, MethodKind, Type, ValueId, Visibility};
 
 use super::ast::*;
 use super::macros::{self, MacroKind};
@@ -965,6 +965,12 @@ impl TranslateCtx {
         return_ty: Type,
     ) -> ValueId {
         let cb_name = self.make_callback_name("lambda");
+
+        // --- 1. Capture outer temp vars by value ---
+        let (outer_temps, capture_spec) = self.collect_outer_captures();
+        let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
+
+        // --- 2. Build the closure FunctionBuilder ---
         let sig = FunctionSig {
             params: vec![param_ty.clone()],
             return_ty: return_ty.clone(),
@@ -972,14 +978,18 @@ impl TranslateCtx {
             has_rest_param: false,
         };
         let mut cb_fb = FunctionBuilder::new(&cb_name, sig, Visibility::Public);
-        // Mark as Closure so the backend collects it into closure_bodies and can
-        // inline it as an arrow function at the call site rather than emitting it
-        // as a named top-level export.
         cb_fb.set_method_kind(MethodKind::Closure);
         let item_param = cb_fb.param(0);
 
+        // Register capture params (appended after regular params in entry block).
+        let cap_ids = cb_fb.add_capture_params(capture_spec);
+
+        // --- 3. Lower the body in the closure context ---
         let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
         let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        // Pre-populate temp_vars from capture params so outer var references resolve.
+        self.init_captured_temps(&outer_temps, &cap_ids);
 
         // Bind the loop variable to the item parameter.
         let alloc = self.fb.alloc(param_ty);
@@ -1004,8 +1014,12 @@ impl TranslateCtx {
         let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
         self.temp_vars = saved_temps;
 
-        self.callbacks.push(cb_fb.build());
-        self.fb.global_ref(&cb_name, Type::Dynamic)
+        let mut func = cb_fb.build();
+        func.method_kind = MethodKind::Closure;
+        self.callbacks.push(func);
+
+        // --- 4. Emit Op::MakeClosure ---
+        self.fb.make_closure(&cb_name, &capture_vals, Type::Dynamic)
     }
 
     /// Infer the element type from a list of lowered collection values.
@@ -1071,6 +1085,11 @@ impl TranslateCtx {
         filter: Option<&Expr>,
         body: &[Node],
     ) -> ValueId {
+        // --- 1. Capture outer temp vars by value ---
+        let (outer_temps, capture_spec) = self.collect_outer_captures();
+        let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
+
+        // --- 2. Build the closure FunctionBuilder ---
         let sig = FunctionSig {
             params: vec![Type::Dynamic, Type::Dynamic],
             return_ty: Type::Void,
@@ -1078,12 +1097,20 @@ impl TranslateCtx {
             has_rest_param: false,
         };
         let mut cb_fb = FunctionBuilder::new(name, sig, Visibility::Public);
+        cb_fb.set_method_kind(MethodKind::Closure);
         let h_param = cb_fb.param(0);
         cb_fb.name_value(h_param, "h".to_string());
         let item_param = cb_fb.param(1);
 
+        // Register capture params.
+        let cap_ids = cb_fb.add_capture_params(capture_spec);
+
+        // --- 3. Lower body in the closure context ---
         let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
         let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        // Pre-populate temp_vars from capture params.
+        self.init_captured_temps(&outer_temps, &cap_ids);
 
         // Store the loop variable param into an alloc so temp var accesses work.
         let alloc = self.fb.alloc(Type::Dynamic);
@@ -1108,8 +1135,12 @@ impl TranslateCtx {
         let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
         self.temp_vars = saved_temps;
 
-        self.callbacks.push(cb_fb.build());
-        self.fb.global_ref(name, Type::Dynamic)
+        let mut func = cb_fb.build();
+        func.method_kind = MethodKind::Closure;
+        self.callbacks.push(func);
+
+        // --- 4. Emit Op::MakeClosure ---
+        self.fb.make_closure(name, &capture_vals, Type::Dynamic)
     }
 
     // ── (goto:) ────────────────────────────────────────────────────
@@ -1590,6 +1621,11 @@ impl TranslateCtx {
     }
 
     fn build_callback(&mut self, name: &str, body: &[Node]) -> ValueId {
+        // --- 1. Capture outer temp vars by value ---
+        let (outer_temps, capture_spec) = self.collect_outer_captures();
+        let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
+
+        // --- 2. Build the closure FunctionBuilder ---
         let sig = FunctionSig {
             params: vec![Type::Dynamic],
             return_ty: Type::Void,
@@ -1597,11 +1633,19 @@ impl TranslateCtx {
             has_rest_param: false,
         };
         let mut cb_fb = FunctionBuilder::new(name, sig, Visibility::Public);
+        cb_fb.set_method_kind(MethodKind::Closure);
         let h_param = cb_fb.param(0);
         cb_fb.name_value(h_param, "h".to_string());
 
+        // Register capture params.
+        let cap_ids = cb_fb.add_capture_params(capture_spec);
+
+        // --- 3. Lower body in the closure context ---
         let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
         let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        // Pre-populate temp_vars from capture params.
+        self.init_captured_temps(&outer_temps, &cap_ids);
 
         self.emit_content(body);
         self.fb.ret(None);
@@ -1609,9 +1653,12 @@ impl TranslateCtx {
         let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
         self.temp_vars = saved_temps;
 
-        self.callbacks.push(cb_fb.build());
+        let mut func = cb_fb.build();
+        func.method_kind = MethodKind::Closure;
+        self.callbacks.push(func);
 
-        self.fb.global_ref(name, Type::Dynamic)
+        // --- 4. Emit Op::MakeClosure ---
+        self.fb.make_closure(name, &capture_vals, Type::Dynamic)
     }
 
     // ── Temp variable helpers ──────────────────────────────────────
@@ -1629,6 +1676,42 @@ impl TranslateCtx {
     fn get_or_load_temp(&mut self, name: &str) -> ValueId {
         let alloc = self.get_or_create_temp(name);
         self.fb.load(alloc, Type::Dynamic)
+    }
+
+    /// Load all outer temp var values in the current builder (creation-time snapshot).
+    ///
+    /// Returns `(outer_temps, capture_spec)` for use with `add_capture_params` and
+    /// `init_captured_temps`.  The first element is `(name, loaded_val)` pairs;
+    /// the second is the corresponding `(cap_name, ty, mode)` triples.
+    #[allow(clippy::type_complexity)]
+    fn collect_outer_captures(
+        &mut self,
+    ) -> (Vec<(String, ValueId)>, Vec<(String, Type, CaptureMode)>) {
+        let outer_temps: Vec<(String, ValueId)> = self
+            .temp_vars
+            .iter()
+            .map(|(name, &alloc_id)| {
+                let val = self.fb.load(alloc_id, Type::Dynamic);
+                (name.clone(), val)
+            })
+            .collect();
+        let spec: Vec<(String, Type, CaptureMode)> = outer_temps
+            .iter()
+            .map(|(name, _)| (format!("cap_{name}"), Type::Dynamic, CaptureMode::ByValue))
+            .collect();
+        (outer_temps, spec)
+    }
+
+    /// After swapping to a new FunctionBuilder, pre-populate `temp_vars` with
+    /// alloc/store chains backed by the given capture param values.
+    ///
+    /// Mem2Reg will later promote the single-store allocs to direct references.
+    fn init_captured_temps(&mut self, outer_temps: &[(String, ValueId)], cap_ids: &[ValueId]) {
+        for (i, (name, _)) in outer_temps.iter().enumerate() {
+            let alloc = self.fb.alloc(Type::Dynamic);
+            self.fb.store(alloc, cap_ids[i]);
+            self.temp_vars.insert(name.clone(), alloc);
+        }
     }
 
     // ── Expression lowering ────────────────────────────────────────
