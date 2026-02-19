@@ -11,6 +11,13 @@ Reincarnate is a legacy software lifting framework. It extracts and transforms a
 - **Explant**: Bytecode/script extraction and decompilation
 - **Hypha**: Game/app translation with UI overlay replacement
 
+### Goals
+
+- **High-performance, maintainable emitted code** — The output is compiled TypeScript (or Rust) functions, not a bundled interpreter. Shipped output should be readable, optimisable, and auditable.
+- **Multiple backends** — The IR + transform pipeline is backend-agnostic. TypeScript is the current backend; Rust codegen is planned. Design choices that couple output to a single runtime target are wrong.
+
+**Corollary: never suggest bundling an existing interpreter as the lift strategy.** Tools like inkjs, Parchment, renpyweb, or libqsp-WASM produce running games but not emitted code. They are fine for one-off deployment but are not the reincarnate approach. When an engine already has a web interpreter, note it as a "quick deploy" alternative — not as the goal.
+
 ### The "Lift" Strategy
 
 **Tier 1: Native Patching** - For binaries you can't lift (hex editing, font replacement)

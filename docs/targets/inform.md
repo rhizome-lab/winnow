@@ -38,17 +38,9 @@ Z-machine v5/v8 add:
 
 Glulx is documented in the [Glulx specification](https://eblong.com/zarf/glulx/glulx-spec.html) by Andrew Plotkin.
 
-## Existing Web Interpreters
+## Lifting Strategy
 
-For straightforward deployment, web interpreters already exist and work well:
-- **[Parchment](https://github.com/curiousdannii/parchment)** — runs both Z-machine and Glulx in the browser via WASM backends (Bocfel for Z-machine, RemGlk-rs for Glulx). As of January 2025 it uses Rust/WASM backends. Inform 7 ships Parchment/Quixe templates for its "Release for Web" option.
-- **[Quixe](https://github.com/erkyrath/quixe)** — pure-JS Glulx interpreter; lighter weight, no WASM dependency
-
-For simple deployment of an Inform 7 story to the web, bundle the `.ulx`/`.z8` file with Parchment or Quixe and serve statically. No reincarnate frontend needed.
-
-## Lifting Strategy (Full Recompilation)
-
-Full recompilation (Tier 2) — for cases where the interpreted runtime performance is unacceptable, or where deeper integration with other lifted code is needed.
+Full recompilation (Tier 2). The goal is emitted TypeScript (or Rust) per routine — not bundling an interpreter.
 
 The Z-machine and Glulx are well-specified VMs with manageable opcode sets. Lifting means:
 1. Parse the story file header to identify VM type, version, and entry points
@@ -125,6 +117,10 @@ Glulx uses a simpler, more regular instruction set. The main complexity is Glk �
 ## Optionally: Lifting from Inform 7 Source
 
 If the game's `.inform` project directory is available (not just the compiled story file), the I7 source can be used directly. This would require an Inform 7 → IR translation pipeline bypassing the VM entirely. Given the complexity of the I7 language (natural language grammar, extension mechanism), this is a separate, much larger project.
+
+## Note: Existing Interpreters
+
+[Parchment](https://github.com/curiousdannii/parchment) (Z-machine + Glulx via WASM) and [Quixe](https://github.com/erkyrath/quixe) (pure-JS Glulx) exist and work well for rapid deployment. But they ship an interpreter loop — the output is not emitted code, it's not analysable, and it can't target Rust. The reincarnate approach compiles routines to functions.
 
 ## References
 

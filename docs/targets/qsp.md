@@ -35,16 +35,16 @@ BASIC-like scripting language with:
 
 ## Lifting Strategy
 
-Two viable approaches:
+Full recompilation (Tier 2). The goal is emitted TypeScript (or Rust) per location — not bundling the libqsp interpreter.
 
-**Option 1: WASM port of libqsp (simplest)**
-`libqsp` is a self-contained C engine. Emscripten can compile it to WebAssembly. A thin JS wrapper exposes the game state (current text, actions, inventory). This is the fastest path and handles edge cases correctly.
-
-**Option 2: Transpile QSP-lang to TypeScript (reincarnate approach)**
 1. Decode the `.qsp` binary (XOR key is known; `@qsp/converters` handles this) or read `.qsps` directly
 2. Parse QSP-lang source text per location
 3. Emit IR — each location is a function, `goto` becomes a call/jump, `act` becomes a choice registration
-4. Emit TypeScript with a thin QSP runtime shim
+4. Run the standard transform pipeline
+5. Emit TypeScript with a thin QSP runtime shim
+
+**Note: WASM alternative exists**
+`libqsp` (GPLv2 C engine) can be compiled to WASM via Emscripten. This works for quick deployment but ships an interpreter loop — not emitted code, not backend-agnostic, opaque to analysis.
 
 ## What Needs Building
 

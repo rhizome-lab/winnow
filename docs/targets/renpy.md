@@ -74,16 +74,13 @@ The key complexity is Ren'Py's **rollback system** — the engine can roll back 
 - [ ] `renpy.pause()` — wait for click/time
 - [ ] `renpy.notify()` — notification popup
 
-### Python Integration: Three Options
+### Python Integration
 
-**Option 1: RenPyWeb (official WASM port, simplest)**
-[renpy/renpyweb](https://github.com/renpy/renpyweb) compiles the full Ren'Py Python engine to WebAssembly via Emscripten. This is the **officially supported web export path as of Ren'Py 7.4+**. The main limitations: no threading, no arbitrary network sockets, single-threaded image preloading. For a straightforward web deployment this is the right choice — ship `.rpyc`/`.rpa` files + the WASM runtime. No reincarnate frontend needed.
+**Primary approach (reincarnate): transpile**
+Unpack `.rpa`, decompile `.rpyc` with `unrpyc` to recover `.rpy` source, then lower the Ren'Py AST to IR. Each `label` becomes a function; `scene`/`show`/`play`/`menu` become SystemCalls; rollback points become `Yield` ops. The existing transform pipeline and TypeScript backend produce clean emitted code — analysable, optimisable, and eventually targetable to Rust.
 
-**Option 2: Transpile (reincarnate approach)**
-Unpack `.rpa`, decompile `.rpyc` with `unrpyc`, then transpile the Ren'Py AST to a TypeScript runtime equivalent. This gives full control over the output and enables integration with other reincarnate-lifted code, but requires reimplementing Ren'Py's scene graph, transition system, rollback, etc.
-
-**Option 3: Pyodide bridge**
-Run the Python engine in Pyodide (Python→WASM), bridge to a TypeScript UI layer. Heavier than Option 1 (~10 MB overhead for Pyodide vs renpyweb's more targeted WASM build), but allows running arbitrary Python including complex `$`-block code.
+**Note: WASM/interpreter alternatives exist**
+[renpyweb](https://github.com/renpy/renpyweb) (official, as of Ren'Py 7.4+) ships the full CPython engine as WASM. [Pyodide](https://pyodide.org/) is a heavier alternative. Both run the original interpreter loop — output is not emitted code, can't target Rust, and is opaque to analysis. These are fine for quick one-off deployment but are not the reincarnate approach.
 
 ## Known Challenges
 

@@ -20,45 +20,47 @@ Stack-based VM. Steps through container elements maintaining:
 
 Control commands manipulate the stack. Diverts implement function calls, tunnels (subroutines with `->->` return), and thread cloning. Choice points are collected during traversal and presented to the player. The runtime is intentionally non-prescriptive about UI.
 
-## Existing Web Runtime
-
-**[inkle/inkjs](https://github.com/inkle/inkjs)** is the official JavaScript port of the ink engine (also on npm as `inkjs`). It is:
-- Fully compatible with `.json` story files
-- Zero dependencies, runs in all browsers and Node.js
-- As of v2.1.0, includes a compiled-in ink compiler (`.ink` → parse → play in JS)
-- The runtime used by Inky (the official editor) for preview
-- Maintained by inkle (MIT license)
-
-A reincarnate ink frontend would not need to reimplement the runtime — inkjs already handles execution.
-
 ## Lifting Strategy
 
-The primary use case for reincarnate is **extracting ink stories from host games** (e.g., Unity games or native apps that embed ink) and re-hosting them with the web runtime.
+Full recompilation (Tier 2). The goal is emitted TypeScript (or Rust) per knot/stitch — not bundling an interpreter.
+
+1. Parse the `.json` container format (or `.ink` source if available)
+2. Emit IR — each knot/stitch becomes a function; diverts become branches/calls; choice points become `Yield` ops
+3. The existing transform pipeline (constant folding, DCE, etc.) runs over the IR
+4. The TypeScript backend emits clean per-function code
+
+This produces maintainable, backend-agnostic output. It also enables future Rust codegen and cross-engine integration (e.g., an ink story embedded in a lifted GameMaker or Flash game).
 
 ### Extraction
 
-Many commercial games bundle ink as `.json` files in their game data directory. The extraction path is:
-1. Locate `.json` ink files in the game package (Unity games: in `Assets/` or `StreamingAssets/`)
-2. Validate against the ink JSON schema
-3. Generate a host HTML + inkjs entry point
+Many commercial games bundle ink `.json` files in their data directory (Unity games: `Assets/` or `StreamingAssets/`). The extraction path:
+1. Locate `.json` ink files in the game package
+2. Parse the container format
+3. Emit IR → run transforms → emit TypeScript
 
-For games that compile ink into a native runtime (the C# ink-engine-runtime is embedded in Unity builds), the `.json` files may not be present. These require binary extraction.
+For games that compile ink into a native C# runtime (no `.json` files present), binary extraction is required — the ink runtime is embedded in the Unity IL2CPP build.
 
-### Optional: Transpile to IR
-
-For games where deeper integration is needed (e.g., mixing ink narrative with GameMaker or Flash code), a reincarnate ink frontend could:
-1. Parse the `.json` container format
-2. Emit IR — each knot/stitch becomes a function, choices become `SystemCall("Ink.Choice", ...)` + `Yield`
-3. Emit TypeScript using the existing backend
-
-This is optional complexity — inkjs already handles execution correctly.
-
-## What Needs Building (if full frontend is desired)
+## What Needs Building
 
 - [ ] `.ink` source parser (for games with source present)
-- [ ] `.json` reader → IR emitter (containers → functions, diverts → branches/calls, choices → yield points)
-- [ ] `SystemCall` namespace: `Ink.Output`, `Ink.Choice`, `Ink.Tag`
-- [ ] Replacement runtime (thin wrapper around inkjs, or direct TypeScript port)
+- [ ] `.json` reader → IR emitter:
+  - Containers → IR functions
+  - Diverts → `Op::Br` / `Op::Call`
+  - Choices → `SystemCall("Ink.ShowChoices", ...)` + `Yield`
+  - `^text` content → `SystemCall("Ink.Output", text)`
+  - Tags → `SystemCall("Ink.Tag", tag)`
+  - Visit counts → `SystemCall("Ink.Visits", path)`
+- [ ] `SystemCall` namespace: `Ink.Output`, `Ink.ShowChoices`, `Ink.Tag`, `Ink.Visits`
+- [ ] Replacement runtime (`runtime/ink/ts/`) — thin UI layer:
+  - Text output buffer
+  - Choice presentation + player input
+  - Variable state
+  - Visit count tracking
+  - Save/load
+
+## Note: Existing Interpreters
+
+[inkjs](https://github.com/inkle/inkjs) (official JS port) and the `inklecate` compiler exist and work. For rapid one-off deployment these are fine. But they don't produce emitted code — the game runs inside an interpreter loop, which is opaque to further analysis, slower than compiled output, and tied to a single runtime target.
 
 ## References
 

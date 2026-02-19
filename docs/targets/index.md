@@ -10,20 +10,20 @@ Reincarnate lifts applications from **bytecode and script-based runtimes** — n
 | [GameMaker (GML)](./gamemaker) | ✅ | ✅ | Active |
 | [Twine SugarCube](./sugarcube) | ✅ | ✅ | Active |
 | [Twine Harlowe](./harlowe) | ✅ | ✅ | Active |
-| [Ren'Py](./renpy) | — | — | Planned (official WASM port exists) |
+| [Ren'Py](./renpy) | — | — | Planned |
 | [RPG Maker](./rpgmaker) | — | — | Planned |
 | [Director/Shockwave](./director) | — | — | Planned |
-| [Inform (Z-machine/Glulx)](./inform) | — | — | Planned (Parchment/Quixe exist) |
-| [Ink by Inkle](./ink) | — | — | Planned (inkjs exists) |
+| [Inform (Z-machine/Glulx)](./inform) | — | — | Planned |
+| [Ink by Inkle](./ink) | — | — | Planned |
 | [Visual Basic 6](./vb6) | — | — | Planned |
 | [Java Applets](./java-applets) | — | — | Planned |
 | [Silverlight](./silverlight) | — | — | Planned |
 | [HyperCard / ToolBook](./hypercard) | — | — | Planned |
 | [WolfRPG](./wolfrpg) | — | — | Planned |
-| [SRPG Studio](./srpg-studio) | — | — | Planned (already JS/NW.js) |
-| [RAGS](./rags) | — | — | Planned (rags2html exists) |
-| [QSP](./qsp) | — | — | Planned (libqsp/WASM viable) |
-| [PuzzleScript](./puzzlescript) | — | — | Planned (natively web) |
+| [SRPG Studio](./srpg-studio) | — | — | Planned |
+| [RAGS](./rags) | — | — | Planned |
+| [QSP](./qsp) | — | — | Planned |
+| [PuzzleScript](./puzzlescript) | — | — | Planned |
 
 ## Scope
 

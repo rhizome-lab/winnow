@@ -79,38 +79,28 @@ Rule matching uses bitmask operations for O(1) per-cell checking.
 
 ## Lifting Strategy
 
-PuzzleScript is natively a web engine. There is no meaningful "lift" needed — games already run in any browser.
+Full recompilation (Tier 2). Parse the PuzzleScript source, compile rules to IR functions, and emit clean TypeScript — not bundling the original compiler + engine.
 
-The relevant use cases for reincarnate:
+1. Parse the source text (section-based format)
+2. Compile rules to IR — each rule is a function that pattern-matches cell bitmasks and applies replacements; the fixpoint loop is an IR loop
+3. Emit TypeScript: compact, fast rule functions + a thin runtime (renderer, input handler, level loader)
 
-### Use Case 1: Archival / Offline Hosting
+The rule matching semantics are formally specified and deterministic, making exact translation straightforward. The compiled output will be faster than the original engine's interpreted rule loop.
 
-Many PuzzleScript games exist only as editor URLs or rely on the online editor for hosting. A reincarnate frontend could:
-1. Extract the game source from a saved HTML file or URL-encoded source
-2. Bundle it with the engine as a self-contained offline HTML file
-
-This is trivially achievable and doesn't require the full pipeline.
-
-### Use Case 2: Translation to IR
-
-If PuzzleScript rule semantics need to be represented in the IR (e.g., for analysis or transformation):
-1. Parse the PuzzleScript source text
-2. Represent the rule system as IR — each rule becomes a function that pattern-matches cell bitmasks and performs replacements
-3. The rule fixpoint loop becomes an IR loop with an IR function per rule
-
-The rule matching semantics are formally specified and deterministic, making this amenable to exact translation.
+**Note: engine-as-is option**
+The original PuzzleScript engine already runs in any browser. For one-off archival of an existing game, bundling the source + engine is trivial and needs no reincarnate frontend. But it ships the full original compiler at runtime, and the output isn't analysable or retargetable.
 
 ## What Needs Building
 
-For archival/offline hosting (immediate value):
-- [ ] Source extractor from saved HTML (parse the embedded source text)
-- [ ] URL hash decoder (base64/compressed source in editor URLs)
-- [ ] Self-contained HTML generator (source + bundled engine)
-
-For full IR translation (optional, lower priority):
+- [ ] Source extractor from saved HTML / URL hash (to recover the plain-text source)
 - [ ] PuzzleScript source parser (section-based text format)
-- [ ] Rule compiler → IR (bitmask-based pattern matching functions)
+- [ ] Rule compiler → IR (bitmask pattern-matching functions + fixpoint loop)
 - [ ] Level data extractor → asset catalog
+- [ ] Replacement runtime (`runtime/puzzlescript/ts/`):
+  - [ ] Grid renderer (5×5 sprite tiles on canvas)
+  - [ ] Input handler (arrow keys / WASD / action key)
+  - [ ] Level progression and win condition checking
+  - [ ] Sound (bfxr seed → generated audio)
 
 ## References
 

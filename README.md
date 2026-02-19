@@ -20,7 +20,7 @@ Reincarnate extracts and transforms applications from obsolete runtimes into mod
 | No-Code Ancestors | HyperCard, ToolBook | Stack formats, HyperTalk | Planned |
 | Game Engines | GameMaker (GMS1/GMS2) | GML bytecode | ✅ Active |
 | Game Engines | RPG Maker VX Ace / MV / MZ | Ruby/RGSS, JSON events | Planned |
-| Game Engines | Ren'Py | Python/RPYC bytecode | Planned |
+| Game Engines | Ren'Py | .rpyc AST pickle / .rpa archive | Planned |
 | Game Engines | WolfRPG | Custom binary commands | Planned |
 | Game Engines | SRPG Studio | JS + NW.js | Planned |
 | Interactive Fiction | Twine SugarCube | HTML + macro DSL | ✅ Active |
