@@ -421,7 +421,9 @@ export class HarloweEngine {
   // --- Meter ---
 
   /** `(meter: $var, max, label, color)` — progress meter element. */
-  meter_macro(value: any, max: any, label?: any, color?: any): void {
+  meter_macro(value: any, max: any, ...rest: any[]): void {
+    const label: any = rest[rest.length - 2] ?? rest[0];
+    const color: any = rest[rest.length - 1] ?? rest[0];
     const container = this.passage();
     if (!container) return;
     const doc = this.doc();

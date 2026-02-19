@@ -370,7 +370,7 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
             cases,
             default_body,
         } => {
-            let _ = writeln!(out, "{indent}switch ({}) {{", print_expr(value));
+            let _ = writeln!(out, "{indent}switch ({} as any) {{", print_expr(value));
             let case_indent = format!("{indent}  ");
             for (constant, case_stmts) in cases {
                 let _ = writeln!(

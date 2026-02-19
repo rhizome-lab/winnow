@@ -463,6 +463,15 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
         TokenKind::Ident(ref s) => {
             let s = s.clone();
             lexer.next_token();
+            // `bind $var` / `2bind $var` — Harlowe bound variable reference.
+            // For decompilation, treat as the variable's current value by
+            // parsing (and returning) the following variable expression.
+            if s == "bind" || s == "2bind" {
+                let next = lexer.peek_token();
+                if matches!(next.kind, TokenKind::StoryVar(_) | TokenKind::TempVar(_)) {
+                    return parse_prefix(lexer);
+                }
+            }
             // Try to interpret as ordinal (handles `last`, `length`, `lasttolast`, etc.)
             if let Some(expr) = interpret_property_string(&s, tok.span) {
                 return expr;
