@@ -618,6 +618,13 @@ impl TranslateCtx {
                 // No-op — deliberately discards its arguments
             }
 
+            // HAL (Harlowe Audio Library) macros
+            "track" | "playlist" | "group" => self.lower_hal_named_command(mac),
+            "masteraudio" => self.lower_hal_master_audio(mac),
+            "newtrack" => self.lower_hal_simple_command(mac, "define_track"),
+            "newplaylist" => self.lower_hal_simple_command(mac, "define_playlist"),
+            "newgroup" => self.lower_hal_simple_command(mac, "define_group"),
+
             // Restart / reload
             "restart" | "reload" => {
                 self.fb
@@ -1413,6 +1420,29 @@ impl TranslateCtx {
         call_args.extend(args);
         self.fb
             .system_call("Harlowe.Engine", "input_macro", &call_args, Type::Void);
+    }
+
+    // ── HAL (Harlowe Audio Library) macros ─────────────────────────
+
+    /// `(track: name, command, ...args)`, `(playlist: ...)`, `(group: ...)` —
+    /// forward to the audio runtime using the macro name as the method.
+    fn lower_hal_named_command(&mut self, mac: &MacroNode) {
+        let method = mac.name.as_str();
+        let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+        self.fb.system_call("Harlowe.Audio", method, &args, Type::Void);
+    }
+
+    /// `(masteraudio: command, ...args)` → `Harlowe.Audio.master_audio(command, ...args)`
+    fn lower_hal_master_audio(&mut self, mac: &MacroNode) {
+        let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+        self.fb.system_call("Harlowe.Audio", "master_audio", &args, Type::Void);
+    }
+
+    /// `(newtrack: name, ...urls)`, `(newplaylist: ...)`, `(newgroup: ...)` —
+    /// forward to the named method on the audio runtime.
+    fn lower_hal_simple_command(&mut self, mac: &MacroNode, method: &str) {
+        let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+        self.fb.system_call("Harlowe.Audio", method, &args, Type::Void);
     }
 
     // ── Unknown macros ─────────────────────────────────────────────

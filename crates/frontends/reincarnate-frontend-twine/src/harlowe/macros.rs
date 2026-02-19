@@ -60,6 +60,10 @@ pub fn macro_kind(name: &str) -> MacroKind {
         | "v6" | "v8" | "metadata"
         | "macro" | "partial" | "bind" | "bind-2bind" | "2bind" => MacroKind::Value,
 
+        // HAL (Harlowe Audio Library) — third-party audio macros
+        "track" | "masteraudio" | "newtrack" | "newplaylist" | "newgroup"
+        | "playlist" | "group" => MacroKind::Command,
+
         // Layout / interactive / state commands
         "columns" | "column" | "enchant" | "enchant-in" | "forget-undos"
         | "forget-visits" | "ignore" => MacroKind::Command,

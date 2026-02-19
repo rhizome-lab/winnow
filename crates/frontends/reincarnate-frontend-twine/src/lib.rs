@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use reincarnate_core::error::CoreError;
-use reincarnate_core::ir::{EntryPoint, ModuleBuilder};
+use reincarnate_core::ir::{EntryPoint, Function, FunctionBuilder, FunctionSig, ModuleBuilder, Type, Visibility};
 use reincarnate_core::pipeline::{Frontend, FrontendInput, FrontendOutput};
 use reincarnate_core::project::{Asset, AssetCatalog, AssetKind, EngineOrigin};
 
@@ -56,7 +56,7 @@ impl Frontend for TwineFrontend {
 
         match story.format.as_str() {
             "SugarCube" => self.extract_sugarcube(&story),
-            "Harlowe" => self.extract_harlowe(&story),
+            "Harlowe" => self.extract_harlowe(&story, &input),
             other => Err(CoreError::Parse {
                 file: Default::default(),
                 message: format!(
@@ -205,11 +205,22 @@ impl TwineFrontend {
     fn extract_harlowe(
         &self,
         story: &extract::Story,
+        input: &FrontendInput,
     ) -> Result<FrontendOutput, CoreError> {
+        // Check if HAL audio macro translation is enabled (default: true).
+        let hal_audio = input.options
+            .get("hal_audio")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         let mut mb = ModuleBuilder::new(&story.name);
         let mut start_func_id = None;
         let mut assets = AssetCatalog::new();
         let mut parse_errors = 0;
+
+        // Collect HAL configuration from special passages (hal.tracks / hal.config).
+        let mut hal_tracks: Vec<(String, Vec<String>)> = Vec::new();
+        let mut hal_config: Vec<(String, String)> = Vec::new();
 
         // Find start passage name
         let start_passage_name = story
@@ -220,6 +231,16 @@ impl TwineFrontend {
 
         // Translate each passage → Function
         for passage in &story.passages {
+            // Parse HAL configuration passages — skip them from normal translation.
+            if hal_audio && passage.name == "hal.tracks" {
+                hal_tracks = parse_hal_tracks(&passage.source);
+                continue;
+            }
+            if hal_audio && passage.name == "hal.config" {
+                hal_config = parse_hal_config(&passage.source);
+                continue;
+            }
+
             // Skip special tag passages
             if passage
                 .tags
@@ -268,6 +289,11 @@ impl TwineFrontend {
             eprintln!("warning: {parse_errors} parse error(s) in Harlowe story");
         }
 
+        // Generate HAL audio init function if any tracks or config were found.
+        if hal_audio && (!hal_tracks.is_empty() || !hal_config.is_empty()) {
+            mb.add_function(generate_hal_init_function(&hal_tracks, &hal_config));
+        }
+
         // Add format CSS (Harlowe built-in stylesheet) as an asset
         if let Some(css) = &story.format_css {
             assets.add(Asset {
@@ -308,4 +334,85 @@ impl TwineFrontend {
             runtime_variant: Some("harlowe".to_string()),
         })
     }
+}
+
+// ── HAL (Harlowe Audio Library) helpers ─────────────────────────────────────
+
+/// Parse a `hal.tracks` passage: `name: url[, url2...]` one per line.
+fn parse_hal_tracks(source: &str) -> Vec<(String, Vec<String>)> {
+    let mut tracks = Vec::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((name, urls_raw)) = line.split_once(':') {
+            let name = name.trim().to_string();
+            let urls: Vec<String> = urls_raw
+                .split(',')
+                .map(|u| u.trim().to_string())
+                .filter(|u| !u.is_empty())
+                .collect();
+            if !name.is_empty() && !urls.is_empty() {
+                tracks.push((name, urls));
+            }
+        }
+    }
+    tracks
+}
+
+/// Parse a `hal.config` passage: `key:value` one per line.
+fn parse_hal_config(source: &str) -> Vec<(String, String)> {
+    let mut config = Vec::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once(':') {
+            let key = key.trim().to_string();
+            let val = val.trim().to_string();
+            if !key.is_empty() {
+                config.push((key, val));
+            }
+        }
+    }
+    config
+}
+
+/// Generate a `__user_script_hal_init` IR function that calls
+/// `Harlowe.Audio.configure(key, val)` and `Harlowe.Audio.define_track(name, ...urls)`
+/// for each entry from the HAL configuration passages.
+///
+/// The backend scaffold calls this function as `__user_script_hal_init(_rt)` before
+/// `_rt.start(...)`, giving the audio subsystem a chance to register tracks.
+fn generate_hal_init_function(
+    tracks: &[(String, Vec<String>)],
+    config: &[(String, String)],
+) -> Function {
+    let sig = FunctionSig {
+        params: vec![],
+        return_ty: Type::Void,
+        defaults: vec![],
+        has_rest_param: false,
+    };
+    let mut fb = FunctionBuilder::new("__user_script_hal_init", sig, Visibility::Public);
+
+    for (key, val) in config {
+        let k = fb.const_string(key);
+        let v = fb.const_string(val);
+        fb.system_call("Harlowe.Audio", "configure", &[k, v], Type::Void);
+    }
+
+    for (name, urls) in tracks {
+        let n = fb.const_string(name);
+        let mut args = vec![n];
+        for url in urls {
+            args.push(fb.const_string(url));
+        }
+        fb.system_call("Harlowe.Audio", "define_track", &args, Type::Void);
+    }
+
+    fb.ret(None);
+    fb.build()
 }

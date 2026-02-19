@@ -293,6 +293,7 @@ fn cmd_extract(manifest_path: &Path, skip_passes: &[String]) -> Result<()> {
     let input = FrontendInput {
         source: manifest.source.clone(),
         engine: manifest.engine.clone(),
+        options: manifest.frontend_options.clone(),
     };
     let output = frontend
         .extract(input)
@@ -321,6 +322,7 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
     let input = FrontendInput {
         source: manifest.source.clone(),
         engine: manifest.engine.clone(),
+        options: manifest.frontend_options.clone(),
     };
     let output = frontend
         .extract(input)

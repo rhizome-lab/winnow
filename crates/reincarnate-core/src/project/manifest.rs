@@ -139,4 +139,11 @@ pub struct ProjectManifest {
     /// Persistence configuration (save/load/autosave behavior).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persistence: Option<PersistenceConfig>,
+    /// Frontend-specific options passed verbatim to the frontend.
+    ///
+    /// Known keys by engine:
+    /// - `Twine/Harlowe`: `"hal_audio": false` disables HAL macro translation
+    ///   (macros fall back to `unknown_macro()`; default: `true`).
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub frontend_options: serde_json::Value,
 }

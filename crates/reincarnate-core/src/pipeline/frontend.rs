@@ -10,6 +10,8 @@ pub struct FrontendInput {
     pub source: PathBuf,
     /// Engine origin hint (from manifest).
     pub engine: EngineOrigin,
+    /// Frontend-specific options from the project manifest.
+    pub options: serde_json::Value,
 }
 
 /// Output from a frontend.
