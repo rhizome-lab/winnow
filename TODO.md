@@ -35,6 +35,36 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
     refactor). Pre-existing 5 vN (hasNext2 one-shot, split-path phi).
   - **GML**: Reference decompilation at `~/git/bounty/`.
 
+## Unit Test Infrastructure
+
+### GML Translator Tests
+
+- [ ] **Narrow `DataWin` dependency in `TranslateCtx`** — `translate_code_entry`
+  takes `ctx.dw: &DataWin` but only uses it for string resolution (3 call sites:
+  local var name resolution × 2, push-string operand × 1). Replace with a
+  `resolve_string: &dyn Fn(u32) -> &str` field (or equivalent) so tests can
+  construct a `TranslateCtx` without a real `DataWin`.
+
+- [ ] **GML translator unit tests** — Once `DataWin` dependency is narrowed,
+  add regression tests for:
+  - 2D array write stack pop order (`ref_type==0` VARI pops must check
+    `is_2d_array_access` before popping — `dim1` on top, not value)
+  - AVM2 `ref_type==0xA0` singleton field access (no pops)
+  - `argument` variable mapping (`dim1=-1, dim2=N` → `fb.param(offset + N)`)
+
+### Flash Translator Tests
+
+- [ ] **Flash translator unit tests** — The `swf` crate (v0.2.2) has
+  `avm2::write::Writer` + `write_op()`, so AVM2 bytecode is constructable.
+  Still need a minimal `AbcFile` builder to avoid constructing a full SWF.
+  Add regression tests for:
+  - `SetProperty` operand order (receiver pushed before value, not after)
+  - `Debug` register layout (register names extracted from `DebugFile`/`DebugLine`)
+
+- [ ] **Minimal `AbcFile` test builder** — Helper that constructs a bare-minimum
+  `AbcFile` (empty constant pool, one method body with supplied ops) so Flash
+  translator tests don't require real SWF files.
+
 ## Type System
 
 ### Open

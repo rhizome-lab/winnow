@@ -79,6 +79,9 @@ impl Frontend for GameMakerFrontend {
             })
             .collect();
 
+        // Pre-resolve string table once — passed to all translators instead of &DataWin.
+        let string_table = resolve_string_table(&dw);
+
         let mut mb = ModuleBuilder::new(&game_name);
 
         // Register global variables from VARI.
@@ -86,7 +89,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate scripts.
         let (script_ok, script_err) =
-            translate_scripts(&dw, code, scpt, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &input, &obj_names, &script_names)?;
+            translate_scripts(&dw, code, scpt, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &input, &obj_names, &script_names)?;
         eprintln!("[gamemaker] translated {script_ok} scripts ({script_err} errors)");
 
         // Translate objects → ClassDefs with event handler methods.
@@ -98,6 +101,7 @@ impl Frontend for GameMakerFrontend {
             &func_ref_map,
             &vari_ref_map,
             &code_locals_map,
+            &string_table,
             &mut mb,
             &obj_names,
             &script_names,
@@ -110,7 +114,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate global init scripts (GLOB chunk).
         let glob_count = translate_global_inits(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &obj_names, &script_names,
+            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
         );
         if glob_count > 0 {
             eprintln!("[gamemaker] translated {glob_count} global init scripts");
@@ -118,7 +122,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate room creation code.
         let (room_count, room_creation_code) = translate_room_creation(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &mut mb, &obj_names, &script_names,
+            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
         );
         if room_count > 0 {
             eprintln!("[gamemaker] translated {room_count} room creation scripts");
@@ -159,6 +163,7 @@ fn translate_scripts(
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    string_table: &[String],
     mb: &mut ModuleBuilder,
     input: &FrontendInput,
     obj_names: &[String],
@@ -195,13 +200,13 @@ fn translate_scripts(
         let locals = code_locals_map.get(&code_name).copied();
 
         let ctx = TranslateCtx {
-            dw,
             function_names,
             variables,
             func_ref_map,
             vari_ref_map,
             bytecode_offset: code_entry.bytecode_offset,
-            locals,
+            local_names: &resolve_local_names(locals, dw.data()),
+            string_table,
             has_self: true,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
@@ -237,6 +242,7 @@ fn translate_global_inits(
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
@@ -263,13 +269,13 @@ fn translate_global_inits(
         let locals = code_locals_map.get(&code_name).copied();
 
         let ctx = TranslateCtx {
-            dw,
             function_names,
             variables,
             func_ref_map,
             vari_ref_map,
             bytecode_offset: code_entry.bytecode_offset,
-            locals,
+            local_names: &resolve_local_names(locals, dw.data()),
+            string_table,
             has_self: false,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
@@ -301,6 +307,7 @@ fn translate_room_creation(
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
@@ -331,13 +338,13 @@ fn translate_room_creation(
         let locals = code_locals_map.get(&code_name).copied();
 
         let ctx = TranslateCtx {
-            dw,
             function_names,
             variables,
             func_ref_map,
             vari_ref_map,
             bytecode_offset: code_entry.bytecode_offset,
-            locals,
+            local_names: &resolve_local_names(locals, dw.data()),
+            string_table,
             has_self: false,
             has_other: false,
             arg_count: code_entry.args_count & 0x7FFF,
@@ -355,6 +362,36 @@ fn translate_room_creation(
         }
     }
     (count, creation_code_map)
+}
+
+/// Pre-resolve the STRG string table into a `Vec<String>` indexed by string id.
+///
+/// This decouples the translator from `DataWin` — callers pass the resulting
+/// slice rather than the full `DataWin`, enabling unit tests without real files.
+fn resolve_string_table(dw: &DataWin) -> Vec<String> {
+    let Ok(table) = dw.strings() else {
+        return vec![];
+    };
+    (0..table.len())
+        .map(|i| table.get(i, dw.data()).unwrap_or_default())
+        .collect()
+}
+
+/// Pre-resolve local variable names from a `CodeLocals` entry.
+///
+/// `pub(crate)` so `object.rs` can call it without duplicating the logic.
+///
+/// Returns `(local_index, name)` pairs. Called per code entry so the
+/// translator doesn't need raw file bytes.
+pub(crate) fn resolve_local_names(
+    locals: Option<&datawin::chunks::func::CodeLocals>,
+    data: &[u8],
+) -> Vec<(u32, String)> {
+    let Some(cl) = locals else { return vec![] };
+    cl.locals
+        .iter()
+        .filter_map(|lv| lv.name.resolve(data).ok().map(|n| (lv.index, n)))
+        .collect()
 }
 
 /// Register global variables from VARI.

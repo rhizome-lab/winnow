@@ -3,8 +3,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use datawin::bytecode::decode::{self, Instruction, Operand};
 use datawin::bytecode::opcode::Opcode;
 use datawin::bytecode::types::{ComparisonKind, DataType, InstanceType, VariableRef};
-use datawin::chunks::func::CodeLocals;
-use datawin::DataWin;
 use reincarnate_core::entity::EntityRef;
 use reincarnate_core::ir::builder::FunctionBuilder;
 use reincarnate_core::ir::block::BlockId;
@@ -15,8 +13,6 @@ use reincarnate_core::ir::value::{Constant, ValueId};
 
 /// Context for translating a single code entry.
 pub struct TranslateCtx<'a> {
-    /// The DataWin file (for string resolution).
-    pub dw: &'a DataWin,
     /// FUNC function entries: entry_index → resolved name.
     pub function_names: &'a HashMap<u32, String>,
     /// VARI variable entries: entry_index → (name, instance_type).
@@ -27,8 +23,13 @@ pub struct TranslateCtx<'a> {
     pub vari_ref_map: &'a HashMap<usize, usize>,
     /// Absolute file offset where this code entry's bytecode begins.
     pub bytecode_offset: usize,
-    /// Code-local variable names: local_index → name.
-    pub locals: Option<&'a CodeLocals>,
+    /// Pre-resolved local variable names: `(local_index, name)` pairs.
+    /// Derived from `CodeLocals` by the caller before constructing `TranslateCtx`.
+    /// Empty when no debug info is available.
+    pub local_names: &'a [(u32, String)],
+    /// Pre-resolved string table (STRG chunk), indexed by string id.
+    /// Used for `Push StringIndex(idx)` instructions.
+    pub string_table: &'a [String],
     /// Whether this is an instance method (has self param).
     pub has_self: bool,
     /// Whether this is a collision event (has other param).
@@ -653,18 +654,10 @@ fn preceding_const_int(instructions: &[Instruction], idx: usize) -> Option<i64> 
 
 /// Get a name for argument index `i`.
 fn arg_name(ctx: &TranslateCtx, i: u16) -> Option<String> {
-    if let Some(code_locals) = ctx.locals {
-        // In code_locals, arguments are listed alongside locals.
-        // Arguments typically have low indices. We look for a match.
-        for local in &code_locals.locals {
-            if local.index == i as u32 {
-                if let Ok(name) = local.name.resolve(ctx.dw.data()) {
-                    return Some(name);
-                }
-            }
-        }
-    }
-    None
+    ctx.local_names
+        .iter()
+        .find(|(idx, _)| *idx == i as u32)
+        .map(|(_, name)| name.clone())
 }
 
 /// Allocate local variable slots in the entry block.
@@ -673,14 +666,10 @@ fn allocate_locals(
     ctx: &TranslateCtx,
 ) -> HashMap<String, ValueId> {
     let mut locals = HashMap::new();
-    if let Some(code_locals) = ctx.locals {
-        for local in &code_locals.locals {
-            if let Ok(name) = local.name.resolve(ctx.dw.data()) {
-                let slot = fb.alloc(Type::Dynamic);
-                fb.name_value(slot, name.clone());
-                locals.insert(name, slot);
-            }
-        }
+    for (_, name) in ctx.local_names {
+        let slot = fb.alloc(Type::Dynamic);
+        fb.name_value(slot, name.clone());
+        locals.insert(name.clone(), slot);
     }
     locals
 }
@@ -1528,7 +1517,9 @@ fn translate_push(
         Operand::Float(v) => stack.push(fb.const_float(*v as f64)),
         Operand::Bool(v) => stack.push(fb.const_bool(*v)),
         Operand::StringIndex(idx) => {
-            let s = ctx.dw.strings().map_err(|e| e.to_string())?.get(*idx as usize, ctx.dw.data()).map_err(|e| e.to_string())?;
+            let s = ctx.string_table.get(*idx as usize).ok_or_else(|| {
+                format!("string index {} out of range (table size={})", idx, ctx.string_table.len())
+            })?;
             stack.push(fb.const_string(s));
         }
         Operand::Variable { var_ref, instance } => {

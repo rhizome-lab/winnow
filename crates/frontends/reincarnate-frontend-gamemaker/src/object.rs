@@ -19,6 +19,7 @@ pub fn translate_objects(
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
     code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
@@ -99,14 +100,16 @@ pub fn translate_objects(
 
                     let is_collision = event_type_idx == event_type::COLLISION;
 
+                    let local_names =
+                        crate::resolve_local_names(locals, dw.data());
                     let ctx = TranslateCtx {
-                        dw,
                         function_names,
                         variables,
                         func_ref_map,
                         vari_ref_map,
                         bytecode_offset: code_entry.bytecode_offset,
-                        locals,
+                        local_names: &local_names,
+                        string_table,
                         has_self: true,
                         has_other: is_collision,
                         arg_count: code_entry.args_count & 0x7FFF,
