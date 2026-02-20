@@ -561,6 +561,33 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
                     span: var_tok.span,
                 };
             };
+            // Optional `making _acc via body` — fold lambda for `(folded:)`.
+            if let TokenKind::Ident(ref kw) = lexer.peek_token().kind.clone() {
+                if kw == "making" {
+                    lexer.next_token(); // consume `making`
+                    let acc_tok = lexer.peek_token();
+                    if let TokenKind::TempVar(ref acc) = acc_tok.kind.clone() {
+                        let acc_var = acc.clone();
+                        lexer.next_token(); // consume _acc
+                        // Expect `via body`
+                        if let TokenKind::Ident(ref via_kw) = lexer.peek_token().kind.clone() {
+                            if via_kw == "via" {
+                                lexer.next_token(); // consume `via`
+                                let body = parse_prec(lexer, Prec::Or);
+                                let span = Span::new(start, body.span.end);
+                                return Expr {
+                                    kind: ExprKind::FoldLambda {
+                                        item_var: var_name,
+                                        acc_var,
+                                        body: Box::new(body),
+                                    },
+                                    span,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
             // Optional `where condition`
             let filter = if matches!(lexer.peek_token().kind, TokenKind::Where) {
                 lexer.next_token(); // consume `where`
@@ -962,5 +989,40 @@ mod tests {
         } else {
             panic!("expected Of, got {:?}", expr.kind);
         }
+    }
+
+    #[test]
+    fn test_via_lambda() {
+        // `via _x + 1` — ViaLambda wrapping the body expression
+        let expr = parse("via _x + 1");
+        assert!(
+            matches!(expr.kind, ExprKind::ViaLambda(_)),
+            "expected ViaLambda, got {:?}",
+            expr.kind
+        );
+    }
+
+    #[test]
+    fn test_fold_lambda() {
+        // `each _item making _acc via _item + _acc` — FoldLambda
+        let expr = parse("each _item making _acc via _item + _acc");
+        if let ExprKind::FoldLambda { item_var, acc_var, body } = &expr.kind {
+            assert_eq!(item_var, "item");
+            assert_eq!(acc_var, "acc");
+            assert!(matches!(body.kind, ExprKind::Binary { op: BinaryOp::Add, .. }));
+        } else {
+            panic!("expected FoldLambda, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_each_without_making_is_lambda() {
+        // `each _x` alone — plain Lambda (not FoldLambda)
+        let expr = parse("each _x");
+        assert!(
+            matches!(expr.kind, ExprKind::Lambda { .. }),
+            "expected Lambda, got {:?}",
+            expr.kind
+        );
     }
 }

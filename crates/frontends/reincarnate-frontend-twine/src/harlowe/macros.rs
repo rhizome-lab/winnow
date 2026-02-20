@@ -52,7 +52,7 @@ pub fn macro_kind(name: &str) -> MacroKind {
         "str" | "string" | "num" | "number" | "a" | "array" | "dm" | "datamap" | "ds"
         | "dataset" | "random" | "either" | "round" | "floor" | "ceil" | "abs" | "min"
         | "max" | "pow" | "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "log2"
-        | "sign" | "clamp" | "lerp" | "sorted" | "reversed" | "rotated" | "shuffled"
+        | "sign" | "clamp" | "lerp" | "sorted" | "sorted-by" | "reversed" | "rotated" | "shuffled"
         | "interlaced" | "folded" | "altered" | "count" | "range" | "repeated" | "joined"
         | "some-pass" | "all-pass" | "none-pass" | "find" | "lowercase" | "uppercase"
         | "upperfirst" | "lowerfirst"

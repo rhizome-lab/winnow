@@ -392,13 +392,14 @@ and add it to `~/reincarnate/twine/`.
 
 - [x] **`(for: each _item, ...$arr)[hook]`** — Loop lowering (done)
 - [x] **`(live: Ns)[hook]` + `(stop:)`** — Timed interval (IR lowering, runtime `live()`/`stopLive`, navigation cleanup all done; regression test present)
-- [ ] **`(click: ?hook)[hook]`** — Event handler targeting named hooks
-- [ ] **Collection constructors** — `(a:)`, `(dm:)`, `(ds:)` (runtime done, parser handles basic cases)
-- [ ] **Collection operators** — `contains`, `is in`, `'s`, `of` with full Harlowe semantics
+- [x] **`(click: ?hook)[hook]`** — Event handler targeting named hooks (done — `click_macro` in engine.ts handles selector + hook callback)
+- [x] **Collection constructors** — `(a:)`, `(dm:)`, `(ds:)` (done — runtime + frontend complete)
+- [x] **Collection operators** — `contains`, `is in`, `'s`, `of` with full Harlowe semantics (done)
 - [x] **Lambda expressions in collection ops** — `each _x where _x > 5` as predicate callback for
   `(find:)`, `(some-pass:)`, `(all-pass:)`, `(none-pass:)` etc. (done — `build_lambda_callback`)
-- [ ] **Lambda `via` expressions** — `each _x via expr` for `(altered:)`, `(sorted-by:)` (`via` not
-  tokenized; `(altered:)` currently passes identity callback)
+- [x] **Lambda `via` expressions + `(sorted-by:)` + fold lambdas** — `via expr` tokenized and lowered
+  as `ViaLambda`; `each _x making _acc via expr` parsed as `FoldLambda` for `(folded:)`;
+  `(sorted-by:)` added to frontend + runtime; `interlaced`, `repeated`, `folded` runtime functions added.
 - [ ] **Dynamic macro calls** — `($varName: args)` expression-position calls not parsed; expression
   lexer stops at `$name` and drops `:args`. Affects games that store macro callbacks in variables.
 - [x] **Changer composition with `+`** — `(color: red) + (text-style: "bold")` (fixed in `155af06`)

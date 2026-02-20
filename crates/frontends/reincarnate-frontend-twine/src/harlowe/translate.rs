@@ -1066,6 +1066,63 @@ impl TranslateCtx {
         self.fb.make_closure(&cb_name, &capture_vals, Type::Dynamic)
     }
 
+    /// Build a two-parameter fold callback `(item, acc) => body`.
+    /// Used for `(folded:)` — `each _item making _acc via expr`.
+    /// The runtime calls `fn(item, acc)` and uses the return value as the new accumulator.
+    fn build_fold_callback(&mut self, item_var: &str, acc_var: &str, body: &Expr) -> ValueId {
+        let cb_name = self.make_callback_name("fold");
+
+        // --- 1. Capture outer temp vars by value ---
+        let (outer_temps, capture_spec) = self.collect_outer_captures();
+        let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
+
+        // --- 2. Build the closure FunctionBuilder ---
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic, Type::Dynamic],
+            return_ty: Type::Dynamic,
+            defaults: vec![],
+            has_rest_param: false,
+        };
+        let mut cb_fb = FunctionBuilder::new(&cb_name, sig, Visibility::Public);
+        cb_fb.set_method_kind(MethodKind::Closure);
+        let item_param = cb_fb.param(0);
+        let acc_param = cb_fb.param(1);
+
+        // Register capture params (appended after regular params).
+        let cap_ids = cb_fb.add_capture_params(capture_spec);
+
+        // --- 3. Lower body in the closure context ---
+        let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
+        let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        self.init_captured_temps(&outer_temps, &cap_ids);
+
+        // Bind item parameter.
+        let item_alloc = self.fb.alloc(Type::Dynamic);
+        self.fb.name_value(item_alloc, format!("_{item_var}"));
+        self.fb.store(item_alloc, item_param);
+        self.temp_vars.insert(item_var.to_string(), item_alloc);
+
+        // Bind accumulator parameter.
+        let acc_alloc = self.fb.alloc(Type::Dynamic);
+        self.fb.name_value(acc_alloc, format!("_{acc_var}"));
+        self.fb.store(acc_alloc, acc_param);
+        self.temp_vars.insert(acc_var.to_string(), acc_alloc);
+
+        let result = self.lower_expr(body);
+        self.fb.ret(Some(result));
+
+        let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
+        self.temp_vars = saved_temps;
+
+        let mut func = cb_fb.build();
+        func.method_kind = MethodKind::Closure;
+        self.callbacks.push(func);
+
+        // --- 4. Emit Op::MakeClosure ---
+        self.fb.make_closure(&cb_name, &capture_vals, Type::Dynamic)
+    }
+
     /// Infer the element type from a list of lowered collection values.
     ///
     /// If any value has type `Array(T)`, returns `T`. Otherwise returns `Dynamic`.
@@ -1955,6 +2012,11 @@ impl TranslateCtx {
                 // `via expr` — transform lambda: `(it) => expr`.
                 self.build_lambda_callback("it", Some(body), Type::Dynamic, Type::Dynamic)
             }
+            ExprKind::FoldLambda {
+                item_var,
+                acc_var,
+                body,
+            } => self.build_fold_callback(item_var, acc_var, body),
             ExprKind::Error(_) => self.fb.const_bool(false),
         }
     }
@@ -2098,7 +2160,7 @@ impl TranslateCtx {
             "find" | "some-pass" | "all-pass" | "none-pass" | "count" => {
                 return self.lower_predicate_collection_op(name, args, Type::Bool);
             }
-            "altered" => {
+            "altered" | "sorted-by" => {
                 return self.lower_predicate_collection_op(name, args, Type::Dynamic);
             }
             _ => {}
@@ -2466,6 +2528,66 @@ You're at the **plaza**
             })
         });
         assert!(has_find, "should have Harlowe.Engine.collection_op call");
+    }
+
+    #[test]
+    fn test_sorted_by_produces_callback() {
+        use reincarnate_core::ir::inst::Op;
+        // (sorted-by: each _x via _x, 3, 1, 2) — produces a collection_op call with a callback
+        let ast = parser::parse("(set: $r to (sorted-by: each _x via _x, 3, 1, 2))");
+        let result = translate_passage("test_sorted_by", &ast, "");
+        // Should produce at least one callback (the via lambda)
+        assert!(
+            !result.callbacks.is_empty(),
+            "sorted-by should produce a lambda callback"
+        );
+        // Should have a collection_op syscall
+        let all_ops: Vec<_> = result
+            .func
+            .blocks
+            .values()
+            .flat_map(|b| b.insts.iter().map(|&id| &result.func.insts[id].op))
+            .collect();
+        let has_collection_op = all_ops.iter().any(|op| {
+            matches!(op, Op::SystemCall { system, method, .. }
+                if system == "Harlowe.Engine" && method == "collection_op")
+        });
+        assert!(has_collection_op, "sorted-by should emit collection_op call");
+    }
+
+    #[test]
+    fn test_folded_produces_two_param_callback() {
+        // (folded: each _x making _acc via _x + _acc, 0, 1, 2, 3)
+        // The fold callback takes two params (item, acc)
+        let ast = parser::parse(
+            "(set: $r to (folded: each _x making _acc via _x + _acc, 0, 1, 2, 3))",
+        );
+        let result = translate_passage("test_folded", &ast, "");
+        assert!(
+            !result.callbacks.is_empty(),
+            "folded should produce a fold callback"
+        );
+        let cb = &result.callbacks[0];
+        assert_eq!(cb.sig.params.len(), 2, "fold callback should take 2 params (item, acc)");
+    }
+
+    #[test]
+    fn test_interlaced_repeated_emit_collection_op() {
+        use reincarnate_core::ir::inst::Op;
+        for (macro_call, label) in [
+            ("(set: $r to (interlaced: (a: 1, 2), (a: 3, 4)))", "interlaced"),
+            ("(set: $r to (repeated: 3, \"x\"))", "repeated"),
+        ] {
+            let ast = parser::parse(macro_call);
+            let result = translate_passage(label, &ast, "");
+            let has_collection_op = result.func.blocks.values().any(|b| {
+                b.insts.iter().any(|&id| {
+                    matches!(&result.func.insts[id].op, Op::SystemCall { system, method, .. }
+                        if system == "Harlowe.Engine" && method == "collection_op")
+                })
+            });
+            assert!(has_collection_op, "{label} should emit collection_op call");
+        }
     }
 
     #[test]

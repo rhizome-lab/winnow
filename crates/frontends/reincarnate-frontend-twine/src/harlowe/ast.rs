@@ -204,6 +204,14 @@ pub enum ExprKind {
     /// `via` transform lambda: `via expr` — transforms each element.
     /// Uses `it`/`its` inside `expr` to refer to the current element.
     ViaLambda(Box<Expr>),
+    /// Fold lambda: `each _item making _acc via expr`.
+    /// Used as the first argument to `(folded:)`.
+    /// The emitted callback takes `(item, acc)` and returns the new accumulator.
+    FoldLambda {
+        item_var: String,
+        acc_var: String,
+        body: Box<Expr>,
+    },
     /// Spread expression: `...$arr` or `...(expr)`.
     /// Expands an iterable into the surrounding argument list.
     Spread(Box<Expr>),

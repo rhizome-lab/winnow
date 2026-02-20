@@ -261,6 +261,7 @@ export class HarloweEngine {
   collection_op(name: string, ...args: any[]): any {
     const kebabMap: Record<string, string> = {
       "some-pass": "somePass", "all-pass": "allPass", "none-pass": "nonePass",
+      "sorted-by": "sortedBy",
     };
     const key = kebabMap[name] ?? name;
     const fn = (Collections as any)[key];
@@ -1000,12 +1001,49 @@ function altered(...args: any[]): any[] {
   if (typeof fn !== "function") return items;
   return items.map(fn);
 }
+function sortedBy(...args: any[]): any[] {
+  const fn = args[0];
+  const items = [...args.slice(1)];
+  if (typeof fn !== "function") return items;
+  return items.sort((a, b) => {
+    const ka = fn(a), kb = fn(b);
+    if (typeof ka === "string") return ka.localeCompare(String(kb));
+    return Number(ka) - Number(kb);
+  });
+}
+function interlaced(...arrays: any[]): any[] {
+  const arrs = arrays.map((a: any) => Array.isArray(a) ? a : [a]);
+  if (arrs.length === 0) return [];
+  const maxLen = Math.max(...arrs.map((a: any[]) => a.length));
+  const result: any[] = [];
+  for (let i = 0; i < maxLen; i++) {
+    for (const arr of arrs) {
+      if (i < arr.length) result.push(arr[i]);
+    }
+  }
+  return result;
+}
+function repeated(...args: any[]): any[] {
+  const n = Number(args[0]);
+  const values = args.slice(1);
+  const result: any[] = [];
+  for (let i = 0; i < n; i++) result.push(...values);
+  return result;
+}
+function folded(...args: any[]): any {
+  const fn = args[0];
+  const init = args[1];
+  const items = args.slice(2).flat();
+  if (typeof fn !== "function") return init;
+  return items.reduce((acc: any, item: any) => fn(item, acc), init);
+}
 
 export const Collections = {
   sorted, reversed, rotated, shuffled, count, range,
   find, joined, subarray, substring, lowercase, uppercase,
   datanames, datavalues, dataentries,
   somePass, allPass, nonePass, altered,
+  sortedBy, interlaced, repeated, folded,
 } as const;
 
 // --- Color operations (pure) ---
