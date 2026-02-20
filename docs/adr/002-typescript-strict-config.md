@@ -31,7 +31,7 @@ enable.
 
 | Option | Reason |
 |---|---|
-| `noImplicitAny: false` **kept** | The emitter occasionally produces implicit `any` (e.g. unresolved variable types). Enabling this across the board would surface emitter gaps as user-facing errors rather than emitter bugs. Tracked as a separate task: fix the emitter, then enable the flag. |
+| `noImplicitAny: false` **removed** | Only one runtime error surfaced (`xml.ts` Symbol-indexed array read, fixed with `(v as any)[XML_LIST_TAG]`). Implicit `any` in emitted game code now surfaces as TS7053 — correct diagnostics of missing type info in the emitter, not errors to suppress. |
 | `noFallthroughCasesInSwitch` **not added** | The `JsStmt::Dispatch` node (structurizer output for irreducible control flow) uses an intentional `switch ($block) { case N: { ... } /* falls through */ }` loop pattern. Every non-terminal block in the dispatch switch would be flagged. Enabling this flag would require rearchitecting the dispatch emitter — a separate, non-trivial task. |
 
 ### Why not `@tsconfig/strictest`?
