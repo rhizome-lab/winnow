@@ -263,7 +263,7 @@ export class HarloweEngine {
   collection_op(name: string, ...args: any[]): any {
     const kebabMap: Record<string, string> = {
       "some-pass": "somePass", "all-pass": "allPass", "none-pass": "nonePass",
-      "sorted-by": "sortedBy",
+      "sorted-by": "sortedBy", "rotated-to": "rotatedTo",
     };
     const key = kebabMap[name] ?? name;
     const fn = (Collections as any)[key];
@@ -306,10 +306,10 @@ export class HarloweEngine {
       case "upperfirst": case "lowerfirst":
         return this.str_op(name, args[0]);
       // Collection ops — delegate to collection_op()
-      case "sorted": case "sorted-by": case "reversed": case "rotated":
+      case "sorted": case "sorted-by": case "reversed": case "rotated": case "rotated-to":
       case "shuffled": case "range": case "folded": case "interlaced":
       case "repeated": case "joined": case "subarray": case "substring":
-      case "lowercase": case "uppercase": case "count":
+      case "lowercase": case "uppercase": case "count": case "unique":
       case "some-pass": case "all-pass": case "none-pass": case "find":
       case "altered": case "datanames": case "datavalues": case "dataentries":
       case "permutations": case "pass":
@@ -324,11 +324,45 @@ export class HarloweEngine {
         }));
         return filter ? result.filter((p: any) => filter(p)) : result;
       }
+      // Saved games map
+      case "saved-games": return this.saved_games();
+      // Source — passage source text is not available at runtime; return empty string.
+      case "source": return "";
+      // Metadata — runtime metadata not meaningful; return undefined.
+      case "metadata": return undefined;
       // Meta queries
       case "visited": return this.rt.State.hasVisited(args[0]);
       case "visits": return args.length ? this.rt.State.visits(args[0]) : this.rt.State.current_visits();
       case "turns": return this.rt.State.turns();
       case "history": return this.rt.State.historyTitles();
+      // Date and time
+      case "current-date": {
+        const d = new Date();
+        return d.toLocaleDateString();
+      }
+      case "current-time": {
+        const d = new Date();
+        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+      case "weekday": {
+        // Harlowe: 1=Sunday, 7=Saturday
+        return new Date().getDay() + 1;
+      }
+      case "monthday": return new Date().getDate();
+      case "monthname": return new Date().toLocaleString("default", { month: "long" });
+      case "yearday": {
+        const now = new Date();
+        const start = new Date(now.getFullYear(), 0, 0);
+        const diff = now.getTime() - start.getTime();
+        return Math.floor(diff / 86400000);
+      }
+      // Datamap aliases
+      case "dm-names": case "data-names": return Collections.datanames(args[0]);
+      case "dm-values": case "data-values": return Collections.datavalues(args[0]);
+      case "dm-entries": case "data-entries": return Collections.dataentries(args[0]);
+      case "dm-altered": case "datamap-altered": return Collections.dmAltered(args[0], args[1]);
+      // String split
+      case "split": case "splitted": return Collections.splitStr(...args);
       // Misc
       case "cond": {
         // `(cond: bool1, val1, bool2, val2, ..., defaultVal)` — pairs + optional fallback
@@ -762,7 +796,7 @@ export class HarloweEngine {
         const h = new HarloweContext(wrapper, this.rt, doc);
         try { cb(h); } finally { h.closeAll(); }
       }
-      this.rt.nav.go(String(passage));
+      this.rt.Navigation.goto(String(passage));
     });
     wrapper.appendChild(link);
     this.passage()?.appendChild(wrapper);
@@ -775,14 +809,9 @@ export class HarloweEngine {
     link.textContent = String(text);
     link.addEventListener("click", (e: Event) => {
       e.preventDefault();
-      this.rt.nav.undo();
+      this.rt.Navigation.undo();
     });
     this.passage()?.appendChild(link);
-  }
-
-  /** `(goto-url: url)` — open a URL in a new browser tab. */
-  goto_url(url: string): void {
-    window.open(String(url), "_blank");
   }
 
   /** `(link-fullscreen:)` — link that toggles browser fullscreen. */
@@ -1092,6 +1121,36 @@ function folded(...args: any[]): any {
 
 function pass(...args: any[]): any { return args[0]; }
 
+function unique(...args: any[]): any[] {
+  const arr = args.flat();
+  return [...new Set(arr)];
+}
+
+function rotatedTo(...args: any[]): any[] {
+  const target = args[0];
+  const arr = args.slice(1).flat();
+  const idx = arr.indexOf(target);
+  if (idx < 0) return arr;
+  return [...arr.slice(idx), ...arr.slice(0, idx)];
+}
+
+function splitStr(...args: any[]): string[] {
+  // (split: separator, string) — splits string by separator
+  if (args.length < 2) return typeof args[0] === "string" ? [args[0]] : [];
+  const sep = String(args[0]);
+  const str = String(args[1]);
+  return sep === "" ? [...str] : str.split(sep);
+}
+
+function dmAltered(fn: any, map: any): Map<any, any> {
+  if (!(map instanceof Map) || typeof fn !== "function") return new Map();
+  const result = new Map();
+  for (const [k, v] of map) {
+    result.set(k, fn(v));
+  }
+  return result;
+}
+
 function permutations(...items: any[]): any[][] {
   const flat = items.flat();
   if (flat.length === 0) return [[]];
@@ -1107,12 +1166,12 @@ function permutations(...items: any[]): any[][] {
 }
 
 export const Collections = {
-  sorted, reversed, rotated, shuffled, count, range,
+  sorted, reversed, rotated, rotatedTo, shuffled, count, range,
   find, joined, subarray, substring, lowercase, uppercase,
-  datanames, datavalues, dataentries,
+  datanames, datavalues, dataentries, dmAltered,
   somePass, allPass, nonePass, altered,
   sortedBy, interlaced, repeated, folded,
-  pass, permutations,
+  pass, permutations, unique, splitStr,
 } as const;
 
 // --- Color operations (pure) ---

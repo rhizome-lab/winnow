@@ -22,7 +22,7 @@ pub enum MacroKind {
 pub fn macro_kind(name: &str) -> MacroKind {
     match name {
         // Control flow
-        "if" | "else-if" | "elseif" | "else" | "unless" | "for" => MacroKind::ControlFlow,
+        "if" | "else-if" | "elseif" | "else" | "unless" | "for" | "loop" => MacroKind::ControlFlow,
 
         // Commands
         "set" | "put" | "move" | "goto" | "go-to" | "display" | "print" | "save-game"
@@ -40,22 +40,24 @@ pub fn macro_kind(name: &str) -> MacroKind {
 
         // Changers — includes t8n* aliases and transition-delay/text-rotate aliases
         "color" | "colour" | "text-colour" | "text-color" | "text-style" | "font" | "align"
-        | "transition" | "t8n" | "transition-time" | "t8n-time" | "transition-arrive"
-        | "transition-depart" | "transition-delay" | "t8n-delay" | "transition-skip" | "t8n-skip"
+        | "transition" | "t8n" | "transition-time" | "t8n-time" | "transition-arrive" | "t8n-arrive"
+        | "transition-depart" | "t8n-depart" | "transition-delay" | "t8n-delay"
+        | "transition-skip" | "t8n-skip"
         | "text-rotate-z" | "text-rotate-x" | "text-rotate-y" | "text-rotate"
-        | "hover-style" | "css" | "background" | "box" | "float-box" | "char-style"
-        | "line-style" | "page-style" | "opacity" | "text-indent" | "text-size"
+        | "hover-style" | "css" | "background" | "bg" | "box" | "float-box" | "char-style"
+        | "line-style" | "page-style" | "opacity" | "text-indent" | "text-size" | "size"
         | "collapse" | "nobr" | "verbatim" | "hidden"
         | "action" => MacroKind::Changer,
 
         // Value macros
-        "str" | "string" | "num" | "number" | "a" | "array" | "dm" | "datamap" | "ds"
+        "str" | "string" | "text" | "num" | "number" | "a" | "array" | "dm" | "datamap" | "ds"
         | "dataset" | "random" | "either" | "round" | "floor" | "ceil" | "abs" | "min"
         | "max" | "pow" | "sqrt" | "sin" | "cos" | "tan" | "log" | "log10" | "log2"
-        | "sign" | "clamp" | "lerp" | "sorted" | "sorted-by" | "reversed" | "rotated" | "shuffled"
+        | "sign" | "clamp" | "lerp" | "sorted" | "sorted-by" | "reversed" | "rotated"
+        | "rotated-to" | "shuffled"
         | "interlaced" | "folded" | "altered" | "count" | "range" | "repeated" | "joined"
         | "some-pass" | "all-pass" | "none-pass" | "find" | "lowercase" | "uppercase"
-        | "upperfirst" | "lowerfirst"
+        | "upperfirst" | "lowerfirst" | "split" | "splitted" | "unique"
         | "cond" | "nth" | "substring" | "subarray" | "bit" | "rgb" | "rgba" | "hsl"
         | "hsla" | "gradient" | "lch" | "lcha" | "complement" | "mix"
         | "weekday" | "monthday" | "monthname" | "yearday" | "current-date" | "current-time"

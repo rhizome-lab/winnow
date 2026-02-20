@@ -567,7 +567,7 @@ impl TranslateCtx {
 
             // Control flow — emit directly (no value)
             "if" | "unless" => { self.emit_if(mac); }
-            "for" => { self.emit_for(mac); }
+            "for" | "loop" => { self.emit_for(mac); }
 
             // Navigation (side effect)
             "goto" | "go-to" => self.lower_goto(mac),
@@ -784,7 +784,7 @@ impl TranslateCtx {
                 self.emit_if(mac);
                 None
             }
-            "for" => {
+            "for" | "loop" => {
                 self.emit_for(mac);
                 None
             }
