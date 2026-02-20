@@ -280,6 +280,9 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
 - [ ] **L10n.get()** — Returns key as-is. Low impact.
 - [ ] **SimpleAudio.select()** — AudioRunner returned is a no-op stub.
 - [ ] **Engine.forward()** — No-op (deprecated in SugarCube v2).
+- [ ] **SCEngine.clone()** — Missing from runtime; 643 TS2339 errors in DoL. SugarCube's `clone()` does a deep copy of arbitrary story data.
+- [ ] **SCEngine.iterate() / iterator_has_next() / iterator_next_value() / iterator_next_key()** — Missing; ~969 TS2339 errors in DoL. SugarCube iterator API for `<<for>>` over arrays/objects.
+- [ ] **TS2447 `|` on booleans** (1610 errors in DoL) — SugarCube `<<if $a | $b>>` emits `a | b` but operands are typed `boolean`; TS rejects bitwise OR on booleans. Fix: widen to `any` at emit, or cast operands.
 
 ### SugarCube oxc Parse Errors
 
