@@ -19,6 +19,8 @@ export class HarloweEngine {
   private rt: HarloweRuntime;
   /** Map from passage name to its storylet condition function. */
   private storyletConditions: Record<string, (rt: HarloweRuntime) => boolean> = {};
+  /** Map from passage name to its raw source text, for `(source:)`. */
+  passageSources: Map<string, string> = new Map();
 
   constructor(rt: HarloweRuntime) {
     this.rt = rt;
@@ -37,7 +39,7 @@ export class HarloweEngine {
     for (const [name, cond] of Object.entries(this.storyletConditions)) {
       if (!cond(this.rt)) continue;
       const tags = this.rt.Navigation.getTags(name);
-      const info: PassageInfo = { name, source: "", tags };
+      const info: PassageInfo = { name, source: this.passageSources.get(name) ?? "", tags };
       if (!filter || filter(info)) {
         results.push(info);
       }
@@ -357,14 +359,14 @@ export class HarloweEngine {
         // `(passages:)` — returns array of all passage info, optionally filtered by lambda.
         const filter = args[0] && typeof args[0] === "function" ? args[0] : null;
         const result = Array.from(this.rt.Navigation.passages.keys()).map(name => ({
-          name, source: "", tags: this.rt.Navigation.passageTags.get(name) ?? [],
+          name, source: this.passageSources.get(name) ?? "", tags: this.rt.Navigation.passageTags.get(name) ?? [],
         }));
         return filter ? result.filter((p: any) => filter(p)) : result;
       }
       // Saved games map
       case "saved-games": return this.saved_games();
-      // Source — passage source text is not available at runtime; return empty string.
-      case "source": return "";
+      // Source — return the raw source of the current passage if available.
+      case "source": return this.passageSources.get(this.rt.Navigation.current()) ?? "";
       // Metadata — runtime metadata not meaningful; return undefined.
       case "metadata": return undefined;
       // Meta queries
@@ -436,7 +438,7 @@ export class HarloweEngine {
   current_passage(name?: string): any {
     const title = name ?? this.rt.Navigation.current();
     const tags = this.rt.Navigation.passageTags.get(title) ?? [];
-    return { name: title, source: "", tags };
+    return { name: title, source: this.passageSources.get(title) ?? "", tags };
   }
 
   // --- Meta queries ---

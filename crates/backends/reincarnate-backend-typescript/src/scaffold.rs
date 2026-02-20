@@ -209,6 +209,27 @@ fn build_passage_tags(modules: &[Module]) -> String {
     }
 }
 
+/// Build passage source map: `{ "Name": "source text", ... }`.
+fn build_passage_sources(modules: &[Module]) -> String {
+    let mut entries = Vec::new();
+    for module in modules {
+        for (display_name, source) in &module.passage_sources {
+            let key = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+            let val = source
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r");
+            entries.push(format!("  \"{key}\": \"{val}\""));
+        }
+    }
+    if entries.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n}}", entries.join(",\n"))
+    }
+}
+
 /// Build storylet conditions map: `{ "Name": storylet_cond_fn, ... }`.
 fn build_storylet_conditions(modules: &[Module]) -> String {
     let mut entries = Vec::new();
@@ -421,6 +442,7 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
         let room_creation_code = build_room_creation_code_array(modules);
         let passage_map = build_passage_map(modules);
         let passage_tags = build_passage_tags(modules);
+        let passage_sources = build_passage_sources(modules);
         let user_scripts = build_user_script_calls(modules);
         let start_passage = find_start_passage(modules);
         let root_class = find_root_class(modules);
@@ -433,6 +455,7 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
             .replace("{roomCreationCode}", &room_creation_code)
             .replace("{passages}", &passage_map)
             .replace("{passageTags}", &passage_tags)
+            .replace("{passageSources}", &passage_sources)
             .replace("{userScripts}", &user_scripts)
             .replace("{startPassage}", &start_passage)
             .replace("{rootClass}", &root_class)

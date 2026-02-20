@@ -156,6 +156,11 @@ pub struct Module {
     /// registry for runtime use (nobr, widget, special passages, etc.).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub passage_tags: BTreeMap<String, Vec<String>>,
+    /// Passage source texts: display name → raw source string.
+    /// Populated by the Twine frontend when source string emission is enabled.
+    /// Used by the scaffold to build a `sourceMap` for `(source:)` at runtime.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub passage_sources: BTreeMap<String, String>,
     /// Storylet conditions: passage display name → condition function name.
     /// Populated by the Harlowe frontend when `(storylet: when expr)` is
     /// encountered. The scaffold uses this to register each passage's
@@ -182,6 +187,7 @@ impl Module {
             sprite_names: Vec::new(),
             passage_names: BTreeMap::new(),
             passage_tags: BTreeMap::new(),
+            passage_sources: BTreeMap::new(),
             passage_storylets: BTreeMap::new(),
         }
     }

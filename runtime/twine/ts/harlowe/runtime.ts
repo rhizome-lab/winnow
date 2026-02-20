@@ -45,7 +45,7 @@ export class HarloweRuntime {
     passageMap: Record<string, PassageFn>,
     startPassage?: string,
     tagMap?: Record<string, string[]>,
-    opts?: { root?: RenderRoot; persistence?: PersistenceOpts },
+    opts?: { root?: RenderRoot; persistence?: PersistenceOpts; sourceMap?: Record<string, string> },
   ): void {
     if (opts?.root) {
       this.Navigation.doc = opts.root.doc;
@@ -58,6 +58,11 @@ export class HarloweRuntime {
     if (tagMap) {
       for (const [name, tags] of Object.entries(tagMap)) {
         this.Navigation.passageTags.set(name, tags);
+      }
+    }
+    if (opts?.sourceMap) {
+      for (const [name, src] of Object.entries(opts.sourceMap)) {
+        this.Engine.passageSources.set(name, src);
       }
     }
 

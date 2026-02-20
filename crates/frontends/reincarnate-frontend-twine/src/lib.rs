@@ -213,6 +213,20 @@ impl TwineFrontend {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
+        // Parse source_strings emission mode (default: Gamewide).
+        let source_strings_mode = match input.options.get("source_strings") {
+            Some(v) if v.as_bool() == Some(true) => SourceStringsMode::Always,
+            Some(v) if v.as_bool() == Some(false) => SourceStringsMode::Never,
+            Some(v) => match v.as_str() {
+                Some("always") => SourceStringsMode::Always,
+                Some("gamewide") => SourceStringsMode::Gamewide,
+                Some("conservative") => SourceStringsMode::Conservative,
+                Some("never") => SourceStringsMode::Never,
+                _ => SourceStringsMode::Gamewide,
+            },
+            None => SourceStringsMode::Gamewide,
+        };
+
         let mut mb = ModuleBuilder::new(&story.name);
         let mut start_func_id = None;
         let mut assets = AssetCatalog::new();
@@ -296,6 +310,28 @@ impl TwineFrontend {
             eprintln!("warning: {parse_errors} parse error(s) in Harlowe story");
         }
 
+        // Emit passage source strings according to the configured mode.
+        let emit_sources: Vec<&extract::Passage> = match source_strings_mode {
+            SourceStringsMode::Always => story.passages.iter().collect(),
+            SourceStringsMode::Gamewide => {
+                let any_uses_source = story.passages.iter().any(|p| p.source.contains("(source:"));
+                if any_uses_source {
+                    story.passages.iter().collect()
+                } else {
+                    Vec::new()
+                }
+            }
+            SourceStringsMode::Conservative => story
+                .passages
+                .iter()
+                .filter(|p| p.source.contains("(source:"))
+                .collect(),
+            SourceStringsMode::Never => Vec::new(),
+        };
+        for passage in emit_sources {
+            mb.add_passage_source(passage.name.clone(), passage.source.clone());
+        }
+
         // Generate HAL audio init function if any tracks or config were found.
         if hal_audio && (!hal_tracks.is_empty() || !hal_config.is_empty()) {
             mb.add_function(generate_hal_init_function(&hal_tracks, &hal_config));
@@ -341,6 +377,22 @@ impl TwineFrontend {
             runtime_variant: Some("harlowe".to_string()),
         })
     }
+}
+
+// ── Source strings mode ──────────────────────────────────────────────────────
+
+/// Controls which passage source texts are embedded in the emitted output for
+/// use by `(source:)` at runtime.
+enum SourceStringsMode {
+    /// Embed source for every passage unconditionally.
+    Always,
+    /// Embed source for all passages iff any passage contains `(source:)`.
+    /// This is the default: no overhead if the macro is never used.
+    Gamewide,
+    /// Embed source only for passages whose own source contains `(source:)`.
+    Conservative,
+    /// Never embed source strings.
+    Never,
 }
 
 // ── HAL (Harlowe Audio Library) helpers ─────────────────────────────────────
