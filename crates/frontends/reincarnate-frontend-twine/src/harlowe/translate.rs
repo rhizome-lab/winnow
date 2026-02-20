@@ -2193,6 +2193,49 @@ You're at the **plaza**
     }
 
     #[test]
+    fn test_live_emits_syscall_with_interval() {
+        use reincarnate_core::ir::inst::Op;
+        let ast = parser::parse("(live: 2s)[hello]");
+        let result = translate_passage("test_live_syscall", &ast, "");
+        let func = &result.func;
+        let has_live = func.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&func.insts[inst_id].op, Op::SystemCall { system, method, args, .. }
+                    if system == "Harlowe.H" && method == "live" && args.len() == 2)
+            })
+        });
+        assert!(has_live, "should emit Harlowe.H.live(interval, callback)");
+    }
+
+    #[test]
+    fn test_stop_emits_request_stop_in_callback() {
+        use reincarnate_core::ir::inst::Op;
+        let ast = parser::parse("(live: 1s)[(stop:)]");
+        let result = translate_passage("test_stop_syscall", &ast, "");
+        // (stop:) must appear inside the callback, not the main function
+        assert_eq!(result.callbacks.len(), 1);
+        let cb = &result.callbacks[0];
+        let has_stop = cb.blocks.values().any(|block| {
+            block.insts.iter().any(|&inst_id| {
+                matches!(&cb.insts[inst_id].op, Op::SystemCall { system, method, .. }
+                    if system == "Harlowe.H" && method == "requestStop")
+            })
+        });
+        assert!(has_stop, "requestStop should be emitted inside the live callback");
+    }
+
+    #[test]
+    fn test_live_without_hook_produces_no_callback() {
+        let ast = parser::parse("(live: 1s)");
+        let result = translate_passage("test_live_no_hook", &ast, "");
+        assert_eq!(
+            result.callbacks.len(),
+            0,
+            "(live:) without a hook should produce no callback"
+        );
+    }
+
+    #[test]
     fn test_it_in_set_reads_target_variable() {
         use reincarnate_core::ir::inst::Op;
         let ast = parser::parse("(set: $x to it + 1)");

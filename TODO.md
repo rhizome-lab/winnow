@@ -361,7 +361,7 @@ and add it to `~/reincarnate/twine/`.
 ### Harlowe Phase 2 (Advanced Features)
 
 - [x] **`(for: each _item, ...$arr)[hook]`** — Loop lowering (done)
-- [ ] **`(live: Ns)[hook]` + `(stop:)`** — Timed interval (basic IR done, runtime impl present)
+- [x] **`(live: Ns)[hook]` + `(stop:)`** — Timed interval (IR lowering, runtime `live()`/`stopLive`, navigation cleanup all done; regression test present)
 - [ ] **`(click: ?hook)[hook]`** — Event handler targeting named hooks
 - [ ] **Collection constructors** — `(a:)`, `(dm:)`, `(ds:)` (runtime done, parser handles basic cases)
 - [ ] **Collection operators** — `contains`, `is in`, `'s`, `of` with full Harlowe semantics
