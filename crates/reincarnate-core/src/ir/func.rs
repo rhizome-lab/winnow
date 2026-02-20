@@ -7,7 +7,7 @@ use crate::entity::PrimaryMap;
 
 use super::block::{Block, BlockId};
 use super::coroutine::CoroutineInfo;
-use super::inst::{Inst, InstId};
+use super::inst::{Inst, InstId, Op};
 use super::ty::{FunctionSig, Type};
 use super::value::ValueId;
 
@@ -118,5 +118,58 @@ impl Function {
         }
 
         self.insts = new_insts;
+    }
+
+    /// Move all `Op::Alloc` instructions to the entry block.
+    ///
+    /// In most supported source languages (GML, Harlowe, Flash AS3), variable
+    /// declarations have function scope — a variable set inside an `if` branch
+    /// is visible for the rest of the function. But when a frontend emits
+    /// `Op::Alloc` inside a nested block (e.g. inside an if-branch), the
+    /// emitted TypeScript `let _x` is block-scoped, causing TS2304 errors for
+    /// references outside that block.
+    ///
+    /// This pass corrects that by moving every `Op::Alloc` to the front of
+    /// the entry block, where it emits as a function-level declaration.
+    /// Downstream passes (Mem2Reg, structurizer, emitter) are unaffected:
+    /// Mem2Reg only cares about Alloc/Store/Load relationships, not position,
+    /// and moving an Alloc earlier never breaks data-flow since it produces a
+    /// slot rather than consuming a value.
+    pub fn hoist_allocs(&mut self) {
+        let entry = self.entry;
+        let block_ids: Vec<BlockId> = self.blocks.keys().collect();
+        let mut allocs_to_hoist: Vec<InstId> = vec![];
+
+        for bid in block_ids {
+            if bid == entry {
+                continue;
+            }
+            // Collect alloc positions from this block (in order).
+            let positions: Vec<usize> = self.blocks[bid]
+                .insts
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &iid)| {
+                    matches!(self.insts[iid].op, Op::Alloc(_)).then_some(i)
+                })
+                .collect();
+            // Remove in reverse to preserve indices.
+            for pos in positions.into_iter().rev() {
+                allocs_to_hoist.push(self.blocks[bid].insts.remove(pos));
+            }
+        }
+
+        if allocs_to_hoist.is_empty() {
+            return;
+        }
+
+        // allocs_to_hoist is reverse-order (last block's last alloc first).
+        allocs_to_hoist.reverse();
+
+        // Prepend all hoisted allocs to the entry block.
+        let entry_insts = &mut self.blocks[entry].insts;
+        let existing = std::mem::take(entry_insts);
+        entry_insts.extend(allocs_to_hoist);
+        entry_insts.extend(existing);
     }
 }

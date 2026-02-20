@@ -2368,6 +2368,7 @@ fn emit_function(
         eprintln!("=== IR: {} ===\n{}\n=== end IR ===\n", func.name, func);
     }
 
+    func.hoist_allocs();
     let shape = structurize::structurize(func);
     let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
     let ctx = crate::lower::LowerCtx {
@@ -2779,6 +2780,7 @@ fn compile_closures(
             .unwrap_or(&func.name)
             .to_string();
 
+        func.hoist_allocs();
         let shape = structurize::structurize(func);
         let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
 
@@ -2845,6 +2847,7 @@ fn emit_class_method(
         eprintln!("=== IR: {} ===\n{}\n=== end IR ===\n", func.name, func);
     }
 
+    func.hoist_allocs();
     let shape = structurize::structurize(func);
     let ast = linear::lower_function_linear(func, &shape, lowering_config, debug);
 

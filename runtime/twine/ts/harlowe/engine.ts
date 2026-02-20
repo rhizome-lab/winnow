@@ -1104,7 +1104,7 @@ function count(...args: any[]): number {
 function range(...args: any[]): number[] {
   const start = Number(args[0]);
   const end = Number(args[1]);
-  const result = [];
+  const result: number[] = [];
   for (let i = start; i <= end; i++) result.push(i);
   return result;
 }
