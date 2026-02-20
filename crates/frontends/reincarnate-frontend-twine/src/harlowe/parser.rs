@@ -10,6 +10,35 @@ use super::lexer::ExprLexer;
 use super::macros;
 use crate::html_util;
 
+/// Scan `args_text` for `_varname` tokens and return them as `ExprKind::TempVar` expressions.
+///
+/// Used for `(macro:)` args which use `type-name _param-name` pairs (no comma between the
+/// type annotation and the temp-var). Normal expression parsing drops the `_param` because
+/// `parse_expr` consumes the type ident and stops. This scanner works at the byte level.
+fn scan_macro_param_names(args_text: &str, base_offset: usize) -> Vec<Expr> {
+    let bytes = args_text.as_bytes();
+    let mut i = 0;
+    let mut params = Vec::new();
+    while i < bytes.len() {
+        if bytes[i] == b'_' {
+            let name_start = i + 1;
+            let mut j = name_start;
+            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                j += 1;
+            }
+            if j > name_start {
+                let name = args_text[name_start..j].to_string();
+                let span = Span::new(base_offset + i, base_offset + j);
+                params.push(Expr { kind: ExprKind::TempVar(name), span });
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    params
+}
+
 /// Parse a Harlowe passage into an AST.
 pub fn parse(source: &str) -> PassageAst {
     let mut parser = Parser::new(source);
@@ -182,6 +211,43 @@ impl<'a> Parser<'a> {
         let name = self.source[name_start..self.pos].to_lowercase();
 
         if name.is_empty() {
+            // Check for dynamic macro call: `($storyVar: args)` or `(_tempVar: args)`.
+            // The callee is a variable holding a `(macro:)` closure.
+            let prefix = self.peek();
+            if prefix == Some(b'$') || prefix == Some(b'_') {
+                let sigil = self.bytes[self.pos] as char;
+                self.pos += 1; // skip `$` or `_`
+                let var_start = self.pos;
+                while self.pos < self.bytes.len()
+                    && (self.bytes[self.pos].is_ascii_alphanumeric()
+                        || self.bytes[self.pos] == b'_')
+                {
+                    self.pos += 1;
+                }
+                let var_name = &self.source[var_start..self.pos];
+                if !var_name.is_empty() && self.peek() == Some(b':') {
+                    // Valid dynamic macro call — parse as MacroNode with `$name`/`_name`.
+                    let dyn_name = format!("{sigil}{var_name}");
+                    self.pos += 1; // skip `:`
+                    self.skip_whitespace();
+                    let args_text = self.extract_balanced_args();
+                    let args = self.parse_macro_args(&dyn_name, &args_text, start);
+                    if self.peek() == Some(b')') {
+                        self.pos += 1;
+                    }
+                    let macro_end = self.pos;
+                    return Some(Node {
+                        kind: NodeKind::Macro(MacroNode {
+                            name: dyn_name,
+                            args,
+                            hook: None,
+                            clauses: Vec::new(),
+                            span: Span::new(start, macro_end),
+                        }),
+                        span: Span::new(start, macro_end),
+                    });
+                }
+            }
             // Not a macro — could be a parenthesized expression in text, restore
             self.pos = start;
             return self.parse_text(in_hook);
@@ -191,13 +257,20 @@ impl<'a> Parser<'a> {
         self.skip_whitespace();
 
         // Expect `:` after name (for macros with args) or `)` (no args)
-        let args = if self.peek() == Some(b':') {
+        // `inline_hook`: for `(macro:)`, the CodeHook is INSIDE the parens as the last arg.
+        // Other macros have their hook outside (after `)`).
+        let (args, inline_hook) = if self.peek() == Some(b':') {
             self.pos += 1; // skip `:`
             self.skip_whitespace();
 
             // Parse args up to the matching `)`
             let args_text = self.extract_balanced_args();
-            self.parse_macro_args(&name, &args_text, start)
+            if name == "macro" {
+                // `(macro: type _param, ..., [CodeHook])` — hook is last arg inside parens.
+                self.parse_macro_definition_args(&args_text, start)
+            } else {
+                (self.parse_macro_args(&name, &args_text, start), None)
+            }
         } else if self.peek() == Some(b')') {
             // No colon — Harlowe macros always require `:`. This is prose like `(obviously)`.
             self.pos += 1; // consume the `)`
@@ -224,8 +297,8 @@ impl<'a> Parser<'a> {
 
         let macro_end = self.pos;
 
-        // Check for attached hook `[...]`
-        let hook = self.try_parse_hook(macros::expects_hook(&name));
+        // Check for attached hook `[...]` (the inline hook takes precedence for `(macro:)`).
+        let hook = inline_hook.or_else(|| self.try_parse_hook(macros::expects_hook(&name)));
         let has_hook = hook.is_some();
 
         // For if-chains: collect else-if / else clauses
@@ -315,10 +388,117 @@ impl<'a> Parser<'a> {
         self.source[start..self.pos].to_string()
     }
 
+    /// Parse `(macro:)` args: `type-name _param, ..., [CodeHook]`.
+    ///
+    /// Returns `(param_exprs, Some(hook_nodes))` where params are the `_varname` temp-vars
+    /// and `hook_nodes` is the parsed body (the `[CodeHook]` last argument).
+    fn parse_macro_definition_args(
+        &mut self,
+        args_text: &str,
+        _base_offset: usize,
+    ) -> (Vec<Expr>, Option<Vec<Node>>) {
+        // Find the `[CodeHook]` — the first `[` at bracket depth 0 in the args text.
+        // Everything before it (stripped of trailing comma) is the params text.
+        let bytes = args_text.as_bytes();
+        let mut i = 0;
+        let mut bracket_start: Option<usize> = None;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'[' => {
+                    bracket_start = Some(i);
+                    break;
+                }
+                b'"' => {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b'"' {
+                        if bytes[i] == b'\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    if i < bytes.len() {
+                        i += 1; // skip closing `"`
+                    }
+                }
+                b'(' => {
+                    // Skip balanced nested parens (inner macros in args are unusual here
+                    // but handle them for safety).
+                    i += 1;
+                    let mut depth = 1usize;
+                    while i < bytes.len() && depth > 0 {
+                        match bytes[i] {
+                            b'(' => {
+                                depth += 1;
+                                i += 1;
+                            }
+                            b')' => {
+                                depth -= 1;
+                                i += 1;
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        }
+
+        if let Some(bracket_pos) = bracket_start {
+            // Params text: everything before `[`, trailing comma/whitespace stripped.
+            let params_text = args_text[..bracket_pos].trim_end_matches(',').trim();
+            // Params: scan for `_varname` patterns.
+            let params = scan_macro_param_names(params_text, _base_offset);
+
+            // Hook body text: find matching `]`.
+            let rest = &args_text[bracket_pos + 1..]; // skip `[`
+            let rbytes = rest.as_bytes();
+            let mut depth = 1usize;
+            let mut j = 0;
+            while j < rbytes.len() && depth > 0 {
+                match rbytes[j] {
+                    b'[' => {
+                        depth += 1;
+                        j += 1;
+                    }
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        j += 1;
+                    }
+                    _ => {
+                        j += 1;
+                    }
+                }
+            }
+            let hook_text = &rest[..j];
+            let hook_nodes = {
+                let mut sub = Parser::new(hook_text);
+                sub.parse_body(true)
+            };
+            (params, Some(hook_nodes))
+        } else {
+            // No `[CodeHook]` found — macro definition with no body (unusual).
+            let params = scan_macro_param_names(args_text, _base_offset);
+            (params, None)
+        }
+    }
+
     /// Parse macro arguments from extracted text.
-    fn parse_macro_args(&mut self, _name: &str, args_text: &str, base_offset: usize) -> Vec<Expr> {
+    fn parse_macro_args(&mut self, name: &str, args_text: &str, base_offset: usize) -> Vec<Expr> {
         if args_text.trim().is_empty() {
             return Vec::new();
+        }
+        // `(macro:)` uses `type-name _param` pairs — the type annotation and the temp-var
+        // name have no comma between them. Normal expression parsing consumes only the type
+        // ident and drops `_param`. Scan at the byte level to collect `_varname` tokens.
+        if name == "macro" || name.starts_with('$') || name.starts_with('_') {
+            return scan_macro_param_names(args_text, base_offset);
         }
         let mut lexer = ExprLexer::new(args_text, base_offset);
         expr::parse_args(&mut lexer)

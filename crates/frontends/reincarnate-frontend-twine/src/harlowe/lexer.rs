@@ -146,6 +146,162 @@ impl<'a> ExprLexer<'a> {
         }
     }
 
+    /// For `(macro:)` parsing: scan from the current position through the args
+    /// (everything up to the matching `)`) collecting `_varname` param names and the
+    /// `[CodeHook]` body. Returns `(param_names, hook_source)`.
+    ///
+    /// Harlowe's `(macro:)` syntax: `(macro: type-name _param, type-name _param, [CodeHook])`
+    /// where:
+    /// - type annotation and temp-var name have no comma between them
+    /// - parameters are comma-separated
+    /// - `[CodeHook]` is the LAST argument inside the parens (not a hook after `)`)
+    ///
+    /// Normal expression parsing fails because `parse_expr` consumes the type ident and
+    /// stops before `_param`, and `[CodeHook]` is not a recognized token. This scanner
+    /// works at the byte level.
+    pub fn extract_macro_definition(&mut self) -> (Vec<String>, Option<String>) {
+        let mut params: Vec<String> = Vec::new();
+        let mut hook_source: Option<String> = None;
+        let mut paren_depth = 0usize;
+        while self.pos < self.bytes.len() {
+            match self.bytes[self.pos] {
+                b'(' => {
+                    paren_depth += 1;
+                    self.pos += 1;
+                }
+                b')' if paren_depth == 0 => {
+                    self.pos += 1; // consume `)`
+                    break;
+                }
+                b')' => {
+                    paren_depth -= 1;
+                    self.pos += 1;
+                }
+                b'[' if paren_depth == 0 => {
+                    // `[CodeHook]` is the last argument of (macro:) — extract body text.
+                    // After extraction, skip whitespace/nothing until the closing `)`.
+                    hook_source = self.extract_hook_body(); // pos is at `[`
+                    // Skip to and consume the closing `)` of (macro:...)
+                    while self.pos < self.bytes.len() && self.bytes[self.pos] != b')' {
+                        self.pos += 1;
+                    }
+                    if self.pos < self.bytes.len() {
+                        self.pos += 1; // consume `)`
+                    }
+                    break;
+                }
+                b'[' => {
+                    // `[...]` inside nested parens — scan through balanced brackets.
+                    self.pos += 1;
+                    let mut bracket_depth = 1usize;
+                    while self.pos < self.bytes.len() && bracket_depth > 0 {
+                        match self.bytes[self.pos] {
+                            b'[' => {
+                                bracket_depth += 1;
+                                self.pos += 1;
+                            }
+                            b']' => {
+                                bracket_depth -= 1;
+                                self.pos += 1;
+                            }
+                            _ => {
+                                self.pos += 1;
+                            }
+                        }
+                    }
+                }
+                b'_' => {
+                    // Potential TempVar: `_identifier`
+                    let name_start = self.pos + 1; // skip `_`
+                    let mut i = name_start;
+                    while i < self.bytes.len()
+                        && (self.bytes[i].is_ascii_alphanumeric() || self.bytes[i] == b'_')
+                    {
+                        i += 1;
+                    }
+                    if i > name_start {
+                        params.push(self.input[name_start..i].to_string());
+                        self.pos = i;
+                    } else {
+                        self.pos += 1;
+                    }
+                }
+                b'"' => {
+                    self.pos += 1; // skip `"`
+                    while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' {
+                        if self.bytes[self.pos] == b'\\' {
+                            self.pos += 1;
+                        }
+                        self.pos += 1;
+                    }
+                    if self.pos < self.bytes.len() {
+                        self.pos += 1; // skip closing `"`
+                    }
+                }
+                _ => {
+                    self.pos += 1;
+                }
+            }
+        }
+        // If no [body] was found inside the parens, try for a hook attached after `)`.
+        // This handles the alternative form `(macro: params)[body]` (hook outside parens).
+        if hook_source.is_none() {
+            hook_source = self.extract_hook_body();
+        }
+        (params, hook_source)
+    }
+
+    /// Check if a `[hook_body]` follows at the current position (after optional whitespace).
+    /// If so, consume the entire `[...]` (including brackets) and return the body text.
+    /// Returns `None` if the next non-whitespace character is not `[`.
+    ///
+    /// Used by `try_parse_inline_macro` to capture the body of `(macro:)[body]` when the
+    /// macro definition appears in expression position (e.g. as the RHS of a `(set:)` arg).
+    pub fn extract_hook_body(&mut self) -> Option<String> {
+        self.skip_whitespace();
+        if self.pos >= self.bytes.len() || self.bytes[self.pos] != b'[' {
+            return None;
+        }
+        self.pos += 1; // consume `[`
+        let body_start = self.pos;
+        let mut depth = 1usize;
+        while self.pos < self.bytes.len() && depth > 0 {
+            match self.bytes[self.pos] {
+                b'[' => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break; // stop before consuming `]`
+                    }
+                    self.pos += 1;
+                }
+                b'"' => {
+                    self.pos += 1; // skip `"`
+                    while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' {
+                        if self.bytes[self.pos] == b'\\' {
+                            self.pos += 1;
+                        }
+                        self.pos += 1;
+                    }
+                    if self.pos < self.bytes.len() {
+                        self.pos += 1; // skip closing `"`
+                    }
+                }
+                _ => {
+                    self.pos += 1;
+                }
+            }
+        }
+        let body = self.input[body_start..self.pos].to_string();
+        if self.pos < self.bytes.len() {
+            self.pos += 1; // consume `]`
+        }
+        Some(body)
+    }
+
     /// Peek at the next token without consuming it.
     pub fn peek_token(&mut self) -> Token {
         let saved = self.pos;

@@ -652,6 +652,44 @@ fn try_parse_inline_macro(lexer: &mut ExprLexer, start: usize) -> Option<Expr> {
     let saved = lexer.pos();
     let tok = lexer.peek_token();
 
+    // Dynamic macro call: `($storyVar: args)` or `(_tempVar: args)`.
+    // The callee is a variable holding a custom macro created with `(macro:)`.
+    if let TokenKind::StoryVar(ref name) | TokenKind::TempVar(ref name) = tok.kind {
+        let is_story = matches!(tok.kind, TokenKind::StoryVar(_));
+        let callee_name = name.clone();
+        let callee_span = tok.span;
+        lexer.next_token(); // consume $var or _var
+
+        if matches!(lexer.peek_token().kind, TokenKind::Colon) {
+            lexer.next_token(); // consume `:`
+            let after_colon = lexer.peek_token();
+            let args = if matches!(after_colon.kind, TokenKind::RParen) {
+                Vec::new()
+            } else {
+                parse_args(lexer)
+            };
+            if matches!(lexer.peek_token().kind, TokenKind::RParen) {
+                lexer.next_token(); // consume `)`
+            }
+            let callee_kind = if is_story {
+                ExprKind::StoryVar(callee_name)
+            } else {
+                ExprKind::TempVar(callee_name)
+            };
+            let span = Span::new(start, lexer.pos());
+            return Some(Expr {
+                kind: ExprKind::DynCall {
+                    callee: Box::new(Expr { kind: callee_kind, span: callee_span }),
+                    args,
+                },
+                span,
+            });
+        }
+
+        lexer.pos = saved;
+        return None;
+    }
+
     if let TokenKind::Ident(ref name) = tok.kind {
         let name = name.clone();
         lexer.next_token(); // consume ident
@@ -660,6 +698,31 @@ fn try_parse_inline_macro(lexer: &mut ExprLexer, start: usize) -> Option<Expr> {
 
         if matches!(next.kind, TokenKind::Colon) {
             lexer.next_token(); // consume `:`
+
+            // `(macro: type _param, ...)[body]` — Harlowe's custom macro definition.
+            // The syntax is `type-name _param-name` pairs (no comma between type and name)
+            // with commas separating different parameters. Normal expression parsing fails
+            // because `parse_expr` consumes the type ident and stops before `_param`.
+            // Use a specialized byte scanner that reliably collects `_varname` tokens and
+            // then captures the `[body]` hook.
+            if name == "macro" {
+                let (param_names, hook_source) = lexer.extract_macro_definition();
+                let params: Vec<Expr> = param_names
+                    .into_iter()
+                    .map(|n| Expr {
+                        kind: ExprKind::TempVar(n),
+                        span: Span::empty(lexer.pos()),
+                    })
+                    .collect();
+                let span = Span::new(start, lexer.pos());
+                let kind = if let Some(hook_source) = hook_source {
+                    ExprKind::MacroDef { params, hook_source }
+                } else {
+                    // No hook body — unusual, but produce a placeholder Call.
+                    ExprKind::Call { name, args: params }
+                };
+                return Some(Expr { kind, span });
+            }
 
             // Check for no-arg call: `(saved-games:)`
             let after_colon = lexer.peek_token();
@@ -1024,5 +1087,78 @@ mod tests {
             "expected Lambda, got {:?}",
             expr.kind
         );
+    }
+
+    #[test]
+    fn test_possessive_computed_macro_property() {
+        // `$arr's (random: 1, 5)` — possessive with macro call as property
+        let expr = parse("$arr's (random: 1, 5)");
+        if let ExprKind::Possessive { object, property } = &expr.kind {
+            assert!(matches!(object.kind, ExprKind::StoryVar(ref n) if n == "arr"));
+            if let ExprKind::Call { name, args } = &property.kind {
+                assert_eq!(name, "random");
+                assert_eq!(args.len(), 2);
+            } else {
+                panic!("expected Call property, got {:?}", property.kind);
+            }
+        } else {
+            panic!("expected Possessive, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_inline_macro_call_in_expr() {
+        // `(random: 1, 5)` as a standalone expression (value position)
+        let expr = parse("(random: 1, 5)");
+        if let ExprKind::Call { name, args } = &expr.kind {
+            assert_eq!(name, "random");
+            assert_eq!(args.len(), 2);
+        } else {
+            panic!("expected Call, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_macro_def_captures_hook_body() {
+        // `(macro: dm-type _x)[body text]` — should produce MacroDef with hook_source.
+        // The `extract_macro_definition` scanner collects only `_varname` params (not
+        // type annotations), so params contains just TempVar("x").
+        let expr = parse("(macro: dm-type _x)[body text]");
+        if let ExprKind::MacroDef { params, hook_source } = &expr.kind {
+            assert_eq!(params.len(), 1, "expected 1 param (the TempVar), got {params:?}");
+            assert!(matches!(&params[0].kind, ExprKind::TempVar(n) if n == "x"));
+            assert_eq!(hook_source, "body text");
+        } else {
+            panic!("expected MacroDef, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_macro_def_multi_param() {
+        // `(macro: dm-type _a, str-type _b)[body]` — two params
+        let expr = parse("(macro: dm-type _a, str-type _b)[body]");
+        if let ExprKind::MacroDef { params, hook_source } = &expr.kind {
+            assert_eq!(params.len(), 2, "expected 2 params, got {params:?}");
+            assert!(matches!(&params[0].kind, ExprKind::TempVar(n) if n == "a"));
+            assert!(matches!(&params[1].kind, ExprKind::TempVar(n) if n == "b"));
+            assert_eq!(hook_source, "body");
+        } else {
+            panic!("expected MacroDef, got {:?}", expr.kind);
+        }
+    }
+
+    #[test]
+    fn test_macro_def_in_assign() {
+        // `$fn to (macro: dm-type _x)[body]` — RHS should be MacroDef
+        let expr = parse("$fn to (macro: dm-type _x)[body]");
+        if let ExprKind::Assign { value, .. } = &expr.kind {
+            assert!(
+                matches!(value.kind, ExprKind::MacroDef { .. }),
+                "expected MacroDef on RHS, got {:?}",
+                value.kind
+            );
+        } else {
+            panic!("expected Assign, got {:?}", expr.kind);
+        }
     }
 }

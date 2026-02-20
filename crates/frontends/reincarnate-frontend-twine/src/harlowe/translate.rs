@@ -62,6 +62,7 @@ pub fn translate_passage(name: &str, ast: &PassageAst, source: &str) -> Translat
         passage_name: name.to_string(),
         source: source.to_string(),
         storylet_cond: None,
+        in_macro_body: false,
     };
 
     ctx.emit_content(&ast.body);
@@ -92,6 +93,9 @@ struct TranslateCtx {
     source: String,
     /// Storylet condition function, if this passage contains `(storylet: when expr)`.
     storylet_cond: Option<Function>,
+    /// True when lowering inside a `(macro:)` body.
+    /// In this context, `(output: value)` emits `Op::Return(value)` rather than printing.
+    in_macro_body: bool,
 }
 
 /// Extract a short snippet of source text around a span for diagnostic messages.
@@ -539,6 +543,23 @@ impl TranslateCtx {
     // ── Macro emission (side-effect context) ────────────────────────
 
     fn emit_macro(&mut self, mac: &MacroNode) {
+        // Dynamic macro call: `($storyVar: args)` or `(_tempVar: args)` in statement position.
+        // The callee variable holds a custom macro closure created with `(macro:)`.
+        if let Some(var_name) = mac.name.strip_prefix('$') {
+            let callee_val = {
+                let n = self.fb.const_string(var_name);
+                self.fb.system_call("Harlowe.State", "get", &[n], Type::Dynamic)
+            };
+            let arg_vals: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+            self.fb.call_indirect(callee_val, &arg_vals, Type::Dynamic);
+            return;
+        }
+        if let Some(var_name) = mac.name.strip_prefix('_') {
+            let callee_val = self.get_or_load_temp(var_name);
+            let arg_vals: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+            self.fb.call_indirect(callee_val, &arg_vals, Type::Dynamic);
+            return;
+        }
         match mac.name.as_str() {
             // State (side effects)
             "set" => self.lower_set(mac),
@@ -706,6 +727,25 @@ impl TranslateCtx {
                     .system_call("Harlowe.H", "columnBreak", &[], Type::Void);
             }
 
+            // Custom macro definition — `(macro: type _p, ...)[body]`.
+            // Standalone (as a statement) is a no-op; only useful as a value (via assignment).
+            "macro" => {}
+
+            // Custom macro return — `(output: value)` inside a `(macro:)` body.
+            // Acts as `return value` from the macro function.
+            "output" | "output-data" => {
+                if self.in_macro_body {
+                    if let Some(arg) = mac.args.first() {
+                        let val = self.lower_expr(arg);
+                        self.fb.ret(Some(val));
+                    } else {
+                        self.fb.ret(None);
+                    }
+                } else {
+                    self.emit_value_macro_standalone(mac);
+                }
+            }
+
             // Unknown — route via macro_kind() before falling to unknown
             _ => match macros::macro_kind(&mac.name) {
                 MacroKind::Changer => { self.emit_changer(mac); }
@@ -718,6 +758,20 @@ impl TranslateCtx {
     // ── Macro lowering as value (for nesting inside elements) ───────
 
     fn lower_macro_as_value(&mut self, mac: &MacroNode) -> Option<ValueId> {
+        // Dynamic macro call in value position: `($storyVar: args)` or `(_tempVar: args)`.
+        if let Some(var_name) = mac.name.strip_prefix('$') {
+            let callee_val = {
+                let n = self.fb.const_string(var_name);
+                self.fb.system_call("Harlowe.State", "get", &[n], Type::Dynamic)
+            };
+            let arg_vals: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+            return Some(self.fb.call_indirect(callee_val, &arg_vals, Type::Dynamic));
+        }
+        if let Some(var_name) = mac.name.strip_prefix('_') {
+            let callee_val = self.get_or_load_temp(var_name);
+            let arg_vals: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+            return Some(self.fb.call_indirect(callee_val, &arg_vals, Type::Dynamic));
+        }
         match mac.name.as_str() {
             // State macros don't produce values
             "set" | "put" => {
@@ -786,6 +840,26 @@ impl TranslateCtx {
             // Storylet system
             "open-storylets" | "storylets-of" => {
                 Some(self.lower_open_storylets(mac))
+            }
+
+            // Custom macro definition: `(macro: type _p, ...)[body]` → closure value.
+            "macro" => mac.hook.as_deref().map(|body| {
+                self.lower_macro_definition(mac, body)
+            }),
+
+            // Custom macro return: `(output: value)` inside a macro body → return value.
+            "output" | "output-data" => {
+                if self.in_macro_body {
+                    if let Some(arg) = mac.args.first() {
+                        let val = self.lower_expr(arg);
+                        self.fb.ret(Some(val));
+                    } else {
+                        self.fb.ret(None);
+                    }
+                    None
+                } else {
+                    Some(self.lower_value_macro_as_value(mac))
+                }
             }
 
             // Unknown — route via macro_kind() before falling back
@@ -1867,6 +1941,87 @@ impl TranslateCtx {
         self.fb.make_closure(name, &capture_vals, Type::Dynamic)
     }
 
+    /// Lower `(macro: type _p0, type _p1, ...)[body]` to a TypeScript arrow function closure.
+    ///
+    /// Parameters are extracted from the args list as temp-var expressions (type keywords are
+    /// ignored — they alternate with param names). The body is lowered with `in_macro_body: true`
+    /// so that `(output: value)` emits `Op::Return(value)`.
+    fn lower_macro_definition(&mut self, mac: &MacroNode, body: &[Node]) -> ValueId {
+        // Extract parameter names: skip type-annotation idents, collect temp var names.
+        let params: Vec<String> = mac
+            .args
+            .iter()
+            .filter_map(|a| {
+                if let ExprKind::TempVar(name) = &a.kind {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let cb_name = self.make_callback_name("macro");
+        self.build_macro_closure(&cb_name, &params, body)
+    }
+
+    /// Build a closure for a `(macro:)` body: takes `params` as arguments, returns `Dynamic`.
+    /// Inside the body, `(output:)` emits `Op::Return(value)` via the `in_macro_body` flag.
+    fn build_macro_closure(&mut self, name: &str, params: &[String], body: &[Node]) -> ValueId {
+        // --- 1. Capture outer temp vars ---
+        let (outer_temps, capture_spec) = self.collect_outer_captures();
+        let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
+
+        // --- 2. Build the FunctionBuilder: one param per declared macro parameter ---
+        let param_types = vec![Type::Dynamic; params.len()];
+        let sig = FunctionSig {
+            params: param_types,
+            return_ty: Type::Dynamic,
+            defaults: vec![],
+            has_rest_param: false,
+        };
+        let mut cb_fb = FunctionBuilder::new(name, sig, Visibility::Public);
+        cb_fb.set_method_kind(MethodKind::Closure);
+
+        // Register capture params.
+        let cap_ids = cb_fb.add_capture_params(capture_spec);
+
+        // --- 3. Lower body in the closure context ---
+        let saved_fb = std::mem::replace(&mut self.fb, cb_fb);
+        let saved_temps = std::mem::take(&mut self.temp_vars);
+        let saved_in_macro_body = self.in_macro_body;
+        self.in_macro_body = true;
+
+        // Pre-populate temp_vars from capture params.
+        self.init_captured_temps(&outer_temps, &cap_ids);
+
+        // Bind each declared parameter: param → Alloc slot (same pattern as loop vars).
+        // Mem2Reg will eliminate the alloc/store/load chain.
+        for (i, param_name) in params.iter().enumerate() {
+            let pv = self.fb.param(i);
+            self.fb.name_value(pv, format!("_{param_name}"));
+            let alloc = self.fb.alloc(Type::Dynamic);
+            self.fb.name_value(alloc, format!("_{param_name}"));
+            self.fb.store(alloc, pv);
+            self.temp_vars.insert(param_name.clone(), alloc);
+        }
+
+        self.emit_content(body);
+        // Implicit return undefined if no (output:) was reached.
+        let undef = self.fb.const_bool(false);
+        self.fb.ret(Some(undef));
+
+        let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
+        self.temp_vars = saved_temps;
+        self.in_macro_body = saved_in_macro_body;
+
+        let mut func = cb_fb.build();
+        func.method_kind = MethodKind::Closure;
+        self.callbacks.push(func);
+
+        // --- 4. Emit Op::MakeClosure ---
+        self.fb.make_closure(name, &capture_vals, Type::Dynamic)
+    }
+
     // ── Temp variable helpers ──────────────────────────────────────
 
     fn get_or_create_temp(&mut self, name: &str) -> ValueId {
@@ -2017,6 +2172,29 @@ impl TranslateCtx {
                 acc_var,
                 body,
             } => self.build_fold_callback(item_var, acc_var, body),
+            // Dynamic macro call: `($var: args)` — callee holds a custom macro function.
+            ExprKind::DynCall { callee, args } => {
+                let callee_val = self.lower_expr(callee);
+                let arg_vals: Vec<ValueId> = args.iter().map(|a| self.lower_expr(a)).collect();
+                self.fb.call_indirect(callee_val, &arg_vals, Type::Dynamic)
+            }
+            // `(macro: type _param, ...)[body]` in expression position.
+            // Re-parse the hook body text (captured by the expression lexer) and build a closure.
+            ExprKind::MacroDef { params, hook_source } => {
+                let body_ast = super::parser::parse(hook_source);
+                let param_names: Vec<String> = params
+                    .iter()
+                    .filter_map(|p| {
+                        if let ExprKind::TempVar(name) = &p.kind {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let cb_name = self.make_callback_name("macro");
+                self.build_macro_closure(&cb_name, &param_names, &body_ast.body)
+            }
             ExprKind::Error(_) => self.fb.const_bool(false),
         }
     }
@@ -2268,6 +2446,10 @@ impl TranslateCtx {
                     Type::Dynamic,
                 )
             }
+            // `(macro:)` without a hook body in expression position — should not happen
+            // if the expression parser correctly captures `[body]` via `ExprKind::MacroDef`.
+            // Emit a no-op closure that returns false as a safe fallback.
+            "macro" => self.fb.const_bool(false),
             name if macros::macro_kind(name) == MacroKind::Changer => {
                 let n = self.fb.const_string(name);
                 let mut call_args = vec![n];

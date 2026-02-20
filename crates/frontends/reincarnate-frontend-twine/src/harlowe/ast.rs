@@ -215,6 +215,20 @@ pub enum ExprKind {
     /// Spread expression: `...$arr` or `...(expr)`.
     /// Expands an iterable into the surrounding argument list.
     Spread(Box<Expr>),
+    /// Dynamic macro call: `($var: args)` — callee is a story/temp var holding a custom macro.
+    /// Lowered to `CallIndirect { callee, args }` in the IR.
+    DynCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    /// Inline `(macro:)` definition with its hook body captured in expression position.
+    /// E.g. `(macro: dm-type _x)[body text]` when the whole expression appears as an arg
+    /// to another macro. The hook body is stored as raw source text and re-parsed during
+    /// lowering so that the main passage parser's `[hook]` handling is not bypassed.
+    MacroDef {
+        params: Vec<Expr>,
+        hook_source: String,
+    },
     /// Error placeholder for malformed expressions.
     Error(String),
 }

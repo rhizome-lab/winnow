@@ -66,7 +66,10 @@ pub fn macro_kind(name: &str) -> MacroKind {
         | "pass" | "permutations"
         | "v6" | "v8" | "metadata"
         | "macro" | "partial" | "bind" | "bind-2bind" | "2bind"
-        | "open-storylets" | "storylets-of" => MacroKind::Value,
+        | "open-storylets" | "storylets-of"
+        // Custom macro return values — `(output:)` and `(output-data:)` appear inside
+        // `(macro:)` bodies and act as return statements.
+        | "output" | "output-data" => MacroKind::Value,
 
         // HAL (Harlowe Audio Library) — third-party audio macros
         "track" | "masteraudio" | "newtrack" | "newplaylist" | "newgroup"
