@@ -203,11 +203,32 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
                             );
                         }
                     } else {
-                        let _ = writeln!(
-                            out,
-                            "{indent}{kw} {name_str} = {};",
-                            print_expr(init),
-                        );
+                        // Empty array `[]` or empty object `{}` with no explicit type
+                        // annotation would cause TypeScript to infer `any[]` (TS7034) or
+                        // `{}` with no index signature (TS7053 when string-indexed later).
+                        // Annotate conservatively so the types are explicit.
+                        let annotation = match init {
+                            JsExpr::ArrayInit(elems) if elems.is_empty() => {
+                                Some("unknown[]")
+                            }
+                            JsExpr::ObjectInit(pairs) if pairs.is_empty() => {
+                                Some("Record<string, unknown>")
+                            }
+                            _ => None,
+                        };
+                        if let Some(ann) = annotation {
+                            let _ = writeln!(
+                                out,
+                                "{indent}{kw} {name_str}: {ann} = {};",
+                                print_expr(init),
+                            );
+                        } else {
+                            let _ = writeln!(
+                                out,
+                                "{indent}{kw} {name_str} = {};",
+                                print_expr(init),
+                            );
+                        }
                     }
                 }
                 (None, None) => {
@@ -352,17 +373,25 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
         }
 
         JsStmt::Dispatch { blocks, entry } => {
-            let _ = writeln!(out, "{indent}let $block = {entry};");
-            let _ = writeln!(out, "{indent}while (true) {{");
-            let _ = writeln!(out, "{indent}  switch ($block) {{");
-            for (idx, block_stmts) in blocks {
-                let _ = writeln!(out, "{indent}    case {idx}: {{");
-                let case_indent = format!("{indent}      ");
-                print_stmts(block_stmts, out, &case_indent);
-                let _ = writeln!(out, "{indent}    }}");
+            // A single-block dispatch is a degenerate case: the while/switch wrapper
+            // would create an infinite loop with no exit, making subsequent code
+            // unreachable (TS7027). Inline the block body directly.
+            if blocks.len() == 1 {
+                let (_, block_stmts) = &blocks[0];
+                print_stmts(block_stmts, out, indent);
+            } else {
+                let _ = writeln!(out, "{indent}let $block = {entry};");
+                let _ = writeln!(out, "{indent}while (true) {{");
+                let _ = writeln!(out, "{indent}  switch ($block) {{");
+                for (idx, block_stmts) in blocks {
+                    let _ = writeln!(out, "{indent}    case {idx}: {{");
+                    let case_indent = format!("{indent}      ");
+                    print_stmts(block_stmts, out, &case_indent);
+                    let _ = writeln!(out, "{indent}    }}");
+                }
+                let _ = writeln!(out, "{indent}  }}");
+                let _ = writeln!(out, "{indent}}}");
             }
-            let _ = writeln!(out, "{indent}  }}");
-            let _ = writeln!(out, "{indent}}}");
         }
 
         JsStmt::Switch {
