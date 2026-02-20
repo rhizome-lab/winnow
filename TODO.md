@@ -282,7 +282,7 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
 - [ ] **Engine.forward()** — No-op (deprecated in SugarCube v2).
 - [ ] **SCEngine.clone()** — Missing from runtime; 643 TS2339 errors in DoL. SugarCube's `clone()` does a deep copy of arbitrary story data.
 - [ ] **SCEngine.iterate() / iterator_has_next() / iterator_next_value() / iterator_next_key()** — Missing; ~969 TS2339 errors in DoL. SugarCube iterator API for `<<for>>` over arrays/objects.
-- [ ] **TS2447 `|` on booleans** (1610 errors in DoL) — SugarCube `<<if $a | $b>>` emits `a | b` but operands are typed `boolean`; TS rejects bitwise OR on booleans. Root cause: SugarCube uses `|` as bitwise OR (treating story vars as 0/1 integers), not logical OR. Fix: emit `(a as number) | (b as number)` in the IR rewrite, or infer the operands as `number` instead of `boolean` when used with bitwise ops.
+- [ ] **TS2447 `|` on booleans** (1610 errors in DoL) — DoL uses `|` as logical OR throughout: `(v === "Kylar") | (v === "Bailey")`. It works at JS runtime (`true | false = 1`, truthy) but is semantically `||`. Fix: lower SugarCube's `|` operator to `||` in the IR, since the game's intent is logical OR. This is a SugarCube frontend fix — the `|` BinaryOp should emit `LogicalOr`, not `BitOr`.
 
 ### SugarCube oxc Parse Errors
 
