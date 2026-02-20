@@ -2069,3 +2069,250 @@ fn resolve_fallthrough(
     })?;
     Ok((next.offset, block))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datawin::bytecode::decode::Instruction;
+    use datawin::bytecode::encode::encode;
+    use datawin::bytecode::opcode::Opcode;
+    use datawin::bytecode::types::{DataType, VariableRef};
+    use reincarnate_core::ir::inst::Op;
+
+    /// Build a minimal `TranslateCtx` for tests.
+    ///
+    /// `bytecode_offset = 0` so vari_ref_map keys equal decoded instruction offsets.
+    #[allow(clippy::too_many_arguments)]
+    fn make_ctx<'a>(
+        has_self: bool,
+        arg_count: u16,
+        variables: &'a [(String, i32)],
+        vari_ref_map: &'a HashMap<usize, usize>,
+        func_ref_map: &'a HashMap<usize, usize>,
+        obj_names: &'a [String],
+        function_names: &'a HashMap<u32, String>,
+        script_names: &'a HashSet<String>,
+    ) -> TranslateCtx<'a> {
+        TranslateCtx {
+            function_names,
+            variables,
+            func_ref_map,
+            vari_ref_map,
+            bytecode_offset: 0,
+            local_names: &[],
+            string_table: &[],
+            has_self,
+            has_other: false,
+            arg_count,
+            obj_names,
+            class_name: None,
+            self_object_index: None,
+            ancestor_indices: HashSet::new(),
+            script_names,
+        }
+    }
+
+    /// Collect all `Op` values from a translated function.
+    fn collect_ops(func: &reincarnate_core::ir::func::Function) -> Vec<Op> {
+        func.insts.values().map(|i| i.op.clone()).collect()
+    }
+
+    /// Build and encode a Push instruction for an Int16 constant.
+    fn pushi(val: i16) -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::PushI,
+            type1: DataType::Int16,
+            type2: DataType::Double,
+            operand: Operand::Int16(val),
+        }
+    }
+
+    /// Build and encode a Push.v.v (variable read) instruction.
+    fn push_var(instance: i16, ref_type: u8) -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Push,
+            type1: DataType::Variable,
+            type2: DataType::Variable,
+            operand: Operand::Variable {
+                var_ref: VariableRef { variable_id: 0, ref_type },
+                instance,
+            },
+        }
+    }
+
+    /// Build and encode a Pop.v.v (variable write) instruction.
+    fn pop_var(instance: i16, ref_type: u8) -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Pop,
+            type1: DataType::Variable,
+            type2: DataType::Variable,
+            operand: Operand::Variable {
+                var_ref: VariableRef { variable_id: 0, ref_type },
+                instance,
+            },
+        }
+    }
+
+    /// Build an Exit instruction (no-value return).
+    fn exit_inst() -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Exit,
+            type1: DataType::Double,
+            type2: DataType::Double,
+            operand: Operand::None,
+        }
+    }
+
+    /// Build a Ret instruction (pops value from stack and returns it).
+    fn ret_inst() -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Ret,
+            type1: DataType::Variable,
+            type2: DataType::Double,
+            operand: Operand::None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2D array write — correct stack pop order
+    // -----------------------------------------------------------------------
+
+    /// Non-scalar 2D array write: `myarray[0] = 42`
+    ///
+    /// GML stack layout before Pop.v.v: `[value=42, dim2=-1, dim1=0]` (dim1 on top).
+    /// The translator must pop dim1 first (top), then dim2, then value.
+    /// Expected IR: `SetIndex(GetField(self, "myarray"), dim1_const, 42)`
+    ///
+    /// This regression guards the fix for the 2D array write stack pop order bug:
+    /// if dim1 and value are accidentally swapped, a `SetField` (scalar) is emitted
+    /// instead of a `SetIndex`, or the wrong value is stored.
+    #[test]
+    fn test_2d_array_write_nonscalar_emits_set_index() {
+        // Instructions (bytecode_offset=0):
+        // offset 0:  PushI.i 42   (value)           4 bytes
+        // offset 4:  PushI.i -1   (dim2, don't care) 4 bytes
+        // offset 8:  PushI.i 0    (dim1 = index)     4 bytes
+        // offset 12: Pop.v.v var  (2D array write)   8 bytes
+        // offset 20: Exit                             4 bytes
+        let instructions = vec![
+            pushi(42),
+            pushi(-1),
+            pushi(0), // dim1 = 0, non-negative → non-scalar
+            pop_var(3, 0), // ref_type=0, instance>=0 → 2D array
+            exit_inst(),
+        ];
+        let bytecode = encode(&instructions);
+
+        let vars: Vec<(String, i32)> = vec![("myarray".into(), -1)];
+        // Pop.v.v is at decoded offset 12 (4+4+4 bytes before it).
+        let vari_ref_map: HashMap<usize, usize> = [(12, 0)].into_iter().collect();
+        let fn_names: HashMap<u32, String> = HashMap::new();
+        let func_ref_map: HashMap<usize, usize> = HashMap::new();
+        let obj_names: Vec<String> = vec!["Obj0".into(); 4]; // 4 so index 3 is valid
+        let script_names: HashSet<String> = HashSet::new();
+        let ctx = make_ctx(true, 0, &vars, &vari_ref_map, &func_ref_map, &obj_names, &fn_names, &script_names);
+
+        let func = translate_code_entry(&bytecode, "test_fn", &ctx)
+            .expect("translation failed");
+        let ops = collect_ops(&func);
+
+        let has_set_index = ops.iter().any(|op| matches!(op, Op::SetIndex { .. }));
+        let has_set_field = ops.iter().any(|op| matches!(op, Op::SetField { .. }));
+        assert!(has_set_index, "expected SetIndex for non-scalar 2D array write; ops: {ops:?}");
+        assert!(!has_set_field, "unexpected SetField for non-scalar 2D array write; ops: {ops:?}");
+    }
+
+    /// Scalar 2D array write: `myfield[# -1, -1] = 42` (dim1 = -1 → scalar access).
+    ///
+    /// When dim1 == -1 (the "don't care" sentinel), the translator treats the access
+    /// as a plain field write: `SetField(self, "myfield", 42)`.
+    #[test]
+    fn test_2d_array_write_scalar_emits_set_field() {
+        // offset 0:  PushI.i 42   (value)
+        // offset 4:  PushI.i -1   (dim2)
+        // offset 8:  PushI.i -1   (dim1 = -1 → scalar)
+        // offset 12: Pop.v.v var
+        // offset 20: Exit
+        let instructions = vec![
+            pushi(42),
+            pushi(-1),
+            pushi(-1), // dim1 = -1 → is_scalar = true
+            pop_var(3, 0),
+            exit_inst(),
+        ];
+        let bytecode = encode(&instructions);
+
+        let vars: Vec<(String, i32)> = vec![("myfield".into(), -1)];
+        let vari_ref_map: HashMap<usize, usize> = [(12, 0)].into_iter().collect();
+        let fn_names: HashMap<u32, String> = HashMap::new();
+        let func_ref_map: HashMap<usize, usize> = HashMap::new();
+        let obj_names: Vec<String> = vec!["Obj0".into(); 4];
+        let script_names: HashSet<String> = HashSet::new();
+        let ctx = make_ctx(true, 0, &vars, &vari_ref_map, &func_ref_map, &obj_names, &fn_names, &script_names);
+
+        let func = translate_code_entry(&bytecode, "test_fn", &ctx)
+            .expect("translation failed");
+        let ops = collect_ops(&func);
+
+        let has_set_field = ops.iter().any(|op| matches!(op, Op::SetField { field, .. } if field == "myfield"));
+        let has_set_index = ops.iter().any(|op| matches!(op, Op::SetIndex { .. }));
+        assert!(has_set_field, "expected SetField for scalar 2D array write; ops: {ops:?}");
+        assert!(!has_set_index, "unexpected SetIndex for scalar 2D array write; ops: {ops:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // argument[N] variable mapping — 2D array pattern (GMS1)
+    // -----------------------------------------------------------------------
+
+    /// `argument[1]` push with 2D array encoding maps to `fb.param(1)`, not a
+    /// heap allocation or runtime lookup.
+    ///
+    /// GMS1 encodes `argument[N]` as a 2D array read with `ref_type=0`:
+    ///   PushI -1 (dim2), PushI N (dim1), Push.v.v argument
+    /// The translator must recognize this and map it to the Nth function parameter,
+    /// not emit a `SystemCall("GameMaker.Instance", "getField", ...)`.
+    #[test]
+    fn test_argument_2d_array_push_maps_to_param() {
+        // offset 0: PushI.i -1     (dim2, don't care)   4 bytes
+        // offset 4: PushI.i 1      (dim1 = argument[1]) 4 bytes
+        // offset 8: Push.v.v arg   (2D array read)       8 bytes
+        // offset 16: Ret                                  4 bytes
+        let instructions = vec![
+            pushi(-1),
+            pushi(1), // dim1 = 1 → argument index 1
+            push_var(0, 0), // ref_type=0, instance=0 → 2D array
+            ret_inst(),
+        ];
+        let bytecode = encode(&instructions);
+
+        let vars: Vec<(String, i32)> = vec![("argument".into(), -2)]; // -2 = Builtin
+        // Push.v.v is at decoded offset 8.
+        let vari_ref_map: HashMap<usize, usize> = [(8, 0)].into_iter().collect();
+        let fn_names: HashMap<u32, String> = HashMap::new();
+        let func_ref_map: HashMap<usize, usize> = HashMap::new();
+        let obj_names: Vec<String> = vec!["Obj0".into()];
+        let script_names: HashSet<String> = HashSet::new();
+        // No has_self; arg_count=0 (scan_implicit_args will detect argument[1]).
+        let ctx = make_ctx(false, 0, &vars, &vari_ref_map, &func_ref_map, &obj_names, &fn_names, &script_names);
+
+        let func = translate_code_entry(&bytecode, "test_fn", &ctx)
+            .expect("translation failed");
+        let ops = collect_ops(&func);
+
+        // Must NOT fall back to a SystemCall (getField / getOn).
+        let has_syscall = ops.iter().any(|op| {
+            matches!(op, Op::SystemCall { system, method, .. }
+                if system == "GameMaker.Instance" && (method == "getField" || method == "getOn"))
+        });
+        assert!(!has_syscall, "argument[N] must map to param, not syscall; ops: {ops:?}");
+
+        // The function must have been given 2 params (argument0, argument1)
+        // because scan_implicit_args detected argument[1].
+        assert_eq!(func.sig.params.len(), 2, "expected 2 params for implicit argument[1]");
+    }
+}
