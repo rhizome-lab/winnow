@@ -2190,9 +2190,9 @@ impl TranslateCtx {
         }
 
         self.emit_content(body);
-        // Implicit return undefined if no (output:) was reached.
-        let undef = self.fb.const_bool(false);
-        self.fb.ret(Some(undef));
+        // Implicit return void if no (output:) was reached.
+        // Using ret(None) prevents BoolLiteralReturn from inferring Bool return type.
+        self.fb.ret(None);
 
         let cb_fb = std::mem::replace(&mut self.fb, saved_fb);
         self.temp_vars = saved_temps;
