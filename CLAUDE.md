@@ -88,6 +88,8 @@ From ecosystem-wide session analysis:
 
 **Preserve fidelity.** The goal is accurate reproduction, not "improvement". Make the old thing work, don't redesign it.
 
+**100% API compatibility is the target.** Every method, property, and behavior of the source runtime must be implemented — not just the ones exercised by current test projects. Test projects are examples, not the specification. If a method exists in the original API, it belongs in the runtime. "Our test game doesn't use it" is never a reason to skip or deprioritize an API method.
+
 **Game author errors are not our bugs.** When emitted TypeScript produces a type error that faithfully reflects a bug in the original game's source code (e.g. using `|` instead of `||`, multiplying by `false`), that is correct behavior — reincarnate accurately reproduced what the author wrote. Do not "fix" the emission to suppress the diagnostic. Changing `|` to `||` alters semantics; annotating with `ts-ignore` hides a real bug; widening types to `any` throws away information. The right response is: document it as a game author error and move on. The only exception is if the error is caused by an imprecision in our type inference (e.g. we inferred `boolean` where the game intended `number`) — in that case, fix the inference, not the symptom.
 
 **Overlay > Patch.** When possible, render a modern UI layer over the original rather than patching internal rendering.
