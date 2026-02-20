@@ -172,7 +172,7 @@ Do not:
 - Create special cases - design to avoid them
 - Add to the monolith - split by domain into sub-crates
 - Cut corners with fallbacks - implement properly for each case
-- Write stubs that return null/undefined — implement the function or don't add it. A `return null` stub is a landmine that crashes at runtime with a misleading error. If the full implementation is complex, implement the subset that covers the actual usage patterns. Exception: if `null` is a *valid, specified return value* for the function (e.g. "returns null if not found"), returning null is correct stub behavior — don't throw instead.
+- Write stubs that return null/undefined — implement the function or don't add it. A `return null` stub is a landmine that crashes at runtime with a misleading error. If the full implementation is complex, implement the subset that covers the actual usage patterns. Note: even when `null` is a valid return per the spec (e.g. "returns null if not found"), a stub that always returns null is still wrong — it silently reports "not found" when the real answer is "not implemented". Throw instead.
 - Mark as done prematurely - note what remains
 - Dismiss known issues as "fine for now" — if you discover a gap, mismatch, or missing implementation during your work, add it to TODO.md immediately. Do not assume future sessions will rediscover the same issue. Every known problem must be written down before moving on.
 - Use path dependencies in Cargo.toml - causes clippy to stash changes across repos

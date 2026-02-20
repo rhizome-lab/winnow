@@ -504,7 +504,7 @@ export class TextField extends InteractiveObject {
   }
 
   getImageReference(_id: string): DisplayObject | null {
-    return null;
+    throw new Error("TextField.getImageReference() is not implemented");
   }
 
   static isFontCompatible(fontName: string, fontStyle: string): boolean {
