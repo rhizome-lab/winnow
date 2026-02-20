@@ -2376,7 +2376,8 @@ impl TranslateCtx {
                     .system_call("Harlowe.Engine", "dataset", &lowered_args, Type::Dynamic)
             }
             "round" | "floor" | "ceil" | "abs" | "min" | "max" | "sqrt" | "sin" | "cos"
-            | "tan" | "log" | "pow" | "sign" | "clamp" | "lerp" | "trunc" => {
+            | "tan" | "log" | "log10" | "log2" | "exp" | "pow" | "sign" | "clamp" | "lerp"
+            | "trunc" => {
                 let n = self.fb.const_string(name);
                 let mut call_args = vec![n];
                 call_args.extend(lowered_args);

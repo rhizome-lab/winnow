@@ -252,6 +252,9 @@ export class HarloweEngine {
       case "pow": return Math.pow(nums[0], nums[1]);
       case "sign": return Math.sign(nums[0]);
       case "trunc": return Math.trunc(nums[0]);
+      case "exp": return Math.exp(nums[0]);
+      case "log10": return Math.log10(nums[0]);
+      case "log2": return Math.log2(nums[0]);
       case "clamp": return Math.min(Math.max(nums[0], nums[1]), nums[2]);
       case "lerp": return this.lerp(args[0], args[1], args[2]);
       default:
@@ -273,105 +276,29 @@ export class HarloweEngine {
     return undefined;
   }
 
-  /** String operations dispatched by name. */
+  /** String operations dispatched by name. Delegates to `StringOps` namespace.
+   *  Compile-time call sites are rewritten by the backend to call StringOps directly. */
   str_op(name: string, ...args: any[]): any {
-    switch (name) {
-      case "upperfirst": {
-        const s = String(args[0]);
-        return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
-      }
-      case "lowerfirst": {
-        const s = String(args[0]);
-        return s ? s.charAt(0).toLowerCase() + s.slice(1) : s;
-      }
-      case "str-reversed": case "string-reversed":
-        return [...String(args[0])].reverse().join("");
-      case "trimmed":
-        // (trimmed: str) or (trimmed: datatype_pattern, str) — pattern trimming not yet implemented
-        return String(args.length === 1 ? args[0] : args[1]).trim();
-      case "words": {
-        const s = String(args[0]).trim();
-        return s.length === 0 ? [] : s.split(/\s+/);
-      }
-      case "str-nth": case "string-nth": {
-        const [n, str] = args;
-        const s = String(str);
-        const i = Math.floor(Number(n)) - 1; // Harlowe is 1-indexed
-        return i >= 0 && i < s.length ? s[i] : "";
-      }
-      case "str-repeated": case "string-repeated": {
-        const [n, str] = args;
-        return String(str).repeat(Math.max(0, Math.floor(Number(n))));
-      }
-      case "str-find": case "string-find": {
-        const [pattern, str] = args;
-        const s = String(str);
-        if (typeof pattern === "string") {
-          const positions: number[] = [];
-          let idx = 0;
-          while (idx < s.length) {
-            const found = s.indexOf(pattern, idx);
-            if (found === -1) break;
-            positions.push(found + 1); // Harlowe is 1-indexed
-            idx = found + 1;
-          }
-          return positions;
-        }
-        return [];
-      }
-      case "str-replaced": case "string-replaced": case "replaced": {
-        // (str-replaced: searchFor, replacement, str)
-        // (str-replaced: count, searchFor, replacement, str) — count limits replacements
-        let count: number | undefined;
-        let searchFor: any;
-        let replacement: any;
-        let str: any;
-        if (args.length === 4) {
-          [count, searchFor, replacement, str] = args;
-        } else {
-          [searchFor, replacement, str] = args;
-        }
-        const s = String(str);
-        if (typeof searchFor === "string" && typeof replacement === "string") {
-          if (count !== undefined) {
-            let result = s;
-            let replaced = 0;
-            let idx = 0;
-            while (replaced < count) {
-              const found = result.indexOf(searchFor, idx);
-              if (found === -1) break;
-              result = result.slice(0, found) + replacement + result.slice(found + searchFor.length);
-              idx = found + replacement.length;
-              replaced++;
-            }
-            return result;
-          }
-          return s.replaceAll(searchFor, replacement);
-        }
-        return s;
-      }
-      case "digit-format": {
-        // (digit-format: formatStr, number) — formatStr uses # for digit placeholders
-        const [fmt, num] = args;
-        const n = Number(num);
-        const format = String(fmt);
-        const dotIdx = format.indexOf(".");
-        const decimals = dotIdx === -1 ? 0 : format.length - dotIdx - 1;
-        return n.toLocaleString(undefined, {
-          minimumFractionDigits: decimals,
-          maximumFractionDigits: decimals,
-        });
-      }
-      case "plural": {
-        // (plural: count, singular) or (plural: count, singular, pluralForm)
-        const [n, singular, pluralForm] = args;
-        return Number(n) === 1 ? String(singular)
-          : pluralForm !== undefined ? String(pluralForm) : String(singular) + "s";
-      }
-      default:
-        console.warn(`[harlowe] unknown str_op: ${name}`);
-        return String(args[0] ?? "");
-    }
+    // Alias map: Harlowe kebab-case names → StringOps camelCase method names
+    const aliases: Record<string, keyof typeof StringOps> = {
+      "string-reversed": "strReversed",
+      "string-nth": "strNth",
+      "string-repeated": "strRepeated",
+      "string-find": "strFind",
+      "string-replaced": "strReplaced",
+      "replaced": "strReplaced",
+      "digit-format": "digitFormat",
+      "str-reversed": "strReversed",
+      "str-nth": "strNth",
+      "str-repeated": "strRepeated",
+      "str-find": "strFind",
+      "str-replaced": "strReplaced",
+    };
+    const key = (aliases[name] ?? name) as keyof typeof StringOps;
+    const fn = StringOps[key] as ((...args: any[]) => any) | undefined;
+    if (fn) return fn(...args);
+    console.warn(`[harlowe] unknown str_op: ${name}`);
+    return String(args[0] ?? "");
   }
 
   /** Generic value macro dispatcher — covers all Harlowe value macros. */
@@ -391,7 +318,8 @@ export class HarloweEngine {
       case "tan": case "log": case "log10": case "log2": case "pow":
       case "sign": case "clamp": case "lerp":
         return this.math(name, ...args);
-      case "trunc": return this.math(name, ...args);
+      case "trunc": case "exp": case "log10": case "log2":
+        return this.math(name, ...args);
       // String ops — delegate to str_op()
       case "upperfirst": case "lowerfirst":
       case "str-reversed": case "string-reversed": case "trimmed": case "words":
@@ -1277,6 +1205,95 @@ function hsl(h: any, s: any, l: any): string { return `hsl(${h}, ${s}%, ${l}%)`;
 function hsla(h: any, s: any, l: any, a: any): string { return `hsla(${h}, ${s}%, ${l}%, ${a})`; }
 
 export const Colors = { rgb, rgba, hsl, hsla } as const;
+
+// --- String operations (pure) ---
+
+function upperfirst(s: any): string {
+  const str = String(s);
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+}
+function lowerfirst(s: any): string {
+  const str = String(s);
+  return str ? str.charAt(0).toLowerCase() + str.slice(1) : str;
+}
+function strReversed(s: any): string { return [...String(s)].reverse().join(""); }
+function trimmed(...args: any[]): string {
+  // (trimmed: str) or (trimmed: datatype_pattern, str) — pattern trimming not yet implemented
+  return String(args.length === 1 ? args[0] : args[1]).trim();
+}
+function words(s: any): string[] {
+  const str = String(s).trim();
+  return str.length === 0 ? [] : str.split(/\s+/);
+}
+function strNth(n: any, s: any): string {
+  const str = String(s);
+  const i = Math.floor(Number(n)) - 1; // Harlowe is 1-indexed
+  return i >= 0 && i < str.length ? str[i] : "";
+}
+function strRepeated(n: any, s: any): string {
+  return String(s).repeat(Math.max(0, Math.floor(Number(n))));
+}
+function strFind(pattern: any, s: any): number[] {
+  const str = String(s);
+  if (typeof pattern !== "string") return [];
+  const positions: number[] = [];
+  let idx = 0;
+  while (idx < str.length) {
+    const found = str.indexOf(pattern, idx);
+    if (found === -1) break;
+    positions.push(found + 1); // Harlowe is 1-indexed
+    idx = found + 1;
+  }
+  return positions;
+}
+function strReplaced(...args: any[]): string {
+  // (str-replaced: searchFor, replacement, str)
+  // (str-replaced: count, searchFor, replacement, str) — count limits replacements
+  let count: number | undefined;
+  let searchFor: any;
+  let replacement: any;
+  let str: any;
+  if (args.length === 4) {
+    [count, searchFor, replacement, str] = args;
+  } else {
+    [searchFor, replacement, str] = args;
+  }
+  const s = String(str);
+  if (typeof searchFor !== "string" || typeof replacement !== "string") return s;
+  if (count !== undefined) {
+    let result = s;
+    let replaced = 0;
+    let idx = 0;
+    while (replaced < count) {
+      const found = result.indexOf(searchFor, idx);
+      if (found === -1) break;
+      result = result.slice(0, found) + replacement + result.slice(found + searchFor.length);
+      idx = found + replacement.length;
+      replaced++;
+    }
+    return result;
+  }
+  return s.replaceAll(searchFor, replacement);
+}
+function digitFormat(fmt: any, num: any): string {
+  const n = Number(num);
+  const format = String(fmt);
+  const dotIdx = format.indexOf(".");
+  const decimals = dotIdx === -1 ? 0 : format.length - dotIdx - 1;
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+function plural(n: any, singular: any, pluralForm?: any): string {
+  return Number(n) === 1 ? String(singular)
+    : pluralForm !== undefined ? String(pluralForm) : String(singular) + "s";
+}
+
+export const StringOps = {
+  upperfirst, lowerfirst, strReversed, trimmed, words,
+  strNth, strRepeated, strFind, strReplaced, digitFormat, plural,
+} as const;
 
 // --- Enchantment helpers (pure) ---
 
