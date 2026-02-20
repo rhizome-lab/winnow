@@ -2432,6 +2432,19 @@ impl TranslateCtx {
         match op {
             BinaryOp::And => return self.lower_logical_and(left, right),
             BinaryOp::Or => return self.lower_logical_or(left, right),
+            // `is odd` / `is even` — Harlowe datatype-check shorthand (no article).
+            // These identifiers become string constants when lowered normally, producing
+            // `value === "odd"` which TypeScript correctly flags as a type error.
+            BinaryOp::Is | BinaryOp::IsNot
+                if matches!(&right.kind, ExprKind::Ident(n) if n == "odd" || n == "even") =>
+            {
+                let lhs = self.lower_expr(left);
+                let rhs = self.lower_expr(right);
+                let is_a =
+                    self.fb
+                        .system_call("Harlowe.Engine", "is_a", &[lhs, rhs], Type::Bool);
+                return if matches!(op, BinaryOp::Is) { is_a } else { self.fb.not(is_a) };
+            }
             _ => {}
         }
 

@@ -155,6 +155,8 @@ export class HarloweEngine {
       case "datamap": return value instanceof Map;
       case "dataset": return value instanceof Set;
       case "changer": return typeof value === "object" && value !== null && "changer" in value;
+      case "odd": return typeof value === "number" && Number.isInteger(value) && value % 2 !== 0;
+      case "even": return typeof value === "number" && Number.isInteger(value) && value % 2 === 0;
       default: return false;
     }
   }
