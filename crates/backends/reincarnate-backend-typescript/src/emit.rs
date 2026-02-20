@@ -80,6 +80,14 @@ pub fn emit_module_to_string(module: &mut Module, lowering_config: &LoweringConf
                 "import type {{ {} }} from \"./runtime/{}\";",
                 rt_type.name, rt_type.path,
             );
+            // Also import the context type (e.g. `HarloweContext`) for the `h` parameter.
+            if let Some(ctx_type) = runtime_config.and_then(|c| c.context_type.as_ref()) {
+                let _ = writeln!(
+                    out,
+                    "import type {{ {} }} from \"./runtime/{}\";",
+                    ctx_type.name, ctx_type.path,
+                );
+            }
             out.push('\n');
         }
     }
@@ -2421,6 +2429,17 @@ fn emit_function(
             .map(|t| t.name.as_str())
             .unwrap_or("SugarCubeRuntime");
         js_func.params.insert(0, ("_rt".into(), Type::Struct(rt_type_name.into())));
+        // If a context_type is configured, retype the first Dynamic param after `_rt`
+        // (e.g. `h: any` → `h: HarloweContext`).
+        if let Some(ctx_type) = runtime_config.and_then(|c| c.context_type.as_ref()) {
+            let ctx_type_name = ctx_type.name.clone();
+            for (_, ty) in &mut js_func.params {
+                if *ty == Type::Dynamic {
+                    *ty = Type::Struct(ctx_type_name);
+                    break;
+                }
+            }
+        }
         let lines: Vec<String> = stateful_system_aliases
             .iter()
             .map(|(ident, prop)| format!("const {ident} = _rt.{prop};"))

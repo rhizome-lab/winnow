@@ -50,6 +50,12 @@ pub struct RuntimeConfig {
     /// first parameter of free functions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_type: Option<RuntimeType>,
+    /// The context type for the second free-function parameter (e.g. `h: HarloweContext`).
+    /// When set, the emitter replaces the first `Dynamic`-typed parameter that follows `_rt`
+    /// with `Name` and emits the corresponding `import type { Name } from "path"`.
+    /// Used for Harlowe passage functions where `h` is the content-emission context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_type: Option<RuntimeType>,
 }
 
 /// A single system module mapping.

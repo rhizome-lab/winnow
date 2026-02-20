@@ -10,6 +10,10 @@
     "name": "HarloweRuntime",
     "path": "harlowe/runtime"
   },
+  "context_type": {
+    "name": "HarloweContext",
+    "path": "harlowe/context"
+  },
   "scaffold": {
     "imports": [{ "names": ["createHarloweRuntime"], "path": "harlowe/runtime" }],
     "entry": "const _rt = createHarloweRuntime();\n{userScripts}\n_rt.Engine.registerStoryletsConditions({storylets});\n_rt.start({passages}, {startPassage}, {passageTags}, { persistence: {persistence} });",
