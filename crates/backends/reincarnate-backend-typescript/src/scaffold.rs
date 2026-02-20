@@ -209,6 +209,22 @@ fn build_passage_tags(modules: &[Module]) -> String {
     }
 }
 
+/// Build storylet conditions map: `{ "Name": storylet_cond_fn, ... }`.
+fn build_storylet_conditions(modules: &[Module]) -> String {
+    let mut entries = Vec::new();
+    for module in modules {
+        for (display_name, cond_func_name) in &module.passage_storylets {
+            let escaped = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+            entries.push(format!("  \"{escaped}\": {}", sanitize_ident(cond_func_name)));
+        }
+    }
+    if entries.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n}}", entries.join(",\n"))
+    }
+}
+
 /// Build user script call statements (e.g. `__user_script_0();`).
 ///
 /// Detects functions named `__user_script_*` in the module and emits
@@ -410,6 +426,7 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
         let persistence_json = persistence
             .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "{}".into()))
             .unwrap_or_else(|| "undefined".into());
+        let storylet_conditions = build_storylet_conditions(modules);
         let expanded = entry
             .replace("{classes}", &class_list)
             .replace("{roomCreationCode}", &room_creation_code)
@@ -418,7 +435,8 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
             .replace("{userScripts}", &user_scripts)
             .replace("{startPassage}", &start_passage)
             .replace("{rootClass}", &root_class)
-            .replace("{persistence}", &persistence_json);
+            .replace("{persistence}", &persistence_json)
+            .replace("{storylets}", &storylet_conditions);
         let _ = writeln!(out, "{}", expanded);
     } else if let Some(code) = metadata_entry_code(modules, runtime_config) {
         // Prefer metadata-based entry point over heuristic.

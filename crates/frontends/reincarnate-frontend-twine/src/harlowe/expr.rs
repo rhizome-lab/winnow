@@ -472,6 +472,12 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
                     return parse_prefix(lexer);
                 }
             }
+            // `when expr` — Harlowe 3.3+ storylet/event condition prefix.
+            // `when` is a no-op keyword that introduces the condition; strip it
+            // and return the condition expression directly.
+            if s == "when" {
+                return parse_prec(lexer, Prec::Or);
+            }
             // `via expr` — Harlowe transform lambda used in `(altered:)`.
             // Wraps the following expression; `it`/`its` inside `expr` refers
             // to the current element being transformed.
@@ -579,6 +585,23 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
             let span = Span::new(start, inner.span.end);
             Expr {
                 kind: ExprKind::Spread(Box::new(inner)),
+                span,
+            }
+        }
+        // Standalone `where condition` — shorthand for `each _it where condition`.
+        // Used in `(open-storylets: where ...)` and similar collection predicates.
+        // The implicit variable is named "it" so that `its X` in the condition
+        // resolves to `it`'s possessive (same as in `via` / ViaLambda context).
+        TokenKind::Where => {
+            let start = tok.span.start;
+            lexer.next_token(); // consume `where`
+            let filter = parse_prec(lexer, Prec::Or);
+            let span = Span::new(start, filter.span.end);
+            Expr {
+                kind: ExprKind::Lambda {
+                    var: "it".to_string(),
+                    filter: Some(Box::new(filter)),
+                },
                 span,
             }
         }

@@ -26,6 +26,9 @@ pub struct TranslateResult {
     pub func: Function,
     /// Callback functions generated for link hooks, live intervals, etc.
     pub callbacks: Vec<Function>,
+    /// Optional storylet condition function generated from `(storylet: when expr)`.
+    /// Standalone exported function `(_rt) -> bool` for the storylet system.
+    pub storylet_cond: Option<Function>,
 }
 
 /// Sanitize a passage name into a valid function name.
@@ -58,16 +61,19 @@ pub fn translate_passage(name: &str, ast: &PassageAst, source: &str) -> Translat
         set_target: None,
         passage_name: name.to_string(),
         source: source.to_string(),
+        storylet_cond: None,
     };
 
     ctx.emit_content(&ast.body);
     ctx.fb.ret(None);
 
     let callbacks = std::mem::take(&mut ctx.callbacks);
+    let storylet_cond = ctx.storylet_cond.take();
 
     TranslateResult {
         func: ctx.fb.build(),
         callbacks,
+        storylet_cond,
     }
 }
 
@@ -84,6 +90,8 @@ struct TranslateCtx {
     passage_name: String,
     /// Raw passage source text, for span-based diagnostic context.
     source: String,
+    /// Storylet condition function, if this passage contains `(storylet: when expr)`.
+    storylet_cond: Option<Function>,
 }
 
 /// Extract a short snippet of source text around a span for diagnostic messages.
@@ -624,6 +632,16 @@ impl TranslateCtx {
                 // No-op — deliberately discards its arguments
             }
 
+            // Storylet system (Harlowe 3.3+)
+            "storylet" => self.lower_storylet_macro(mac),
+            "exclusivity" => {
+                // No-op for decompilation: exclusivity affects storylet scheduling,
+                // not individual passage rendering.
+            }
+
+            // Sidebar icon macros (Harlowe 3.3+) — no-op: sidebar already works
+            "icon-undo" | "icon-redo" | "icon-restart" => {}
+
             // HAL (Harlowe Audio Library) macros
             "track" | "playlist" | "group" => self.lower_hal_named_command(mac),
             "masteraudio" => self.lower_hal_master_audio(mac),
@@ -757,6 +775,11 @@ impl TranslateCtx {
             "str" | "string" | "num" | "number" | "random" | "either" | "a" | "array"
             | "dm" | "datamap" | "ds" | "dataset" | "upperfirst" | "lowerfirst" => {
                 Some(self.lower_value_macro_as_value(mac))
+            }
+
+            // Storylet system
+            "open-storylets" | "storylets-of" => {
+                Some(self.lower_open_storylets(mac))
             }
 
             // Unknown — route via macro_kind() before falling back
@@ -1610,6 +1633,56 @@ impl TranslateCtx {
         }
     }
 
+    // ── Storylet system ────────────────────────────────────────────
+
+    /// `(open-storylets:)` / `(open-storylets: where lambda)` —
+    /// returns an array of passage info objects for available storylets.
+    /// Optional `where` lambda filters the results.
+    fn lower_open_storylets(&mut self, mac: &MacroNode) -> ValueId {
+        if let Some(arg) = mac.args.first() {
+            // Filter predicate provided (e.g. `where its tags contains "tag"`)
+            let filter = self.lower_expr(arg);
+            self.fb.system_call("Harlowe.Engine", "open_storylets", &[filter], Type::Dynamic)
+        } else {
+            self.fb.system_call("Harlowe.Engine", "open_storylets", &[], Type::Dynamic)
+        }
+    }
+
+    /// `(storylet: when expr)` — marks this passage as a storylet.
+    ///
+    /// Builds a standalone condition function `storylet_cond_<passage>(_rt) -> bool`
+    /// and stores it in `self.storylet_cond` for export.  Also emits a runtime
+    /// registration call so late (post-first-render) checks still work.
+    fn lower_storylet_macro(&mut self, mac: &MacroNode) {
+        let cond_arg = match mac.args.first() {
+            Some(a) => a.clone(),
+            None => return,
+        };
+
+        // Build a standalone condition function (no `h` param — only `_rt` via
+        // emit.rs's stateful-module prepend).
+        let cond_name = format!("storylet_cond_{}", self.func_name);
+        let cond_sig = FunctionSig {
+            params: vec![],
+            return_ty: Type::Bool,
+            defaults: vec![],
+            has_rest_param: false,
+        };
+        let cond_fb = FunctionBuilder::new(&cond_name, cond_sig, Visibility::Public);
+
+        // Evaluate the condition inside the new FunctionBuilder context.
+        let saved_fb = std::mem::replace(&mut self.fb, cond_fb);
+        let saved_temps = std::mem::take(&mut self.temp_vars);
+
+        let result = self.lower_expr(&cond_arg);
+        self.fb.ret(Some(result));
+
+        let cond_fb = std::mem::replace(&mut self.fb, saved_fb);
+        self.temp_vars = saved_temps;
+
+        self.storylet_cond = Some(cond_fb.build());
+    }
+
     // ── after ──────────────────────────────────────────────────────
 
     fn lower_after_macro(&mut self, mac: &MacroNode) {
@@ -2084,6 +2157,14 @@ impl TranslateCtx {
                     "Harlowe.Engine",
                     "collection_op",
                     &call_args,
+                    Type::Dynamic,
+                )
+            }
+            "open-storylets" | "storylets-of" => {
+                self.fb.system_call(
+                    "Harlowe.Engine",
+                    "open_storylets",
+                    &lowered_args,
                     Type::Dynamic,
                 )
             }

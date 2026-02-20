@@ -156,6 +156,12 @@ pub struct Module {
     /// registry for runtime use (nobr, widget, special passages, etc.).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub passage_tags: BTreeMap<String, Vec<String>>,
+    /// Storylet conditions: passage display name → condition function name.
+    /// Populated by the Harlowe frontend when `(storylet: when expr)` is
+    /// encountered. The scaffold uses this to register each passage's
+    /// availability condition with the runtime's storylet system.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub passage_storylets: BTreeMap<String, String>,
 }
 
 impl Module {
@@ -176,6 +182,7 @@ impl Module {
             sprite_names: Vec::new(),
             passage_names: BTreeMap::new(),
             passage_tags: BTreeMap::new(),
+            passage_storylets: BTreeMap::new(),
         }
     }
 }

@@ -12,7 +12,7 @@
   },
   "scaffold": {
     "imports": [{ "names": ["createHarloweRuntime"], "path": "harlowe/runtime" }],
-    "entry": "const _rt = createHarloweRuntime();\n{userScripts}\n_rt.start({passages}, {startPassage}, {passageTags}, { persistence: {persistence} });",
+    "entry": "const _rt = createHarloweRuntime();\n{userScripts}\n_rt.Engine.registerStoryletsConditions({storylets});\n_rt.start({passages}, {startPassage}, {passageTags}, { persistence: {persistence} });",
     "dependencies": {
       "keybinds": "github:pterror/keybinds"
     }

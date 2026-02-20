@@ -61,7 +61,8 @@ pub fn macro_kind(name: &str) -> MacroKind {
         | "dm-entries" | "data-entries" | "dm-altered" | "datamap-altered"
         | "pass" | "permutations"
         | "v6" | "v8" | "metadata"
-        | "macro" | "partial" | "bind" | "bind-2bind" | "2bind" => MacroKind::Value,
+        | "macro" | "partial" | "bind" | "bind-2bind" | "2bind"
+        | "open-storylets" | "storylets-of" => MacroKind::Value,
 
         // HAL (Harlowe Audio Library) — third-party audio macros
         "track" | "masteraudio" | "newtrack" | "newplaylist" | "newgroup"
@@ -70,6 +71,9 @@ pub fn macro_kind(name: &str) -> MacroKind {
         // Layout / interactive / state commands
         "columns" | "column" | "enchant" | "enchant-in" | "forget-undos"
         | "forget-visits" | "ignore" => MacroKind::Command,
+
+        // Storylet system (Harlowe 3.3+)
+        "storylet" | "exclusivity" | "icon-undo" | "icon-redo" | "icon-restart" => MacroKind::Command,
 
         // Live is command-like (attaches hook for timed behavior)
         "live" | "event" | "meter" | "dialog" | "dropdown" | "input" | "input-box"

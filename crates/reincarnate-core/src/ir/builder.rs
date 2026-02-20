@@ -683,6 +683,10 @@ impl ModuleBuilder {
         }
     }
 
+    pub fn add_passage_storylet(&mut self, display_name: String, cond_func_name: String) {
+        self.module.passage_storylets.insert(display_name, cond_func_name);
+    }
+
     pub fn build(self) -> Module {
         self.module
     }

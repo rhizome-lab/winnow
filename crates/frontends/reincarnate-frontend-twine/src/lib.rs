@@ -283,6 +283,13 @@ impl TwineFrontend {
             for cb_func in result.callbacks {
                 mb.add_function(cb_func);
             }
+
+            // Add storylet condition function if present
+            if let Some(cond_func) = result.storylet_cond {
+                let cond_name = cond_func.name.clone();
+                mb.add_function(cond_func);
+                mb.add_passage_storylet(passage.name.clone(), cond_name);
+            }
         }
 
         if parse_errors > 0 {

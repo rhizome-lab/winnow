@@ -8,11 +8,41 @@ import { type Changer, HarloweContext } from "./context";
 import type { HarloweRuntime } from "./runtime";
 import type { DocumentFactory } from "../shared/render-root";
 
+/** Passage info object returned by `(open-storylets:)`. */
+export interface PassageInfo {
+  name: string;
+  source: string;
+  tags: string[];
+}
+
 export class HarloweEngine {
   private rt: HarloweRuntime;
+  /** Map from passage name to its storylet condition function. */
+  private storyletConditions: Record<string, (rt: HarloweRuntime) => boolean> = {};
 
   constructor(rt: HarloweRuntime) {
     this.rt = rt;
+  }
+
+  /** Register the storylet condition map for `(open-storylets:)`. */
+  registerStoryletsConditions(conditions: Record<string, (rt: HarloweRuntime) => boolean>): void {
+    this.storyletConditions = conditions;
+  }
+
+  /** `(open-storylets:)` / `(open-storylets: where lambda)` —
+   *  Returns passage info objects for all storylets whose condition is true.
+   *  Optional filter lambda `(info) => boolean` further restricts results. */
+  open_storylets(filter?: (item: PassageInfo) => boolean): PassageInfo[] {
+    const results: PassageInfo[] = [];
+    for (const [name, cond] of Object.entries(this.storyletConditions)) {
+      if (!cond(this.rt)) continue;
+      const tags = this.rt.Navigation.getTags(name);
+      const info: PassageInfo = { name, source: "", tags };
+      if (!filter || filter(info)) {
+        results.push(info);
+      }
+    }
+    return results;
   }
 
   // --- DOM helpers ---
