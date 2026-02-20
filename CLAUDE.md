@@ -79,6 +79,8 @@ From ecosystem-wide session analysis:
 
 **Unify, don't multiply.** One interface for multiple engines > separate implementations per engine. Plugin systems > hardcoded switches.
 
+**Eliminate megamorphic dispatch at compile time.** When a runtime method dispatches on a string literal (e.g. `math("round", x)`, `str_op("trimmed", s)`), the backend rewrite pass must resolve the dispatch to a direct, monomorphic call — either a JS built-in (`Math.round(x)`) or a named function in a typed namespace object (`StringOps.trimmed(s)`). The namespace must be exported `as const` so TypeScript statically verifies that every dispatch name maps to an existing method. A missing method in the namespace is a compile-time error, not a silent runtime `undefined`. Pattern: (1) define pure functions, (2) export `as const` namespace, (3) add rewrite arm in `rewrites/twine/engine.rs`, (4) add test. Existing namespaces: `Math` (built-in), `Collections`, `Colors`, `StringOps`.
+
 **Compose, don't enumerate.** Enums are almost always the wrong solution for configurable behavior. An enum is a closed, mutually exclusive set — it forces exactly one choice from a fixed menu, and adding a new option requires modifying the type definition. The right solution is usually a composable pipeline of wrappers (middleware/decorator pattern), where each concern is an independent transform that can be applied in any combination. Example: CSS isolation isn't `"none" | "scoped-css" | "shadow-dom" | "iframe"` — it's a list of composable wrappers `[scopedCSS(), shadowDOM(), iframe()]`, because you might want shadow DOM *and* an iframe simultaneously. Open composition > closed enumeration.
 
 **Lazy extraction.** Don't parse everything upfront. Extract on demand, cache aggressively.

@@ -22,6 +22,7 @@ pub(super) fn rewrite_introduced_calls(method: &str) -> &'static [&'static str] 
         "math" | "not" | "lerp" => &[],
         "color_op" => &["Colors"],
         "collection_op" => &["Collections"],
+        "str_op" => &["StringOps"],
         _ => &[],
     }
 }
@@ -37,6 +38,7 @@ pub(super) fn try_rewrite(
         "math" => try_rewrite_math(args),
         "color_op" => try_rewrite_color_op(args),
         "collection_op" => try_rewrite_collection_op(args, closures),
+        "str_op" => try_rewrite_str_op(args),
         _ => None,
     }
 }
@@ -84,7 +86,8 @@ fn try_rewrite_math(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
 
     match name.as_str() {
         // Single-arg Math methods
-        "round" | "floor" | "ceil" | "abs" | "sqrt" | "sin" | "cos" | "tan" | "log" | "sign" => {
+        "round" | "floor" | "ceil" | "abs" | "sqrt" | "sin" | "cos" | "tan"
+        | "log" | "log10" | "log2" | "exp" | "sign" | "trunc" => {
             Some(math_call(&name, remaining))
         }
         // Two-arg: Math.pow(a, b)
@@ -173,6 +176,34 @@ fn try_rewrite_collection_op(
         callee: Box::new(JsExpr::Field {
             object: Box::new(JsExpr::Var("Collections".into())),
             field,
+        }),
+        args: remaining,
+    })
+}
+
+/// Map Harlowe str_op dispatch names to `StringOps` camelCase method names.
+fn str_op_to_method(name: &str) -> String {
+    match name {
+        "str-reversed" | "string-reversed" => "strReversed".into(),
+        "str-nth" | "string-nth" => "strNth".into(),
+        "str-repeated" | "string-repeated" => "strRepeated".into(),
+        "str-find" | "string-find" => "strFind".into(),
+        "str-replaced" | "string-replaced" | "replaced" => "strReplaced".into(),
+        "digit-format" => "digitFormat".into(),
+        // upperfirst, lowerfirst, trimmed, words, plural are already valid JS identifiers
+        _ => name.to_string(),
+    }
+}
+
+/// `str_op("trimmed", s)` → `StringOps.trimmed(s)`, etc.
+fn try_rewrite_str_op(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
+    let name = extract_dispatch_name(args)?;
+    let remaining = std::mem::take(args);
+    let method = str_op_to_method(&name);
+    Some(JsExpr::Call {
+        callee: Box::new(JsExpr::Field {
+            object: Box::new(JsExpr::Var("StringOps".into())),
+            field: method,
         }),
         args: remaining,
     })
@@ -449,12 +480,86 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_math_trunc() {
+        let expr = engine_call("math", vec![str_lit("trunc"), var("x")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        match extract_expr(&func) {
+            JsExpr::Call { callee, args } => {
+                match callee.as_ref() {
+                    JsExpr::Field { object, field } => {
+                        assert!(matches!(object.as_ref(), JsExpr::Var(n) if n == "Math"));
+                        assert_eq!(field, "trunc");
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    // --- Phase 4: str_op ---
+
+    fn assert_stringops_call(func: &JsFunction, expected_method: &str, expected_arg_count: usize) {
+        match extract_expr(func) {
+            JsExpr::Call { callee, args } => {
+                match callee.as_ref() {
+                    JsExpr::Field { object, field } => {
+                        assert!(matches!(object.as_ref(), JsExpr::Var(n) if n == "StringOps"),
+                            "expected StringOps, got {object:?}");
+                        assert_eq!(field, expected_method);
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                assert_eq!(args.len(), expected_arg_count);
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_str_op_upperfirst() {
+        let expr = engine_call("str_op", vec![str_lit("upperfirst"), var("s")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        assert_stringops_call(&func, "upperfirst", 1);
+    }
+
+    #[test]
+    fn rewrite_str_op_trimmed() {
+        let expr = engine_call("str_op", vec![str_lit("trimmed"), var("s")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        assert_stringops_call(&func, "trimmed", 1);
+    }
+
+    #[test]
+    fn rewrite_str_op_str_reversed() {
+        let expr = engine_call("str_op", vec![str_lit("str-reversed"), var("s")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        assert_stringops_call(&func, "strReversed", 1);
+    }
+
+    #[test]
+    fn rewrite_str_op_string_reversed_alias() {
+        let expr = engine_call("str_op", vec![str_lit("string-reversed"), var("s")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        assert_stringops_call(&func, "strReversed", 1);
+    }
+
+    #[test]
+    fn rewrite_str_op_digit_format() {
+        let expr = engine_call("str_op", vec![str_lit("digit-format"), var("fmt"), var("n")]);
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        assert_stringops_call(&func, "digitFormat", 2);
+    }
+
+    #[test]
     fn introduced_calls_engine() {
         assert!(rewrite_introduced_calls("math").is_empty());
         assert!(rewrite_introduced_calls("not").is_empty());
         assert!(rewrite_introduced_calls("lerp").is_empty());
         assert_eq!(rewrite_introduced_calls("color_op"), &["Colors"]);
         assert_eq!(rewrite_introduced_calls("collection_op"), &["Collections"]);
+        assert_eq!(rewrite_introduced_calls("str_op"), &["StringOps"]);
         assert!(rewrite_introduced_calls("plus").is_empty());
     }
 
