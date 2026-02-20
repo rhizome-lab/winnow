@@ -103,12 +103,12 @@ export class HarloweEngine {
   // --- Save/load ---
 
   /** `(save-game: slot)` — save current game state. Returns true on success. */
-  save_game(slot: any): boolean {
+  save_game(slot: string | number): boolean {
     return this.rt.State.saveSlot(String(slot));
   }
 
   /** `(load-game: slot)` — load game state and navigate to saved passage. */
-  load_game(slot: any): void {
+  load_game(slot: string | number): void {
     const title = this.rt.State.loadSlot(String(slot));
     if (title) {
       this.rt.Navigation.goto(title);
@@ -1268,10 +1268,10 @@ export const Collections = {
 
 // --- Color operations (pure) ---
 
-function rgb(r: any, g: any, b: any): string { return `rgb(${r}, ${g}, ${b})`; }
-function rgba(r: any, g: any, b: any, a: any): string { return `rgba(${r}, ${g}, ${b}, ${a})`; }
-function hsl(h: any, s: any, l: any): string { return `hsl(${h}, ${s}%, ${l}%)`; }
-function hsla(h: any, s: any, l: any, a: any): string { return `hsla(${h}, ${s}%, ${l}%, ${a})`; }
+function rgb(r: number, g: number, b: number): string { return `rgb(${r}, ${g}, ${b})`; }
+function rgba(r: number, g: number, b: number, a: number): string { return `rgba(${r}, ${g}, ${b}, ${a})`; }
+function hsl(h: number, s: number, l: number): string { return `hsl(${h}, ${s}%, ${l}%)`; }
+function hsla(h: number, s: number, l: number, a: number): string { return `hsla(${h}, ${s}%, ${l}%, ${a})`; }
 
 export const Colors = { rgb, rgba, hsl, hsla } as const;
 

@@ -15,16 +15,16 @@ interface ToggleDef {
   label: string;
   default: boolean;
   desc?: string;
-  onChange?: (value: any) => void;
+  onChange?: (value: boolean) => void;
 }
 
 interface ListDef {
   type: "list";
   label: string;
-  default: any;
-  list: any[];
+  default: string;
+  list: string[];
   desc?: string;
-  onChange?: (value: any) => void;
+  onChange?: (value: string) => void;
 }
 
 interface RangeDef {
@@ -35,14 +35,14 @@ interface RangeDef {
   max: number;
   step: number;
   desc?: string;
-  onChange?: (value: any) => void;
+  onChange?: (value: number) => void;
 }
 
 type SettingDef = ToggleDef | ListDef | RangeDef;
 
 export class SCSettings {
   private definitions: Map<string, SettingDef> = new Map();
-  private values: Record<string, any> = {};
+  private values: Record<string, boolean | number | string> = {};
   private register: ((id: string, binding: string, handler: () => void) => void) | null = null;
 
   // --- Registration ---
@@ -52,7 +52,7 @@ export class SCSettings {
     label: string;
     default?: boolean;
     desc?: string;
-    onChange?: (value: any) => void;
+    onChange?: (value: boolean) => void;
   }): void {
     const setting: ToggleDef = {
       type: "toggle",
@@ -76,10 +76,10 @@ export class SCSettings {
   /** Register a list (select) setting. */
   addList(name: string, def: {
     label: string;
-    list: any[];
-    default?: any;
+    list: string[];
+    default?: string;
     desc?: string;
-    onChange?: (value: any) => void;
+    onChange?: (value: string) => void;
   }): void {
     const setting: ListDef = {
       type: "list",
@@ -111,7 +111,7 @@ export class SCSettings {
     step: number;
     default?: number;
     desc?: string;
-    onChange?: (value: any) => void;
+    onChange?: (value: number) => void;
   }): void {
     const setting: RangeDef = {
       type: "range",
@@ -132,12 +132,12 @@ export class SCSettings {
   // --- Value access ---
 
   /** Get the current value of a setting. */
-  get(name: string): any {
+  get(name: string): boolean | number | string | undefined {
     return this.values[name];
   }
 
   /** Set a setting value and fire its onChange callback. */
-  set(name: string, value: any): void {
+  set(name: string, value: boolean | number | string): void {
     this.values[name] = value;
     const def = this.definitions.get(name);
     if (def?.onChange) {
@@ -166,7 +166,7 @@ export class SCSettings {
 
   /** Save current settings to localStorage. */
   save(): void {
-    const toSave: Record<string, any> = {};
+    const toSave: Record<string, boolean | number | string> = {};
     for (const [key] of this.definitions) {
       if (key in this.values) {
         toSave[key] = this.values[key];
@@ -203,9 +203,9 @@ export class SCSettings {
           type: def.type,
           label: def.label,
           desc: def.desc,
-          value: this.get(name),
-          ...(def.type === "list" ? { list: (def as any).list } : {}),
-          ...(def.type === "range" ? { min: (def as any).min, max: (def as any).max, step: (def as any).step } : {}),
+          value: this.get(name)!,
+          ...(def.type === "list" ? { list: (def as ListDef).list } : {}),
+          ...(def.type === "range" ? { min: (def as RangeDef).min, max: (def as RangeDef).max, step: (def as RangeDef).step } : {}),
         });
       }
       showSettingsUI(

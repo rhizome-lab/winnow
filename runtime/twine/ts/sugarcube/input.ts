@@ -85,7 +85,7 @@ export class SCInput {
   }
 
   /** <<checkbox "$var" checkedValue uncheckedValue>> */
-  checkbox(varName: string, checkedValue: any, uncheckedValue: any): void {
+  checkbox(varName: string, checkedValue: string | number | boolean, uncheckedValue: string | number | boolean): void {
     const input = this.rt.Output.doc.createElement("input");
     input.type = "checkbox";
 
@@ -101,7 +101,7 @@ export class SCInput {
   }
 
   /** <<radiobutton "$var" checkedValue>> */
-  radiobutton(varName: string, checkedValue: any): void {
+  radiobutton(varName: string, checkedValue: string | number | boolean): void {
     const input = this.rt.Output.doc.createElement("input");
     input.type = "radio";
     input.name = varName;

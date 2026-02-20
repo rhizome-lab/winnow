@@ -4,7 +4,7 @@
  */
 
 import { Rectangle } from "./geom";
-import { InteractiveObject, registerTimelineFactory } from "./display";
+import { DisplayObject, InteractiveObject, registerTimelineFactory } from "./display";
 import { EventDispatcher } from "./events";
 import { createMeasureContext } from "./platform";
 
@@ -503,8 +503,8 @@ export class TextField extends InteractiveObject {
     return (nlPos === -1 ? this._text.length : nlPos) - start;
   }
 
-  getImageReference(_id: string): any {
-    return null;
+  getImageReference(_id: string): DisplayObject | null {
+    throw new Error("TextField.getImageReference() is not implemented");
   }
 
   static isFontCompatible(fontName: string, fontStyle: string): boolean {

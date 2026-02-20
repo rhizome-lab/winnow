@@ -5,9 +5,9 @@ export interface SettingUIEntry {
   type: "toggle" | "list" | "range";
   label: string;
   desc?: string;
-  value: any;
+  value: boolean | number | string;
   // list-specific
-  list?: any[];
+  list?: string[];
   // range-specific
   min?: number;
   max?: number;
@@ -31,7 +31,7 @@ export function init(
 
 export function showSettingsUI(
   entries: SettingUIEntry[],
-  onSet: (name: string, value: any) => void,
+  onSet: (name: string, value: boolean | number | string) => void,
   onReset: () => void,
 ): void {
   const frag = document.createDocumentFragment();
