@@ -400,16 +400,18 @@ and add it to `~/reincarnate/twine/`.
 - [x] **Lambda `via` expressions + `(sorted-by:)` + fold lambdas** — `via expr` tokenized and lowered
   as `ViaLambda`; `each _x making _acc via expr` parsed as `FoldLambda` for `(folded:)`;
   `(sorted-by:)` added to frontend + runtime; `interlaced`, `repeated`, `folded` runtime functions added.
-- [ ] **Dynamic macro calls** — `($varName: args)` expression-position calls not parsed; expression
-  lexer stops at `$name` and drops `:args`. Affects games that store macro callbacks in variables.
+- [x] **Dynamic macro calls** — `($varName: args)` expression-position calls; `(macro: type _p, [body])`
+  closures; `ExprKind::DynCall`; `ExprKind::MacroDef`; `extract_macro_definition()` in lexer;
+  `parse_macro_definition_args()` in parser; `build_macro_closure()` in translator.
 - [x] **Changer composition with `+`** — `(color: red) + (text-style: "bold")` (fixed in `155af06`)
-- [ ] **`(save-game:)` / `(load-game:)`** — Save integration (basic runtime done)
+- [x] **`(save-game:)` / `(load-game:)`** — Save integration (basic runtime done; already implemented)
 - [x] **`(replace:)`, `(show:)`, `(hide:)`** — DOM manipulation hooks (done)
 - [x] **`(meter:)`, `(dialog:)`** — UI macros (implemented, `(dropdown:)` still open)
 - [x] **`(verbatim:)[...]`** — Raw text pass-through via `<tw-verbatim>` element
 - [x] **`(enchant:)` / `(enchant-in:)`** — Apply changers to matching elements via `<tw-enchantment>`
 - [x] **Named hooks** — `|name>[hook content]` and `?name` hook references (done)
-- [ ] **Complex `'s` possessive chains** — `$obj's (str-nth: $idx)` nested macro in possessive
+- [x] **Complex `'s` possessive chains** — `$obj's (str-nth: $idx)` nested macro in possessive
+  (already handled: `parse_prefix` falls to `try_parse_inline_macro` after `'s`)
 
 
 
