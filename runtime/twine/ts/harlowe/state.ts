@@ -36,6 +36,23 @@ export class HarloweState implements SaveableState {
     return this.itValue;
   }
 
+  /**
+   * Create a bind-ref descriptor for interactive macros like `(checkbox:)`,
+   * `(dropdown:)`, `(cycling-link:)`, etc.
+   * `isStory` = true for `$var`, false for `_var`.
+   * `twoWay` = true for `2bind` (input pre-populated from current variable value).
+   */
+  bind_ref(name: string, isStory: boolean, twoWay: boolean): { get: () => any; set: (v: any) => void; twoWay: boolean } {
+    const store = isStory ? this.storyVars : this.tempVars;
+    return {
+      get: () => (isStory ? this.get(name) : (store[name] ?? 0)),
+      set: (v: any) => {
+        if (isStory) { this.set(name, v); } else { store[name] = v; }
+      },
+      twoWay,
+    };
+  }
+
   /** Clear all temp variables (called at start of each passage). */
   clearTemps(): void {
     for (const key of Object.keys(this.tempVars)) {

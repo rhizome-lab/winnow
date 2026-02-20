@@ -127,7 +127,5 @@ pub fn expects_hook(name: &str) -> bool {
                 | "for"
                 | "dialog"
                 | "columns"
-                | "cycling-link"
-                | "seq-link"
         )
 }

@@ -743,6 +743,9 @@ impl TranslateCtx {
             // Interactive input macros
             "dropdown" | "checkbox" | "input-box" => self.lower_input_macro(mac),
 
+            // Cycling/sequence links — interactive links that rotate through choices
+            "cycling-link" | "seq-link" => self.lower_cycling_link(mac),
+
             // else-if / elseif appearing standalone (outside an if-chain) — treat as if
             "else-if" | "elseif" => {
                 self.emit_if(mac);
@@ -1988,6 +1991,20 @@ impl TranslateCtx {
             .system_call("Harlowe.Engine", "input_macro", &call_args, Type::Void);
     }
 
+    /// `(cycling-link: [bind $var,] opt1, opt2, ...)` /
+    /// `(seq-link: [bind $var,] opt1, opt2, ...)` —
+    /// creates a link that cycles (or sequences) through a list of options,
+    /// optionally binding the current choice to a story variable.
+    fn lower_cycling_link(&mut self, mac: &MacroNode) {
+        let is_cycling = mac.name == "cycling-link";
+        let cycling_val = self.fb.const_bool(is_cycling);
+        let args: Vec<ValueId> = mac.args.iter().map(|a| self.lower_expr(a)).collect();
+        let mut call_args = vec![cycling_val];
+        call_args.extend(args);
+        self.fb
+            .system_call("Harlowe.Engine", "cycling_link", &call_args, Type::Void);
+    }
+
     // ── HAL (Harlowe Audio Library) macros ─────────────────────────
 
     /// `(track: name, command, ...args)`, `(playlist: ...)`, `(group: ...)` —
@@ -2335,6 +2352,29 @@ impl TranslateCtx {
                     .collect();
                 let cb_name = self.make_callback_name("macro");
                 self.build_macro_closure(&cb_name, &param_names, &body_ast.body)
+            }
+            // `bind $var` / `2bind $var` — produce a { get, set } bind-ref object.
+            // The runtime uses this to initialize the input and update the variable on change.
+            ExprKind::Bind { two_way, target } => {
+                let name = match &target.kind {
+                    ExprKind::StoryVar(n) => n.clone(),
+                    ExprKind::TempVar(n) => format!("_{n}"),
+                    _ => {
+                        // Unusual: fall back to just reading the target value.
+                        return self.lower_expr(target);
+                    }
+                };
+                let name_val = self.fb.const_string(&name);
+                let two_way_val = self.fb.const_bool(*two_way);
+                // Determine if it's a story or temp var.
+                let is_story = matches!(&target.kind, ExprKind::StoryVar(_));
+                let is_story_val = self.fb.const_bool(is_story);
+                self.fb.system_call(
+                    "Harlowe.State",
+                    "bind_ref",
+                    &[name_val, is_story_val, two_way_val],
+                    Type::Dynamic,
+                )
             }
             ExprKind::Error(_) => self.fb.const_bool(false),
         }

@@ -229,6 +229,13 @@ pub enum ExprKind {
         params: Vec<Expr>,
         hook_source: String,
     },
+    /// `bind $var` / `2bind $var` — variable binding descriptor for interactive macros.
+    /// Lowered to `Harlowe.State.bind_ref(name)` which returns a `{ get, set }` object.
+    /// `two_way` = true for `2bind` (initializes input from current variable value).
+    Bind {
+        two_way: bool,
+        target: Box<Expr>,
+    },
     /// Error placeholder for malformed expressions.
     Error(String),
 }

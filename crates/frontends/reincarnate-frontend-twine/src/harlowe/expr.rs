@@ -473,13 +473,21 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
         TokenKind::Ident(ref s) => {
             let s = s.clone();
             lexer.next_token();
-            // `bind $var` / `2bind $var` — Harlowe bound variable reference.
-            // For decompilation, treat as the variable's current value by
-            // parsing (and returning) the following variable expression.
+            // `bind $var` / `2bind $var` — produce a bind-ref descriptor object.
+            // `2bind` is two-way: the input is also initialized from the variable's value.
             if s == "bind" || s == "2bind" {
+                let two_way = s == "2bind";
                 let next = lexer.peek_token();
                 if matches!(next.kind, TokenKind::StoryVar(_) | TokenKind::TempVar(_)) {
-                    return parse_prefix(lexer);
+                    let target = parse_prefix(lexer);
+                    let span = Span::new(tok.span.start, target.span.end);
+                    return Expr {
+                        kind: ExprKind::Bind {
+                            two_way,
+                            target: Box::new(target),
+                        },
+                        span,
+                    };
                 }
             }
             // `when expr` — Harlowe 3.3+ storylet/event condition prefix.

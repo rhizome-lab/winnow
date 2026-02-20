@@ -874,13 +874,17 @@ export class HarloweEngine {
     if (!container) return;
     const doc = this.doc();
     const bindRef = args.length > 0 ? args[0] : undefined;
+    const hasRef = bindRef != null && typeof bindRef === "object" && typeof bindRef.set === "function";
     const options = args.slice(1);
     if (name === "checkbox") {
       const falseVal = options[0] ?? "false";
       const trueVal = options[1] ?? "true";
       const input = doc.createElement("input") as HTMLInputElement;
       input.type = "checkbox";
-      if (bindRef && typeof bindRef === "object" && typeof bindRef.set === "function") {
+      if (hasRef) {
+        if (bindRef.twoWay) {
+          input.checked = bindRef.get() === trueVal;
+        }
         input.addEventListener("change", () => {
           bindRef.set(input.checked ? trueVal : falseVal);
         });
@@ -894,7 +898,10 @@ export class HarloweEngine {
         option.value = String(opt);
         select.appendChild(option);
       }
-      if (bindRef && typeof bindRef === "object" && typeof bindRef.set === "function") {
+      if (hasRef) {
+        if (bindRef.twoWay) {
+          select.value = String(bindRef.get());
+        }
         select.addEventListener("change", () => bindRef.set(select.value));
       }
       container.appendChild(select);
@@ -904,12 +911,60 @@ export class HarloweEngine {
       const input = (String(lines) === "oneline"
         ? doc.createElement("input")
         : doc.createElement("textarea")) as HTMLInputElement | HTMLTextAreaElement;
-      input.value = defaultVal;
-      if (bindRef && typeof bindRef === "object" && typeof bindRef.set === "function") {
+      input.value = hasRef && bindRef.twoWay ? String(bindRef.get()) : defaultVal;
+      if (hasRef) {
         input.addEventListener("input", () => bindRef.set(input.value));
       }
       container.appendChild(input);
     }
+  }
+
+  /**
+   * `(cycling-link:)` / `(seq-link:)` — interactive link cycling through options.
+   * Args: `cycling: boolean, [bindRef?,] opt1, opt2, ...`
+   * If the first content arg is a bind-ref, clicking also sets the variable.
+   */
+  cycling_link(cycling: boolean, ...args: any[]): void {
+    const container = this.passage();
+    if (!container) return;
+    const doc = this.doc();
+
+    // Detect optional bind-ref as first arg (has .get and .set methods).
+    let bindRef: { get: () => any; set: (v: any) => void } | undefined;
+    let opts: string[];
+    if (args.length > 0 && args[0] != null && typeof args[0] === "object" && typeof args[0].set === "function") {
+      bindRef = args[0];
+      opts = args.slice(1).map(String);
+    } else {
+      opts = args.map(String);
+    }
+    if (opts.length === 0) return;
+
+    // Start from current variable value if bind ref is provided, otherwise first option.
+    let idx = 0;
+    if (bindRef) {
+      const cur = String(bindRef.get());
+      const found = opts.indexOf(cur);
+      if (found >= 0) idx = found;
+    }
+
+    const link = doc.createElement("a") as HTMLAnchorElement;
+    link.className = "cycling-link";
+    link.href = "javascript:void(0)";
+    link.textContent = opts[idx];
+
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (cycling) {
+        idx = (idx + 1) % opts.length;
+      } else {
+        idx = Math.min(idx + 1, opts.length - 1);
+      }
+      link.textContent = opts[idx];
+      if (bindRef) bindRef.set(opts[idx]);
+    });
+
+    container.appendChild(link);
   }
 
   // --- Unknown macro fallback ---
