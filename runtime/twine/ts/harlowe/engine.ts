@@ -320,8 +320,20 @@ export class HarloweEngine {
       case "turns": return this.rt.State.turns();
       case "history": return this.rt.State.historyTitles();
       // Misc
-      case "cond": return args[0] ? args[1] : args[2];
-      case "nth": { const idx = Math.floor(args[0] as number); return args[idx] ?? args[args.length - 1]; }
+      case "cond": {
+        // `(cond: bool1, val1, bool2, val2, ..., defaultVal)` — pairs + optional fallback
+        for (let i = 0; i + 1 < args.length; i += 2) {
+          if (args[i]) return args[i + 1];
+        }
+        return args.length % 2 === 1 ? args[args.length - 1] : undefined;
+      }
+      case "nth": {
+        // `(nth: n, val1, val2, ...)` — 1-indexed, wraps cyclically
+        const n = Math.floor(args[0] as number);
+        const vals = args.slice(1);
+        if (vals.length === 0) return undefined;
+        return vals[(n - 1) % vals.length];
+      }
       default:
         console.warn(`[harlowe] unknown value macro: ${name}`);
         return undefined;
