@@ -103,6 +103,16 @@ Measured after TypeInference + ConstraintSolve + Alloc refinement.
   - **Sentinel elimination** — recognize sentinel-then-overwrite → `Option<T>`
   - Emit union type annotation (`number | string`) instead of `any`
 
+## Runtime Type Audit
+
+- [ ] **Periodic `git blame` audit of runtime type signatures** — Review Harlowe/SugarCube runtime files
+  (`engine.ts`, `context.ts`, `state.ts`, etc.) for any type signatures that were widened (e.g. `string`
+  → `any`, required param made optional) to silence TypeScript errors from game code. Such changes hide
+  real bugs. The rule: never widen types to accommodate buggy game code — TypeScript catching game author
+  mistakes is correct behavior. Audit files: `runtime/twine/ts/harlowe/`, `runtime/twine/ts/sugarcube/`.
+
+---
+
 ## Third-Party Engine Libraries
 
 Many real-world games embed third-party macro/plugin libraries alongside the engine.
@@ -303,6 +313,13 @@ statement parsing, trailing comma stripping in case values.
   stylesheet block captured 1.5 MB of JS. Fix: pick whichever closing tag appears first.
 
 ### Harlowe Correctness Bugs
+
+- [ ] **Temp variable block-scope leak** — Harlowe temp vars (`_var`) have passage-level scope:
+  `(set: _x to 1)` inside an `(if:)` hook leaves `_x` accessible for the rest of the passage.
+  But our emitter places `Op::Alloc` inside the if-block's basic block, producing a `let _x`
+  scoped to that block. References to `_x` outside the block fail with TS2304. Fix: hoist all
+  `Op::Alloc` to the function entry block (standard SSA approach). Observed in: artifact (`_twelve`),
+  equivalent-exchange (`_sex`, `_cockz`, etc.).
 
 - [x] **Backtick verbatim spans not handled in parser** — Fixed in `cfb1796`.
   Parser now handles backtick-delimited verbatim spans; `]` inside backticks

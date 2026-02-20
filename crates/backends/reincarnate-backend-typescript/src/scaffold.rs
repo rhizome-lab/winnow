@@ -281,6 +281,7 @@ const TSCONFIG: &str = r#"{
     "module": "ES2020",
     "moduleResolution": "bundler",
     "strict": true,
+    "noImplicitAny": false,
     "esModuleInterop": true,
     "outDir": "dist",
     "rootDir": ".",

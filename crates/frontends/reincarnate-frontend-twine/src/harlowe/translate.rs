@@ -1498,7 +1498,7 @@ impl TranslateCtx {
             }
         }
 
-        // Need at least 2 changers and the last must have a hook to be a real chain.
+        // Need at least 2 changers to be a real composition chain.
         if changer_indices.len() < 2 {
             return None;
         }
@@ -1507,13 +1507,22 @@ impl TranslateCtx {
             &nodes[last_idx].kind,
             NodeKind::Macro(m) if m.hook.is_some()
         );
-        if !has_hook {
+        // If no terminal hook, try to use remaining nodes as the implicit hook.
+        // This handles: `(ch1) + (ch2) + remaining_content` inside a named hook body.
+        if !has_hook && i >= nodes.len() {
             return None;
         }
 
-        // Build changer objects for all nodes except the terminal (which supplies the hook).
+        // Build changer objects for all nodes.
+        // For the terminal-hooked case, all but the last supply the changer value;
+        // for the implicit-hook case, ALL supply changer values.
+        let terminal_end = if has_hook {
+            changer_indices.len() - 1
+        } else {
+            changer_indices.len()
+        };
         let mut changer_vals: Vec<ValueId> = Vec::new();
-        for &idx in &changer_indices[..changer_indices.len() - 1] {
+        for &idx in &changer_indices[..terminal_end] {
             // Clone to avoid long borrow while calling `self` methods.
             let mac = match &nodes[idx].kind {
                 NodeKind::Macro(m) => m.clone(),
@@ -1526,18 +1535,26 @@ impl TranslateCtx {
             }
         }
 
-        // Clone the terminal changer to build both its changer object and hook children.
-        let terminal_mac = match &nodes[last_idx].kind {
-            NodeKind::Macro(m) => m.clone(),
-            _ => unreachable!(),
+        // If the last changer has an explicit hook, add its changer value and collect its children.
+        // Otherwise, the remaining sibling nodes form the implicit hook.
+        let hook_nodes: Vec<Node> = if has_hook {
+            // Clone the terminal changer to build both its changer object and hook children.
+            let terminal_mac = match &nodes[last_idx].kind {
+                NodeKind::Macro(m) => m.clone(),
+                _ => unreachable!(),
+            };
+            let terminal_no_hook = MacroNode {
+                hook: None,
+                ..terminal_mac.clone()
+            };
+            if let Some(v) = self.lower_changer_as_value(&terminal_no_hook) {
+                changer_vals.push(v);
+            }
+            terminal_mac.hook.as_ref().unwrap().clone()
+        } else {
+            // No explicit hook — the remaining sibling nodes form the implicit hook.
+            nodes[i..].to_vec()
         };
-        let terminal_no_hook = MacroNode {
-            hook: None,
-            ..terminal_mac.clone()
-        };
-        if let Some(v) = self.lower_changer_as_value(&terminal_no_hook) {
-            changer_vals.push(v);
-        }
 
         // Compose all changers left-to-right via `plus()`.
         let composed = changer_vals
@@ -1549,15 +1566,16 @@ impl TranslateCtx {
             .expect("at least one changer");
 
         // Apply composed changer to the hook children.
-        let hook = terminal_mac.hook.as_ref().unwrap();
-        let children = self.lower_children_as_values(hook);
+        let children = self.lower_children_as_values(&hook_nodes);
         let mut args = vec![composed];
         args.extend(children);
         let result = self
             .fb
             .system_call("Harlowe.H", "styled", &args, Type::Dynamic);
 
-        Some((result, i))
+        // When using remaining sibling nodes as implicit hook, consume all of them.
+        let end = if has_hook { i } else { nodes.len() };
+        Some((result, end))
     }
 
     fn lower_changer_as_value(&mut self, mac: &MacroNode) -> Option<ValueId> {

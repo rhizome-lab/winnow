@@ -609,7 +609,7 @@ export class HarloweContext {
   hidden(...children: Child[]): Node {
     return this.styled({ name: "hidden", args: [true] }, ...children);
   }
-  textSize(v: string, ...children: Child[]): Node {
+  textSize(v: number, ...children: Child[]): Node {
     return this.styled({ name: "text-size", args: [v] }, ...children);
   }
   textRotateZ(v: number, ...children: Child[]): Node {

@@ -26,7 +26,7 @@
   "function_signatures": {},
   "function_modules": [
     {
-      "names": ["Colors", "Collections"],
+      "names": ["Colors", "Collections", "StringOps"],
       "path": "harlowe/engine"
     }
   ]
