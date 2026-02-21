@@ -96,6 +96,20 @@ fn eliminate_copies(func: &mut Function) -> bool {
 // Sub-pass 2: Single-store promotion
 // -------------------------------------------------------------------------
 
+/// Returns true if block `a` dominates block `b` given the immediate-dominator map.
+fn dominates(a: BlockId, b: BlockId, idom: &HashMap<BlockId, BlockId>) -> bool {
+    let mut cur = b;
+    loop {
+        if cur == a {
+            return true;
+        }
+        match idom.get(&cur) {
+            Some(&parent) if parent != cur => cur = parent,
+            _ => return false,
+        }
+    }
+}
+
 fn promote_single_store(func: &mut Function) -> bool {
     let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
     let mut dead_insts: HashSet<InstId> = HashSet::new();
@@ -146,11 +160,60 @@ fn promote_single_store(func: &mut Function) -> bool {
         }
     }
 
-    let single_store: HashSet<ValueId> = store_count
+    // Candidates: exactly 1 store, not escaped.
+    let single_store_candidates: HashSet<ValueId> = store_count
         .iter()
         .filter(|(_, &c)| c == 1)
         .filter(|(ptr, _)| !escaped.contains(ptr))
         .map(|(&ptr, _)| ptr)
+        .collect();
+
+    if single_store_candidates.is_empty() {
+        return false;
+    }
+
+    // Build inst→block map and dominators so we can verify the single store
+    // dominates every load site. This is necessary for correctness: if the
+    // store is inside a loop body and a load exists after the loop (e.g. a
+    // closure capture), the store does NOT dominate the load — promoting would
+    // move the stored value (defined only inside the loop) to an outer scope
+    // where it is not in scope, producing TS2304 "cannot find name" errors.
+    let mut inst_block: HashMap<InstId, BlockId> = HashMap::new();
+    for (block_id, block) in func.blocks.iter() {
+        for &inst_id in &block.insts {
+            inst_block.insert(inst_id, block_id);
+        }
+    }
+    let cfg = build_cfg(func);
+    let idom = compute_dominators_lt(func.entry, &cfg.preds, &cfg.succs);
+
+    let single_store: HashSet<ValueId> = single_store_candidates
+        .into_iter()
+        .filter(|ptr| {
+            let store_inst = match store_inst_map.get(ptr) {
+                Some(&id) => id,
+                None => return false,
+            };
+            let store_block = match inst_block.get(&store_inst) {
+                Some(&b) => b,
+                None => return false,
+            };
+            // Every load of this alloc must be in a block dominated by store_block.
+            for (inst_id, inst) in func.insts.iter() {
+                if let Op::Load(p) = &inst.op {
+                    if p == ptr {
+                        let load_block = match inst_block.get(&inst_id) {
+                            Some(&b) => b,
+                            None => return false,
+                        };
+                        if !dominates(store_block, load_block, &idom) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        })
         .collect();
 
     for (inst_id, inst) in func.insts.iter() {
@@ -281,8 +344,13 @@ fn promote_multi_store(func: &mut Function) -> bool {
             }
         }
 
-        // Only handle multi-store (single-store already handled above).
-        if store_count >= 2 {
+        // Handle allocs with ≥1 store: single-store cases where the store does
+        // NOT dominate all loads (e.g. store inside a loop, load after loop)
+        // were rejected by promote_single_store's dominance check and must be
+        // handled here so they receive a proper null-sentinel initial value and
+        // SSA phi rather than being left as uninitialized `let` declarations
+        // (which would cause TS2454 "variable used before assignment").
+        if store_count >= 1 {
             alloc_infos.push((
                 ptr,
                 AllocInfo {
@@ -1000,6 +1068,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Single store inside a loop body — single-store fast path must reject it
+    /// (store doesn't dominate exit load), but multi-store must handle it via
+    /// phi placement so no raw Load or Store remains and no `let` is left
+    /// uninitialized (which would cause TS2454).
+    #[test]
+    fn single_store_in_loop_promoted_via_phi() {
+        // CFG:
+        //   entry: alloc, br → header
+        //   header: br_if(cond) → body, exit
+        //   body: store(ptr, 42), br → header   ← only store
+        //   exit: load(ptr), return              ← load not dominated by body
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Int(64), ..Default::default() };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+        let ptr = fb.alloc(Type::Int(64));
+
+        let header = fb.create_block();
+        let body = fb.create_block();
+        let exit = fb.create_block();
+
+        fb.br(header, &[]);
+
+        fb.switch_to_block(header);
+        fb.br_if(cond, body, &[], exit, &[]);
+
+        fb.switch_to_block(body);
+        let val = fb.const_int(42);
+        fb.store(ptr, val);
+        fb.br(header, &[]);
+
+        fb.switch_to_block(exit);
+        let loaded = fb.load(ptr, Type::Int(64));
+        fb.ret(Some(loaded));
+
+        let func = apply_mem2reg(fb.build());
+
+        // No raw Load or Store should remain — multi-store must have promoted it.
+        for (_, block) in func.blocks.iter() {
+            for &inst_id in &block.insts {
+                assert!(
+                    !matches!(func.insts[inst_id].op, Op::Load(_)),
+                    "no Load should remain after phi-based promotion"
+                );
+                assert!(
+                    !matches!(func.insts[inst_id].op, Op::Store { .. }),
+                    "no Store should remain after phi-based promotion"
+                );
+            }
+        }
+        // Header should have a phi param (merges initial_sentinel from entry
+        // and the stored value from the back-edge).
+        assert!(
+            !func.blocks[header].params.is_empty(),
+            "header should have a phi param for the loop variable"
+        );
     }
 
     /// Store in loop — phi placement for back-edge.
