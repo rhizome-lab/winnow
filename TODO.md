@@ -274,6 +274,40 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
   The parser now handles `x => expr` in addition to `(x) => expr`. DOL:
   596 → 817 inline arrows (+221 previously broken).
 
+### SugarCube Translator Bugs
+
+- [ ] **`_rt` parameter threading in trc (1935 errors)** — Passage functions are emitted as
+  `(_rt: SugarCubeRuntime) => void` but some callback sites (e.g. link targets, widget calls)
+  pass them without the `_rt` argument, producing TS2345 "not assignable to `() => void`".
+  Root cause: the translator threads `_rt` through passage closures but the call-site types
+  don't reflect it. Either passage callbacks must always accept `_rt` consistently, or the
+  closure form must be `() => void` with `_rt` captured from outer scope.
+
+- [ ] **`radiobutton` emits 1 arg instead of 2 in trc (24 errors)** — The SugarCube translator
+  packs both `varName` and `checkedValue` arguments into a single string:
+  `radiobutton("\"$hairColour\" \"brown\" checked")` instead of
+  `radiobutton("$hairColour", "brown", true)`. The translator must split macro args properly
+  for `<<radiobutton>>` (varName first, value second, optional `checked` flag third).
+
+### SugarCube Type Emission Bugs (DoL)
+
+- **`never[]` errors in DoL (game author errors)** — `[][_namecontroller] = x` (writing
+  to a throw-away empty array literal), `[].pushUnique(...)`, `[].pluck(...)`, and
+  `traits: never[]` from TypeScript's union inference on inline push args with empty
+  `traits: []` in objects with inconsistent shapes. All are game author bugs in the original
+  SugarCube source — reincarnate faithfully reproduces them. No fix warranted.
+
+- [x] **`Property '0'/'1' does not exist on type '{}'` — fixed** — `Record<string, unknown>`
+  object literal annotation made field reads return `unknown`; null-check narrowing then
+  produced `{}`, and `{}[numeric]` is TS7053. Fixed by annotating object literals as
+  `Record<string, any>` instead of `Record<string, unknown>`. Game objects are inherently
+  dynamic — `any` is the accurate annotation when no source-level type info exists.
+
+- [ ] **jQuery `@types` missing in DoL runtime** — 4 errors (`TS7016` + 3× `TS2304 JQuery`).
+  `runtime/sugarcube/jquery-extensions.ts` uses jQuery types but `@types/jquery` is not installed.
+  Fix: add `@types/jquery` to the runtime package deps, or add a minimal `declare module 'jquery'`
+  shim in the runtime's type declarations.
+
 ### SugarCube Remaining Stubs
 
 - [ ] **Scripting.parse()** — Returns code unchanged (identity function).
@@ -322,6 +356,41 @@ statement parsing, trailing comma stripping in case values.
   property key inside a `via` lambda. Our translator lowers `(it)` as a variable
   reference. Need to verify `$dm's (it)` translates correctly in lambda context
   (should produce `get_property(dm, it)`).
+
+- [ ] **`(sorted:)` via-lambda param implicit any (rogue-time-agent, 1 error)** —
+  `Collections.sorted((v0, v1: number): string => { ... })` — `v0` has no type
+  annotation and TypeScript can't infer it contextually because `sorted` returns
+  `unknown[]`. Options: (a) add `sorted` to `is_predicate_op` so the backend emits
+  typed params in the callback, or (b) type `sorted`'s comparator param as
+  `(a: unknown, b: unknown) => number` so TS can infer both params.
+
+- [ ] **Unreachable code after `(goto:)`/`(stop:)` (equivalent-exchange, 8 errors)** —
+  Code emitted after `goto`/`stop` IR returns is flagged as TS7027 unreachable by
+  TypeScript. The structurizer or emitter should suppress statements following a
+  guaranteed-terminating call. Alternatively, the frontend should mark blocks after
+  unconditional goto/stop as dead and DCE should prune them.
+
+- [ ] **Unresolved temp vars / used-before-assigned (equivalent-exchange, DoL)** —
+  Two related TS errors from temp var scoping gaps:
+  - **TS2304 "Cannot find name `_x`"** — `_enemycockz`/`_cockz` (equivalent-exchange),
+    `_swarmamounts`/`_arrayClothes`/`_clothing` (DoL): temp vars referenced in passage
+    bodies but not declared in scope at the reference site. Likely a closure capture
+    ordering problem — the lambda captures the var before its alloc is visible.
+  - **TS2454 "Variable `_x` used before being assigned"** — `_hooks`/`_them` (DoL):
+    var IS declared (hoisted by `hoist_allocs()`) but has no initializer, and a code
+    path reaches the use before the `(set:)` assignment. Fix: initialize hoisted allocs
+    to `undefined` (or the Harlowe undefined sentinel) so no path is "unassigned".
+
+- **TS2872 in artifact (game author error)** — `(set: $cond to (cond: ...))` where
+  `(cond:)` is used as a value macro. This is a game author misuse of `(cond:)` —
+  Harlowe's `(cond:)` is a value macro that picks between two values, not a
+  condition object. Reincarnate correctly emits the call; the TS error reflects the
+  type mismatch in the source. No fix warranted.
+
+- **TS2363/TS2367 game author comparison errors** — Boolean or type-mismatched operand
+  in a comparison that TypeScript rejects. Observed in the-national-pokedexxx (TS2363)
+  and equivalent-exchange line 44703 (TS2367: `boolean` vs `number`). Game author errors
+  in the original source. No fix warranted.
 
 - [x] **Temp variable block-scope leak** — Fixed in `62bcd79`. Harlowe temp vars (`_var`) have
   passage-level scope, but `Op::Alloc` was placed inside nested blocks producing block-scoped `let`.
