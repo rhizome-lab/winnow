@@ -367,15 +367,22 @@ statement parsing, trailing comma stripping in case values.
   guaranteed-terminating call. Alternatively, the frontend should mark blocks after
   unconditional goto/stop as dead and DCE should prune them.
 
+- [ ] **TS2304 `vNNNN` across Dispatch case boundaries (DoL, 1501 errors)** —
+  Values (e.g., `iterate()` results) are declared in one `case {}` block of a
+  Dispatch/switch and used in a sibling `case {}`. TypeScript sees them as
+  undeclared because each case is a separate block scope. Repro: `v5242` declared in
+  case 742 (`const v5242 = iterate(...)`) used in case 745 (`iterator_next_value(v5242)`).
+  Fix: during Dispatch emission, detect values defined in one case but referenced in
+  another, and hoist their declarations (without init, with `Assign` at definition site)
+  to before the switch statement — same approach as `block_params_preamble()`.
+
 - [ ] **Unresolved temp vars / used-before-assigned (equivalent-exchange, DoL)** —
   Two related TS errors from temp var scoping gaps:
   - **TS2304 "Cannot find name `_x`"** — `_enemycockz`/`_cockz` (equivalent-exchange),
     `_swarmamounts`/`_arrayClothes`/`_clothing` (DoL): temp vars referenced in passage
     bodies but not declared in scope at the reference site. Likely a closure capture
     ordering problem — the lambda captures the var before its alloc is visible.
-    Also: `_slot`/`_tentacleColour`/`_ii`/`_outfit` etc. (DoL, 1522 TS2304 remaining
-    after for-loop scope fix). The `__slot` vs `_slot` double-underscore naming
-    mismatch (line 47580) suggests a variable rename collision in closures.
+    Also: `_slot`/`_tentacleColour`/`_ii`/`_outfit`/`_kylar`/`__part` etc. (21 errors).
   - **TS2454 "Variable `_x` used before being assigned"** — `_hooks`/`_them` (DoL):
     var IS declared (hoisted by `hoist_allocs()`) but has no initializer, and a code
     path reaches the use before the `(set:)` assignment. Fix: initialize hoisted allocs
