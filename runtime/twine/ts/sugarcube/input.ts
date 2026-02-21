@@ -84,13 +84,14 @@ export class SCInput {
     this.appendToOutput(input);
   }
 
-  /** <<checkbox "$var" checkedValue uncheckedValue>> */
-  checkbox(varName: string, checkedValue: string | number | boolean, uncheckedValue: string | number | boolean): void {
+  /** <<checkbox "$var" uncheckedValue checkedValue [autocheck] [checked]>> */
+  checkbox(varName: string, uncheckedValue: string | number | boolean, checkedValue: string | number | boolean, ...flags: string[]): void {
     const input = this.rt.Output.doc.createElement("input") as HTMLInputElement;
     input.type = "checkbox";
 
     const current = this.rt.State.get(varName);
-    input.checked = current === checkedValue;
+    // `checked` flag forces initial check; `autocheck` (default behavior) checks if current === checkedValue
+    input.checked = flags.includes("checked") || current === checkedValue;
 
     input.addEventListener("change", () => {
       this.rt.State.set(varName, input.checked ? checkedValue : uncheckedValue);
@@ -100,14 +101,15 @@ export class SCInput {
     this.appendToOutput(input);
   }
 
-  /** <<radiobutton "$var" checkedValue>> */
-  radiobutton(varName: string, checkedValue: string | number | boolean): void {
+  /** <<radiobutton "$var" checkedValue [autocheck] [checked]>> */
+  radiobutton(varName: string, checkedValue: string | number | boolean, ...flags: string[]): void {
     const input = this.rt.Output.doc.createElement("input") as HTMLInputElement;
     input.type = "radio";
     input.name = varName;
 
     const current = this.rt.State.get(varName);
-    input.checked = current === checkedValue;
+    // `checked` flag forces initial check; `autocheck` (default behavior) checks if current === checkedValue
+    input.checked = flags.includes("checked") || current === checkedValue;
 
     input.addEventListener("change", () => {
       if (input.checked) {

@@ -451,12 +451,23 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+            // Interactive input macros: use parseArgs() tokenizer semantics so that
+            // each argument (varName, value, flags) becomes a separate typed token.
+            "textbox" | "textarea" | "numberbox" | "checkbox" | "radiobutton" => {
+                let args_src = self.capture_args_src();
+                if args_src.trim().is_empty() {
+                    MacroArgs::None
+                } else {
+                    let base = self.pos - args_src.len();
+                    let values = split_case_values(args_src, base);
+                    MacroArgs::CaseValues(values)
+                }
+            }
             // Macros whose arguments are CSS selectors, durations, or other
             // non-expression tokens — store as Raw.
             "replace" | "append" | "prepend" | "timed" | "repeat" | "type"
             | "addclass" | "removeclass" | "toggleclass"
-            | "copy" | "remove" | "done" | "listbox" | "cycle"
-            | "textbox" | "textarea" | "numberbox" | "checkbox" | "radiobutton" => {
+            | "copy" | "remove" | "done" | "listbox" | "cycle" => {
                 let args_src = self.capture_args_src();
                 let trimmed = args_src.trim();
                 if trimmed.is_empty() {
@@ -2188,6 +2199,77 @@ mod tests {
             assert_eq!(m.clauses.len(), 1);
         } else {
             panic!("expected if macro");
+        }
+    }
+
+    #[test]
+    fn radiobutton_args_parsed_as_case_values() {
+        // <<radiobutton "$var" "brown" checked>> should produce 3 separate tokens,
+        // not one packed raw string.
+        let src = r#"<<radiobutton "$hairColour" "brown" checked>>"#;
+        let ast = parse_str(src);
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+        assert_eq!(ast.body.len(), 1);
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "radiobutton");
+            if let MacroArgs::CaseValues(args) = &m.args {
+                assert_eq!(args.len(), 3, "expected 3 args, got {}", args.len());
+                assert!(
+                    matches!(&args[0], CaseArg::StringLit(_)),
+                    "arg[0] should be StringLit, got {:?}",
+                    args[0]
+                );
+                assert!(
+                    matches!(&args[1], CaseArg::StringLit(_)),
+                    "arg[1] should be StringLit, got {:?}",
+                    args[1]
+                );
+                assert!(
+                    matches!(&args[2], CaseArg::Bareword(s) if s == "checked"),
+                    "arg[2] should be Bareword(\"checked\"), got {:?}",
+                    args[2]
+                );
+            } else {
+                panic!("expected CaseValues, got {:?}", m.args);
+            }
+        } else {
+            panic!("expected Macro node");
+        }
+    }
+
+    #[test]
+    fn checkbox_args_parsed_as_case_values() {
+        // <<checkbox "$var" "off" "on">> should produce 3 separate tokens.
+        let src = r#"<<checkbox "$lights" "off" "on">>"#;
+        let ast = parse_str(src);
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "checkbox");
+            if let MacroArgs::CaseValues(args) = &m.args {
+                assert_eq!(args.len(), 3, "expected 3 args, got {}", args.len());
+            } else {
+                panic!("expected CaseValues, got {:?}", m.args);
+            }
+        } else {
+            panic!("expected Macro node");
+        }
+    }
+
+    #[test]
+    fn textbox_args_parsed_as_case_values() {
+        // <<textbox "$var" "default" "PassageName">> should produce 3 separate tokens.
+        let src = r#"<<textbox "$name" "Alice" "NextPassage">>"#;
+        let ast = parse_str(src);
+        assert!(ast.errors.is_empty(), "errors: {:?}", ast.errors);
+        if let NodeKind::Macro(m) = &ast.body[0].kind {
+            assert_eq!(m.name, "textbox");
+            if let MacroArgs::CaseValues(args) = &m.args {
+                assert_eq!(args.len(), 3, "expected 3 args, got {}", args.len());
+            } else {
+                panic!("expected CaseValues, got {:?}", m.args);
+            }
+        } else {
+            panic!("expected Macro node");
         }
     }
 
