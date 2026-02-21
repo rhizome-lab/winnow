@@ -401,7 +401,7 @@ export class HarloweEngine {
       case "dm-entries": case "data-entries": return Collections.dataentries(args[0]);
       case "dm-altered": case "datamap-altered": return Collections.dmAltered(args[0], args[1]);
       // String split
-      case "split": case "splitted": return Collections.splitStr(...args);
+      case "split": case "splitted": return Collections.splitStr(String(args[0]), String(args[1]));
       // Misc
       case "cond": {
         // `(cond: bool1, val1, bool2, val2, ..., defaultVal)` — pairs + optional fallback
@@ -1092,37 +1092,44 @@ function set_property(obj: any, prop: any, value: any): void {
 
 // --- Collection operations (pure) ---
 
-function sorted(...args: any[]): any[] {
-  return [...args].flat().sort((a, b) => {
-    if (typeof a === "string") return a.localeCompare(b);
+function sorted(...args: unknown[]): unknown[] {
+  const flat = args.flat();
+  // Optional `via` lambda as first arg: (sorted: via _key, items...)
+  if (flat.length > 0 && typeof flat[0] === "function") {
+    const fn = flat[0] as (item: unknown) => unknown;
+    return flat.slice(1).sort((a, b) => {
+      const ka = fn(a), kb = fn(b);
+      if (typeof ka === "string") return ka.localeCompare(String(kb));
+      return Number(ka) - Number(kb);
+    });
+  }
+  return flat.sort((a, b) => {
+    if (typeof a === "string") return a.localeCompare(b as string);
     return Number(a) - Number(b);
   });
 }
-function reversed(...args: any[]): any[] { return [...args].flat().reverse(); }
-function rotated(...args: any[]): any[] {
-  const n = Number(args[0]);
-  const arr = args.slice(1);
-  const len = arr.length;
+function reversed(...items: unknown[]): unknown[] {
+  return items.flat().reverse();
+}
+function rotated(n: number, ...items: unknown[]): unknown[] {
+  const len = items.length;
   if (len === 0) return [];
   const shift = ((n % len) + len) % len;
-  return [...arr.slice(shift), ...arr.slice(0, shift)];
+  return [...items.slice(shift), ...items.slice(0, shift)];
 }
-function shuffled(...args: any[]): any[] {
-  const arr = [...args];
+function shuffled(...items: unknown[]): unknown[] {
+  const arr = [...items];
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
   }
   return arr;
 }
-function count(...args: any[]): number {
-  const arr = Array.isArray(args[0]) ? args[0] : [args[0]];
-  const val = args[1];
-  return arr.filter(x => x === val).length;
+function count(arr: unknown, value: unknown): number {
+  const a = Array.isArray(arr) ? arr : [arr];
+  return a.filter(x => x === value).length;
 }
-function range(...args: any[]): number[] {
-  const start = Number(args[0]);
-  const end = Number(args[1]);
+function range(start: number, end: number): number[] {
   const result: number[] = [];
   for (let i = start; i <= end; i++) result.push(i);
   return result;
@@ -1134,27 +1141,26 @@ function find<T>(fn: ((item: T) => boolean) | T, ...items: (T | T[])[]): T | und
     ? arr.find(fn as (item: T) => boolean)
     : arr.find(x => x === fn);
 }
-function joined(...args: any[]): string {
-  const sep = args.length > 1 ? String(args[args.length - 1]) : "";
-  const items = args.length > 1 ? args.slice(0, -1) : args;
-  return items.flat().join(sep);
+// Harlowe: (joined: sep, item1, item2, ...) — separator is first, items follow.
+function joined(sep: unknown, ...items: unknown[]): string {
+  return items.flat().join(String(sep ?? ""));
 }
-function subarray(...args: any[]): any[] {
-  return Array.isArray(args[0]) ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : [];
+function subarray(arr: unknown[], start: number, end?: number): unknown[] {
+  return Array.isArray(arr) ? arr.slice(start - 1, end) : [];
 }
-function substring(...args: any[]): string {
-  return typeof args[0] === "string" ? args[0].slice(Number(args[1]) - 1, Number(args[2])) : "";
+function substring(str: string, start: number, end?: number): string {
+  return typeof str === "string" ? str.slice(start - 1, end) : "";
 }
-function lowercase(...args: any[]): string { return String(args[0]).toLowerCase(); }
-function uppercase(...args: any[]): string { return String(args[0]).toUpperCase(); }
-function datanames(...args: any[]): any[] {
-  return args[0] instanceof Map ? Array.from(args[0].keys()) : Object.keys(args[0] || {});
+function lowercase(s: unknown): string { return String(s).toLowerCase(); }
+function uppercase(s: unknown): string { return String(s).toUpperCase(); }
+function datanames(m: unknown): (string | number)[] {
+  return m instanceof Map ? Array.from(m.keys()) : Object.keys((m as object) || {});
 }
-function datavalues(...args: any[]): any[] {
-  return args[0] instanceof Map ? Array.from(args[0].values()) : Object.values(args[0] || {});
+function datavalues(m: unknown): unknown[] {
+  return m instanceof Map ? Array.from(m.values()) : Object.values((m as object) || {});
 }
-function dataentries(...args: any[]): any[] {
-  return args[0] instanceof Map ? Array.from(args[0].entries()).map(([k, v]) => ({ name: k, value: v })) : [];
+function dataentries(m: unknown): { name: unknown; value: unknown }[] {
+  return m instanceof Map ? Array.from(m.entries()).map(([k, v]) => ({ name: k, value: v })) : [];
 }
 function somePass<T>(fn: (item: T) => boolean, ...items: T[]): boolean {
   if (typeof fn !== "function") return false;
@@ -1168,8 +1174,8 @@ function nonePass<T>(fn: (item: T) => boolean, ...items: T[]): boolean {
   if (typeof fn !== "function") return false;
   return !items.some(fn);
 }
-function altered<T, U>(fn: (item: T, index: number) => U, ...items: (T | T[])[]): U[] {
-  const flatItems = (items as (T | T[])[]).flat() as T[];
+function altered<T, U>(fn: (item: T, index: number) => U, ...items: T[]): U[] {
+  const flatItems = items.flat() as T[];
   if (typeof fn !== "function") return flatItems as unknown as U[];
   return flatItems.map(fn);
 }
@@ -1182,51 +1188,44 @@ function sortedBy<T>(fn: (item: T) => unknown, ...items: T[]): T[] {
     return Number(ka) - Number(kb);
   });
 }
-function interlaced(...arrays: any[]): any[] {
-  const arrs = arrays.map((a: any) => Array.isArray(a) ? a : [a]);
+function interlaced(...arrays: unknown[]): unknown[] {
+  const arrs = arrays.map((a) => Array.isArray(a) ? a : [a]);
   if (arrs.length === 0) return [];
-  const maxLen = Math.max(...arrs.map((a: any[]) => a.length));
-  const result: any[] = [];
-  for (let i = 0; i < maxLen; i++) {
+  // Harlowe stops at the shortest array (Math.min, not Math.max).
+  const minLen = Math.min(...arrs.map((a) => a.length));
+  const result: unknown[] = [];
+  for (let i = 0; i < minLen; i++) {
     for (const arr of arrs) {
-      if (i < arr.length) result.push(arr[i]);
+      result.push(arr[i]);
     }
   }
   return result;
 }
-function repeated(...args: any[]): any[] {
-  const n = Number(args[0]);
-  const values = args.slice(1);
-  const result: any[] = [];
+function repeated(n: number, ...values: unknown[]): unknown[] {
+  const result: unknown[] = [];
   for (let i = 0; i < n; i++) result.push(...values);
   return result;
 }
-function folded<T, A>(fn: (item: T, acc: A) => A, initial: A, ...items: (T | T[])[]): A {
-  const flatItems = (items as (T | T[])[]).flat() as T[];
+function folded<T, A>(fn: (item: T, acc: A) => A, initial: A, ...items: T[]): A {
+  const flatItems = items.flat() as T[];
   if (typeof fn !== "function") return initial;
   return flatItems.reduce((acc: A, item: T) => fn(item, acc), initial);
 }
 
-function pass(...args: any[]): any { return args[0]; }
+function pass<T>(value: T): T { return value; }
 
-function unique(...args: any[]): any[] {
-  const arr = args.flat();
-  return [...new Set(arr)];
+function unique(...items: unknown[]): unknown[] {
+  return [...new Set(items.flat())];
 }
 
-function rotatedTo(...args: any[]): any[] {
-  const target = args[0];
-  const arr = args.slice(1).flat();
+function rotatedTo(target: unknown, ...items: unknown[]): unknown[] {
+  const arr = items.flat();
   const idx = arr.indexOf(target);
   if (idx < 0) return arr;
   return [...arr.slice(idx), ...arr.slice(0, idx)];
 }
 
-function splitStr(...args: any[]): string[] {
-  // (split: separator, string) — splits string by separator
-  if (args.length < 2) return typeof args[0] === "string" ? [args[0]] : [];
-  const sep = String(args[0]);
-  const str = String(args[1]);
+function splitStr(sep: string, str: string): string[] {
   return sep === "" ? [...str] : str.split(sep);
 }
 
@@ -1239,11 +1238,11 @@ function dmAltered(fn: any, map: any): Map<any, any> {
   return result;
 }
 
-function permutations(...items: any[]): any[][] {
+function permutations(...items: unknown[]): unknown[][] {
   const flat = items.flat();
   if (flat.length === 0) return [[]];
-  const result: any[][] = [];
-  function perm(arr: any[], current: any[]): void {
+  const result: unknown[][] = [];
+  function perm(arr: unknown[], current: unknown[]): void {
     if (arr.length === 0) { result.push(current); return; }
     for (let i = 0; i < arr.length; i++) {
       perm([...arr.slice(0, i), ...arr.slice(i + 1)], [...current, arr[i]]);
@@ -1282,9 +1281,11 @@ function lowerfirst(s: any): string {
   return str ? str.charAt(0).toLowerCase() + str.slice(1) : str;
 }
 function strReversed(s: any): string { return [...String(s)].reverse().join(""); }
-function trimmed(...args: any[]): string {
+function trimmed(s: unknown): string;
+function trimmed(pattern: unknown, s: unknown): string;
+function trimmed(sOrPattern: unknown, s?: unknown): string {
   // (trimmed: str) or (trimmed: datatype_pattern, str) — pattern trimming not yet implemented
-  return String(args.length === 1 ? args[0] : args[1]).trim();
+  return String(s !== undefined ? s : sOrPattern).trim();
 }
 function words(s: any): string[] {
   const str = String(s).trim();
@@ -1311,17 +1312,19 @@ function strFind(pattern: any, s: any): number[] {
   }
   return positions;
 }
-function strReplaced(...args: any[]): string {
+function strReplaced(searchFor: string, replacement: string, str: string): string;
+function strReplaced(count: number, searchFor: string, replacement: string, str: string): string;
+function strReplaced(...args: unknown[]): string {
   // (str-replaced: searchFor, replacement, str)
   // (str-replaced: count, searchFor, replacement, str) — count limits replacements
   let count: number | undefined;
-  let searchFor: any;
-  let replacement: any;
-  let str: any;
+  let searchFor: unknown;
+  let replacement: unknown;
+  let str: unknown;
   if (args.length === 4) {
-    [count, searchFor, replacement, str] = args;
+    [count, searchFor, replacement, str] = args as [number, string, string, string];
   } else {
-    [searchFor, replacement, str] = args;
+    [searchFor, replacement, str] = args as [string, string, string];
   }
   const s = String(str);
   if (typeof searchFor !== "string" || typeof replacement !== "string") return s;

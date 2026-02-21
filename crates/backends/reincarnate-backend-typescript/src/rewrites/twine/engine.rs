@@ -220,11 +220,12 @@ fn try_rewrite_str_op(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
     })
 }
 
-/// Returns true for collection ops whose first arg is a predicate lambda.
+/// Returns true for collection ops whose first arg may be a predicate/transform lambda.
+/// `sorted` is included because Harlowe allows an optional `via` lambda as first arg.
 fn is_predicate_op(name: &str) -> bool {
     matches!(
         name,
-        "find" | "some-pass" | "all-pass" | "none-pass" | "count" | "altered"
+        "find" | "some-pass" | "all-pass" | "none-pass" | "count" | "altered" | "sorted"
     )
 }
 

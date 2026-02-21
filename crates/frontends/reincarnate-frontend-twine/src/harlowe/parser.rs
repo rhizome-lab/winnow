@@ -208,7 +208,11 @@ impl<'a> Parser<'a> {
         {
             self.pos += 1;
         }
-        let name = self.source[name_start..self.pos].to_lowercase();
+        // Harlowe: macro names are case-, dash-, and underscore-insensitive.
+        // Normalize to lowercase dash-form: `Go_To` → `go-to`, `GOTO` → `goto`.
+        let name = self.source[name_start..self.pos]
+            .to_lowercase()
+            .replace('_', "-");
 
         if name.is_empty() {
             // Check for dynamic macro call: `($storyVar: args)` or `(_tempVar: args)`.
@@ -570,7 +574,9 @@ impl<'a> Parser<'a> {
             {
                 self.pos += 1;
             }
-            let name = self.source[name_start..self.pos].to_lowercase();
+            let name = self.source[name_start..self.pos]
+                .to_lowercase()
+                .replace('_', "-");
 
             if !macros::is_if_clause(&name) {
                 self.pos = saved;

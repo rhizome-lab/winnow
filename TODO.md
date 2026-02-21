@@ -317,6 +317,18 @@ statement parsing, trailing comma stripping in case values.
 
 ### Harlowe Correctness Bugs
 
+- [ ] **Macro name: multi-dash normalization not handled** — Harlowe macro names are
+  case-, dash-, AND underscore-insensitive. We normalize case (`.to_lowercase()`) and
+  underscores (replace `_` with `-`) but not consecutive dashes (`got--o` → `go-to`).
+  Full normalization: strip all non-alphanumeric chars, compare. Very unlikely in real
+  game code (authors use canonical form), but spec says it should work.
+
+- [ ] **`(sorted: via lambda)` — `$dm's (it)` inside via lambda** — e.g.
+  `(sorted: via $players's (it), ...(dm-names: $players))` uses `(it)` as a
+  property key inside a `via` lambda. Our translator lowers `(it)` as a variable
+  reference. Need to verify `$dm's (it)` translates correctly in lambda context
+  (should produce `get_property(dm, it)`).
+
 - [x] **Temp variable block-scope leak** — Fixed in `62bcd79`. Harlowe temp vars (`_var`) have
   passage-level scope, but `Op::Alloc` was placed inside nested blocks producing block-scoped `let`.
   Fix: `Function::hoist_allocs()` moves all allocs to the entry block before structurize. Resolved
