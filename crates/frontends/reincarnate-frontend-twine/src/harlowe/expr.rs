@@ -597,6 +597,29 @@ fn parse_prefix(lexer: &mut ExprLexer) -> Expr {
             if s == "when" {
                 return parse_prec(lexer, Prec::Or);
             }
+            // `its X` — Harlowe sugar for `it's X` (possessive of the implicit `it`).
+            // Harlowe allows both `it's year` and `its year`; we desugar to Possessive(It, X).
+            if s == "its" {
+                let it_expr = Expr {
+                    kind: ExprKind::It,
+                    span: tok.span,
+                };
+                let property = if let Some((word, word_span)) = lexer.scan_word() {
+                    interpret_property_string(&word, word_span)
+                        .unwrap_or(Expr { kind: ExprKind::Ident(word), span: word_span })
+                } else {
+                    // Computed property: `its (expr)` — rare but possible
+                    parse_prefix(lexer)
+                };
+                let span = Span::new(tok.span.start, property.span.end);
+                return Expr {
+                    kind: ExprKind::Possessive {
+                        object: Box::new(it_expr),
+                        property: Box::new(property),
+                    },
+                    span,
+                };
+            }
             // `via expr` — Harlowe transform lambda used in `(altered:)`.
             // Wraps the following expression; `it`/`its` inside `expr` refers
             // to the current element being transformed.

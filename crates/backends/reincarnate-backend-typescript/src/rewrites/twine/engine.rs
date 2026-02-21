@@ -225,11 +225,16 @@ fn try_rewrite_str_op(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
 }
 
 /// Returns true for collection ops whose first arg may be a predicate/transform lambda.
-/// `sorted` is included because Harlowe allows an optional `via` lambda as first arg.
+///
+/// `sorted` is intentionally excluded: its `via` lambda is a key-extractor `(item) => key`,
+/// not a predicate. TypeScript cannot contextually infer the item type because
+/// `Collections.sorted` takes `...args: unknown[]`, so `infer_param_types: true` would
+/// leave the first param unannotated → TS7006 implicit-any. Omitting it lets Dynamic
+/// params emit `: any` explicitly.
 fn is_predicate_op(name: &str) -> bool {
     matches!(
         name,
-        "find" | "somepass" | "allpass" | "nonepass" | "count" | "altered" | "sorted"
+        "find" | "somepass" | "allpass" | "nonepass" | "count" | "altered"
     )
 }
 
