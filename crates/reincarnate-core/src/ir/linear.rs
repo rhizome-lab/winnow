@@ -1175,6 +1175,10 @@ struct EmitCtx<'a> {
     side_effecting_inlines: HashMap<ValueId, Expr>,
     /// Values already declared by flush_side_effecting_inlines.
     se_flush_declared: HashSet<ValueId>,
+    /// Values already materialized by emit_or_inline (count >= 2 path).
+    /// Prevents build_val from inserting them into referenced_block_params,
+    /// which would cause collect_block_param_decls to emit a duplicate `let`.
+    or_inline_declared: HashSet<ValueId>,
     /// Block-param ValueIds referenced during emission.
     referenced_block_params: HashSet<ValueId>,
     /// All non-entry block-param ValueIds (for distinguishing true params from
@@ -1394,6 +1398,7 @@ impl<'a> EmitCtx<'a> {
             always_inline_map: HashMap::new(),
             side_effecting_inlines: HashMap::new(),
             se_flush_declared: HashSet::new(),
+            or_inline_declared: HashSet::new(),
             referenced_block_params: HashSet::new(),
             all_block_params,
             flush_protected: HashSet::new(),
@@ -1449,7 +1454,13 @@ impl<'a> EmitCtx<'a> {
         }
 
         // Track block-param references for declaration generation.
-        if !self.entry_params.contains(&v) && !self.se_flush_declared.contains(&v) {
+        // Skip values that already have their own declaration emitted:
+        // - se_flush_declared: emitted by flush_side_effecting_inlines
+        // - or_inline_declared: emitted by emit_or_inline (count >= 2)
+        if !self.entry_params.contains(&v)
+            && !self.se_flush_declared.contains(&v)
+            && !self.or_inline_declared.contains(&v)
+        {
             self.referenced_block_params.insert(v);
         }
 
@@ -1739,21 +1750,28 @@ impl<'a> EmitCtx<'a> {
             let expr = self.side_effecting_inlines.remove(&v).unwrap();
             self.se_flush_declared.insert(v);
             let name = self.value_name(v);
-            // Emit Assign only when a `let name;` declaration already exists:
-            // - shared_names → always emitted by collect_block_param_decls.
-            // - true block param in referenced_block_params → also emitted.
-            // Non-block-params that fell through build_val land in
-            // referenced_block_params too, but they have no pre-existing
-            // declaration — emit VarDecl so they declare themselves.
-            let has_preexisting_decl = self.shared_names.contains(&name)
-                || (self.all_block_params.contains(&v)
-                    && self.referenced_block_params.contains(&v));
-            if has_preexisting_decl {
+            if self.all_block_params.contains(&v) {
+                // True block param: ensure collect_block_param_decls emits
+                // `let name;` by inserting into referenced_block_params now,
+                // then emit Assign (not VarDecl) to avoid a duplicate decl if
+                // the phi is also assigned in a branch that runs later (which
+                // would also insert into referenced_block_params there).
+                self.referenced_block_params.insert(v);
+                stmts.push(Stmt::Assign {
+                    target: Expr::Var(name),
+                    value: expr,
+                });
+            } else if self.shared_names.contains(&name) {
+                // Shared name: a `let name;` will come from collect_block_param_decls
+                // (via the shared_names loop). Emit Assign only.
                 stmts.push(Stmt::Assign {
                     target: Expr::Var(name),
                     value: expr,
                 });
             } else {
+                // Non-block-param with no pre-existing declaration (e.g. a
+                // side-effecting value that fell through build_val during an
+                // emit_logical_and/or rhs_body). Emit a self-contained VarDecl.
                 stmts.push(Stmt::VarDecl {
                     name,
                     ty: None,
@@ -1865,7 +1883,10 @@ impl<'a> EmitCtx<'a> {
             stmts.push(Stmt::Expr(expr));
         } else {
             // count >= 2: materialize into a named variable.
-            self.referenced_block_params.insert(v);
+            // Add to or_inline_declared so build_val skips inserting into
+            // referenced_block_params — prevents collect_block_param_decls from
+            // emitting a duplicate `let name;` alongside our declaration here.
+            self.or_inline_declared.insert(v);
             let name = self.value_name(v);
             // If name is in shared_names, a hoisted `let name;` exists from
             // collect_block_param_decls. Otherwise emit a VarDecl — this is
