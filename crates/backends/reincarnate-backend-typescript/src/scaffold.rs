@@ -369,6 +369,9 @@ fn generate_package_json(runtime_config: Option<&RuntimeConfig>) -> String {
     let mut dev_dependencies = BTreeMap::new();
     dev_dependencies.insert("esbuild".into(), "^0.24.0".into());
     dev_dependencies.insert("typescript".into(), "^5.0.0".into());
+    if let Some(c) = runtime_config {
+        dev_dependencies.extend(c.scaffold.dev_dependencies.clone());
+    }
 
     let pkg = PackageJson {
         name: None,

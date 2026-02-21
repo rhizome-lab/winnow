@@ -14,14 +14,14 @@ export function installExtensions(): void {
   const $ = (globalThis as any).jQuery;
   if (!$ || !$.fn) return;
 
-  $.fn.wiki = function (this: JQuery, markup: string) {
+  $.fn.wiki = function (this: any, markup: string) {
     return this.each(function (this: HTMLElement) {
       const frag = Wikifier.wikifyEval(markup);
       this.appendChild(frag);
     });
   };
 
-  $.fn.wikiWithOptions = function (this: JQuery, opts: WikifierOptions, markup: string) {
+  $.fn.wikiWithOptions = function (this: any, opts: WikifierOptions, markup: string) {
     return this.each(function (this: HTMLElement) {
       const frag = Wikifier.wikifyEval(markup, opts);
       this.appendChild(frag);
@@ -29,7 +29,7 @@ export function installExtensions(): void {
   };
 
   /** Add click + keypress(Enter/Space) handler with ARIA attributes. */
-  $.fn.ariaClick = function (this: JQuery, optionsOrHandler: any, handler?: Function) {
+  $.fn.ariaClick = function (this: any, optionsOrHandler: any, handler?: Function) {
     let opts: any = {};
     let fn: Function;
 

@@ -116,6 +116,10 @@ pub struct ScaffoldConfig {
     /// e.g. `{ "jquery": "^3.7.0" }`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, String>,
+    /// npm devDependencies to include in the generated package.json.
+    /// e.g. `{ "@types/jquery": "^3.5.0" }`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dev_dependencies: BTreeMap<String, String>,
 }
 
 /// A group of named imports from a single path.
