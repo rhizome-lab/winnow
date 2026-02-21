@@ -357,12 +357,12 @@ statement parsing, trailing comma stripping in case values.
   reference. Need to verify `$dm's (it)` translates correctly in lambda context
   (should produce `get_property(dm, it)`).
 
-- [ ] **`(sorted:)` via-lambda param implicit any (rogue-time-agent, 1 error)** —
-  `Collections.sorted((v0, v1: number): string => { ... })` — `v0` has no type
-  annotation and TypeScript can't infer it contextually because `sorted` returns
-  `unknown[]`. Options: (a) add `sorted` to `is_predicate_op` so the backend emits
-  typed params in the callback, or (b) type `sorted`'s comparator param as
-  `(a: unknown, b: unknown) => number` so TS can infer both params.
+- [x] **`(sorted:)` via-lambda `its X` and implicit any (rogue-time-agent, 1 error)** —
+  Two bugs: (1) `its year` was parsed as `Ident("its")` → `const_string("its")` instead
+  of `Possessive(It, "year")`. Fixed in `expr.rs`: `its` desugars to `it's`. (2) `sorted`
+  was in `is_predicate_op` causing `infer_param_types: true` on the via-lambda, but
+  `Collections.sorted` takes `...args: unknown[]` so TS can't infer the item type → TS7006.
+  Fixed by removing `sorted` from `is_predicate_op`. rogue-time-agent: 1 → 0 errors.
 
 - [ ] **Unreachable code after `(goto:)`/`(stop:)` (equivalent-exchange, 8 errors)** —
   Code emitted after `goto`/`stop` IR returns is flagged as TS7027 unreachable by
