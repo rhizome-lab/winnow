@@ -283,11 +283,11 @@ Two runtime errors block DOL (Degrees of Lewdity) from running:
   don't reflect it. Either passage callbacks must always accept `_rt` consistently, or the
   closure form must be `() => void` with `_rt` captured from outer scope.
 
-- [ ] **`radiobutton` emits 1 arg instead of 2 in trc (24 errors)** — The SugarCube translator
-  packs both `varName` and `checkedValue` arguments into a single string:
-  `radiobutton("\"$hairColour\" \"brown\" checked")` instead of
-  `radiobutton("$hairColour", "brown", true)`. The translator must split macro args properly
-  for `<<radiobutton>>` (varName first, value second, optional `checked` flag third).
+- [x] **`radiobutton` emits 1 arg instead of 2 in trc** — Fixed in `3079adb`. Input macros
+  (`textbox`, `textarea`, `numberbox`, `checkbox`, `radiobutton`) now use `split_case_values()`
+  → `MacroArgs::CaseValues` so each arg is a discrete token. Also fixed `checkbox` arg order
+  (was `checkedValue, uncheckedValue`; SugarCube is `uncheckedValue, checkedValue`) and added
+  `...flags` rest param to handle `checked`/`autocheck` bareword flags.
 
 ### SugarCube Type Emission Bugs (DoL)
 
