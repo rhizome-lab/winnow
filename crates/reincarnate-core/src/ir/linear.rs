@@ -1502,40 +1502,16 @@ impl<'a> EmitCtx<'a> {
                 expr: Box::new(self.build_val(*a)),
             },
 
-            Op::BitAnd(a, b) => {
-                // Boolean & boolean → logical && (TypeScript rejects boolean & boolean).
-                let a_bool = matches!(self.func.value_types.get(*a), Some(Type::Bool));
-                let b_bool = matches!(self.func.value_types.get(*b), Some(Type::Bool));
-                if a_bool && b_bool {
-                    Expr::LogicalAnd {
-                        lhs: Box::new(self.build_val(*a)),
-                        rhs: Box::new(self.build_val(*b)),
-                    }
-                } else {
-                    Expr::Binary {
-                        op: BinOp::BitAnd,
-                        lhs: Box::new(self.build_val(*a)),
-                        rhs: Box::new(self.build_val(*b)),
-                    }
-                }
-            }
-            Op::BitOr(a, b) => {
-                // Boolean | boolean → logical || (TypeScript rejects boolean | boolean).
-                let a_bool = matches!(self.func.value_types.get(*a), Some(Type::Bool));
-                let b_bool = matches!(self.func.value_types.get(*b), Some(Type::Bool));
-                if a_bool && b_bool {
-                    Expr::LogicalOr {
-                        lhs: Box::new(self.build_val(*a)),
-                        rhs: Box::new(self.build_val(*b)),
-                    }
-                } else {
-                    Expr::Binary {
-                        op: BinOp::BitOr,
-                        lhs: Box::new(self.build_val(*a)),
-                        rhs: Box::new(self.build_val(*b)),
-                    }
-                }
-            }
+            Op::BitAnd(a, b) => Expr::Binary {
+                op: BinOp::BitAnd,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
+            Op::BitOr(a, b) => Expr::Binary {
+                op: BinOp::BitOr,
+                lhs: Box::new(self.build_val(*a)),
+                rhs: Box::new(self.build_val(*b)),
+            },
             Op::BitXor(a, b) => Expr::Binary {
                 op: BinOp::BitXor,
                 lhs: Box::new(self.build_val(*a)),
@@ -2060,11 +2036,6 @@ impl<'a> EmitCtx<'a> {
                 rhs,
             } => self.emit_logical_and(*cond, *phi, rhs_body, *rhs, stmts),
             LinearStmt::Dispatch { blocks, entry } => {
-                // Pre-scan: values defined in one case but referenced in another
-                // would be block-scoped to the defining `case {}`, causing TS2304
-                // in the consuming case. Mark them as shared so emit_def uses
-                // `Assign` (and block_params_preamble emits `let v;` at scope).
-                self.mark_cross_dispatch_values(blocks);
                 let mut dispatch_blocks = Vec::new();
                 for (id, block_stmts) in blocks {
                     let emitted = self.emit_stmts_protected(block_stmts);
@@ -2092,57 +2063,6 @@ impl<'a> EmitCtx<'a> {
                     cases: case_stmts,
                     default_body: default_stmts,
                 });
-            }
-        }
-    }
-
-    /// Mark values that are defined in one Dispatch case but referenced in
-    /// another as shared names. This causes `emit_def` to emit `Assign`
-    /// (instead of block-scoped `const v = ...`) and `block_params_preamble`
-    /// to emit `let v;` at function scope, so all cases can see the value.
-    fn mark_cross_dispatch_values(&mut self, blocks: &[(usize, Vec<LinearStmt>)]) {
-        // Collect defined values per case (Dispatch blocks are flat: only
-        // Def/Effect/Return, no nested control flow).
-        let case_defs: Vec<Vec<ValueId>> = blocks
-            .iter()
-            .map(|(_, stmts)| {
-                stmts
-                    .iter()
-                    .filter_map(|s| {
-                        if let LinearStmt::Def { result, .. } = s {
-                            Some(*result)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        // Collect referenced (used) values per case.
-        let case_refs: Vec<HashMap<ValueId, usize>> = blocks
-            .iter()
-            .map(|(_, stmts)| {
-                let mut counts = HashMap::new();
-                count_uses_in_stmts(self.func, stmts, &mut counts);
-                counts
-            })
-            .collect();
-
-        // Find values defined in case `i` but referenced in some case `j != i`.
-        for (i, defs) in case_defs.iter().enumerate() {
-            for &v in defs {
-                let name = self.value_name(v);
-                if self.shared_names.contains(&name) {
-                    continue; // Already shared.
-                }
-                let cross_case = case_refs
-                    .iter()
-                    .enumerate()
-                    .any(|(j, refs_j)| j != i && refs_j.contains_key(&v));
-                if cross_case {
-                    self.shared_names.insert(name);
-                }
             }
         }
     }
