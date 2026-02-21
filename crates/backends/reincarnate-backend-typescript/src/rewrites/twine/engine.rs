@@ -161,19 +161,27 @@ fn try_rewrite_collection_op(
 ) -> Option<JsExpr> {
     let name = extract_dispatch_name(args)?;
     let mut remaining = std::mem::take(args);
-    let field = kebab_to_camel(&name);
+    let mut field = kebab_to_camel(&name);
 
     // For predicate ops, try to inline a closure reference as an arrow function.
     if is_predicate_op(&name) && !remaining.is_empty() {
         if let Some(arrow) = try_inline_closure(&remaining[0], closures) {
             remaining[0] = arrow;
-        } else if let JsExpr::ArrowFunction { infer_param_types, .. } = &mut remaining[0] {
-            // Already-inlined arrow (from MakeClosure → closure rewrite with zero captures):
-            // enable contextual type inference so TypeScript omits `: any` on params.
+        }
+        if let JsExpr::ArrowFunction { infer_param_types, .. } = &mut remaining[0] {
+            // Arrow (inlined or pre-inlined): enable contextual type inference so
+            // TypeScript omits `: any` on params.
             *infer_param_types = true;
         }
-        // IIFE (captures present): TypeScript can still infer the inner arrow's param
-        // types from context, so no annotation fixup is needed.
+
+        // `(sorted: via lambda, items...)` → `Collections.sortedBy(lambda, items...)`.
+        // `sortedBy<T>(fn: (item: T) => unknown, ...items: T[])` is properly generic,
+        // so TypeScript contextually infers the lambda param type from the items.
+        // Only route when the first arg is function-like — `(sorted: a, b, c)` (no via)
+        // stays on `Collections.sorted` which does a plain value sort.
+        if name == "sorted" && is_function_like(&remaining[0]) {
+            field = "sortedBy".into();
+        }
     }
 
     Some(JsExpr::Call {
@@ -225,17 +233,23 @@ fn try_rewrite_str_op(args: &mut Vec<JsExpr>) -> Option<JsExpr> {
 }
 
 /// Returns true for collection ops whose first arg may be a predicate/transform lambda.
-///
-/// `sorted` is intentionally excluded: its `via` lambda is a key-extractor `(item) => key`,
-/// not a predicate. TypeScript cannot contextually infer the item type because
-/// `Collections.sorted` takes `...args: unknown[]`, so `infer_param_types: true` would
-/// leave the first param unannotated → TS7006 implicit-any. Omitting it lets Dynamic
-/// params emit `: any` explicitly.
 fn is_predicate_op(name: &str) -> bool {
     matches!(
         name,
-        "find" | "somepass" | "allpass" | "nonepass" | "count" | "altered"
+        "find" | "somepass" | "allpass" | "nonepass" | "count" | "altered" | "sorted"
     )
+}
+
+/// Returns true if `expr` is a function-like value: an arrow function, or an
+/// IIFE (immediately-invoked arrow used to bind captures).
+fn is_function_like(expr: &JsExpr) -> bool {
+    match expr {
+        JsExpr::ArrowFunction { .. } => true,
+        // IIFE pattern: `((cap0, cap1, ...) => body)(val0, val1, ...)` — the callee is
+        // an arrow function that is immediately invoked with captured values.
+        JsExpr::Call { callee, .. } => matches!(callee.as_ref(), JsExpr::ArrowFunction { .. }),
+        _ => false,
+    }
 }
 
 /// If `expr` is a `Var` referencing a closure in `closures`, return an
@@ -471,6 +485,66 @@ mod tests {
                     other => panic!("expected Field, got {other:?}"),
                 }
                 assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_collection_op_sorted_via_lambda_routes_to_sorted_by() {
+        // `(sorted: via _x via _x, a, b)` — first arg is an arrow (already inlined).
+        let arrow = JsExpr::ArrowFunction {
+            params: vec![("_x".into(), reincarnate_core::ir::Type::Dynamic)],
+            return_ty: reincarnate_core::ir::Type::Dynamic,
+            body: vec![JsStmt::Expr(var("_x"))],
+            has_rest_param: false,
+            cast_as: None,
+            infer_param_types: false,
+        };
+        let expr = engine_call(
+            "collection_op",
+            vec![str_lit("sorted"), arrow, var("a"), var("b")],
+        );
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        match extract_expr(&func) {
+            JsExpr::Call { callee, args } => {
+                match callee.as_ref() {
+                    JsExpr::Field { object, field } => {
+                        assert!(
+                            matches!(object.as_ref(), JsExpr::Var(n) if n == "Collections")
+                        );
+                        // Must route to sortedBy, not sorted, when a lambda is present.
+                        assert_eq!(field, "sortedBy");
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                assert_eq!(args.len(), 3); // lambda + a + b
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewrite_collection_op_sorted_no_lambda_stays_on_sorted() {
+        // `(sorted: a, b, c)` — no via-lambda, plain value sort.
+        let expr = engine_call(
+            "collection_op",
+            vec![str_lit("sorted"), var("a"), var("b"), var("c")],
+        );
+        let func = super::super::rewrite_twine_function(func_with_expr(expr), &no_closures());
+        match extract_expr(&func) {
+            JsExpr::Call { callee, args } => {
+                match callee.as_ref() {
+                    JsExpr::Field { object, field } => {
+                        assert!(
+                            matches!(object.as_ref(), JsExpr::Var(n) if n == "Collections")
+                        );
+                        // Must NOT route to sortedBy when no lambda.
+                        assert_eq!(field, "sorted");
+                    }
+                    other => panic!("expected Field, got {other:?}"),
+                }
+                assert_eq!(args.len(), 3); // a + b + c
             }
             other => panic!("expected Call, got {other:?}"),
         }

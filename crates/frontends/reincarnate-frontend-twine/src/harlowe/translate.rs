@@ -1128,6 +1128,7 @@ impl TranslateCtx {
         filter: Option<&Expr>,
         param_ty: Type,
         return_ty: Type,
+        with_pos: bool,
     ) -> ValueId {
         let cb_name = self.make_callback_name("lambda");
 
@@ -1136,16 +1137,27 @@ impl TranslateCtx {
         let capture_vals: Vec<ValueId> = outer_temps.iter().map(|(_, v)| *v).collect();
 
         // --- 2. Build the closure FunctionBuilder ---
-        let sig = FunctionSig {
-            params: vec![param_ty.clone(), Type::Int(32)],
-            return_ty: return_ty.clone(),
-            defaults: vec![],
-            has_rest_param: false,
+        // Only include the position param for macros that actually pass it (e.g. `altered`).
+        // For key-extractor lambdas (`sorted-by`) and filter lambdas (`find`, `some-pass`, etc.),
+        // the caller only passes the item — a 2-param lambda would cause TS2345.
+        let sig = if with_pos {
+            FunctionSig {
+                params: vec![param_ty.clone(), Type::Int(32)],
+                return_ty: return_ty.clone(),
+                defaults: vec![],
+                has_rest_param: false,
+            }
+        } else {
+            FunctionSig {
+                params: vec![param_ty.clone()],
+                return_ty: return_ty.clone(),
+                defaults: vec![],
+                has_rest_param: false,
+            }
         };
         let mut cb_fb = FunctionBuilder::new(&cb_name, sig, Visibility::Public);
         cb_fb.set_method_kind(MethodKind::Closure);
         let item_param = cb_fb.param(0);
-        let pos_param = cb_fb.param(1);
 
         // Register capture params (appended after regular params in entry block).
         let cap_ids = cb_fb.add_capture_params(capture_spec);
@@ -1164,10 +1176,13 @@ impl TranslateCtx {
         self.temp_vars.insert(var.to_string(), alloc);
 
         // Bind `pos` to the 1-based position parameter so `pos` inside the body resolves.
-        let pos_alloc = self.fb.alloc(Type::Int(32));
-        self.fb.name_value(pos_alloc, "_pos".to_string());
-        self.fb.store(pos_alloc, pos_param);
-        self.temp_vars.insert("pos".to_string(), pos_alloc);
+        if with_pos {
+            let pos_param = self.fb.param(1);
+            let pos_alloc = self.fb.alloc(Type::Int(32));
+            self.fb.name_value(pos_alloc, "_pos".to_string());
+            self.fb.store(pos_alloc, pos_param);
+            self.temp_vars.insert("pos".to_string(), pos_alloc);
+        }
 
         let result = if let Some(filter_expr) = filter {
             self.lower_expr(filter_expr)
@@ -1283,6 +1298,9 @@ impl TranslateCtx {
             .collect();
         let elem_ty = self.infer_element_type(&item_vals);
 
+        // `altered` passes `(item, pos)` to the lambda; all other predicate ops pass only `(item)`.
+        let with_pos = name == "altered";
+
         // Lower the predicate, inlining lambda type information if available.
         let pred_val = match args.first() {
             Some(pred_expr) => {
@@ -1292,9 +1310,10 @@ impl TranslateCtx {
                         filter.as_deref(),
                         elem_ty,
                         pred_return_ty,
+                        with_pos,
                     )
                 } else if let ExprKind::ViaLambda(body) = &pred_expr.kind {
-                    self.build_lambda_callback("it", Some(body), elem_ty, pred_return_ty)
+                    self.build_lambda_callback("it", Some(body), elem_ty, pred_return_ty, with_pos)
                 } else {
                     self.lower_expr(pred_expr)
                 }
@@ -2354,11 +2373,12 @@ impl TranslateCtx {
             // This fallback handles lambdas in other contexts (e.g. `(altered:)`,
             // dynamic macro args) where no context type is available.
             ExprKind::Lambda { var, filter } => {
-                self.build_lambda_callback(var, filter.as_deref(), Type::Dynamic, Type::Dynamic)
+                // Generic context: no positional index available (use `with_pos: false`).
+                self.build_lambda_callback(var, filter.as_deref(), Type::Dynamic, Type::Dynamic, false)
             }
             ExprKind::ViaLambda(body) => {
-                // `via expr` — transform lambda: `(it) => expr`.
-                self.build_lambda_callback("it", Some(body), Type::Dynamic, Type::Dynamic)
+                // `via expr` — key-extractor lambda: `(it) => expr`. No position param.
+                self.build_lambda_callback("it", Some(body), Type::Dynamic, Type::Dynamic, false)
             }
             ExprKind::FoldLambda {
                 item_var,
@@ -2965,9 +2985,9 @@ You're at the **plaza**
             "should produce exactly one lambda callback"
         );
         let cb = &result.callbacks[0];
-        assert_eq!(cb.sig.params.len(), 2, "lambda callback takes (item, pos) params");
+        // `find` only passes the item to the predicate — no position index.
+        assert_eq!(cb.sig.params.len(), 1, "find lambda takes only (item) param, no pos");
         assert_eq!(cb.sig.params[0], Type::Dynamic);
-        assert_eq!(cb.sig.params[1], Type::Int(32), "second param is 1-based pos");
         assert_eq!(cb.sig.return_ty, Type::Bool);
         // Main func should have a collection_op("find", ...) call
         let func = &result.func;

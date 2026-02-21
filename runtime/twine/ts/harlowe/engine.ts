@@ -1092,32 +1092,25 @@ function set_property(obj: any, prop: any, value: any): void {
 
 // --- Collection operations (pure) ---
 
-function sorted(...args: unknown[]): unknown[] {
-  const flat = args.flat();
-  // Optional `via` lambda as first arg: (sorted: via _key, items...)
-  if (flat.length > 0 && typeof flat[0] === "function") {
-    const fn = flat[0] as (item: unknown) => unknown;
-    return flat.slice(1).sort((a, b) => {
-      const ka = fn(a), kb = fn(b);
-      if (typeof ka === "string") return ka.localeCompare(String(kb));
-      return Number(ka) - Number(kb);
-    });
-  }
-  return flat.sort((a, b) => {
-    if (typeof a === "string") return a.localeCompare(b as string);
+// Harlowe: (sorted: value, ...) — individual values to sort (NOT arrays).
+// Passing a single array is an error in Harlowe; use spread ...$arr instead.
+// When a `via` lambda is present, the rewrite pass routes to `Collections.sortedBy`.
+function sorted<T>(...items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    if (typeof a === "string") return (a as string).localeCompare(b as string);
     return Number(a) - Number(b);
   });
 }
-function reversed(...items: unknown[]): unknown[] {
-  return items.flat().reverse();
+function reversed<T>(...items: T[]): T[] {
+  return [...items].reverse();
 }
-function rotated(n: number, ...items: unknown[]): unknown[] {
+function rotated<T>(n: number, ...items: T[]): T[] {
   const len = items.length;
   if (len === 0) return [];
   const shift = ((n % len) + len) % len;
   return [...items.slice(shift), ...items.slice(0, shift)];
 }
-function shuffled(...items: unknown[]): unknown[] {
+function shuffled<T>(...items: T[]): T[] {
   const arr = [...items];
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -1134,16 +1127,16 @@ function range(start: number, end: number): number[] {
   for (let i = start; i <= end; i++) result.push(i);
   return result;
 }
-function find<T>(fn: ((item: T) => boolean) | T, ...items: (T | T[])[]): T | undefined {
-  // (find: pred_or_value, ...items) — pred is first, items follow (may be arrays).
-  const arr = (items as unknown[]).flat() as T[];
-  return typeof fn === "function"
-    ? arr.find(fn as (item: T) => boolean)
-    : arr.find(x => x === fn);
+// Harlowe: (find: where condition, ...items) — returns ALL matching items as an array.
+// Items are individual values (not arrays); Harlowe errors if you pass a single array.
+function find<T>(fn: (item: T) => boolean, ...items: T[]): T[] {
+  if (typeof fn !== "function") return [];
+  return items.filter(fn);
 }
 // Harlowe: (joined: sep, item1, item2, ...) — separator is first, items follow.
+// Items are individual values; use spread ...$arr to join an existing array.
 function joined(sep: unknown, ...items: unknown[]): string {
-  return items.flat().join(String(sep ?? ""));
+  return items.join(String(sep ?? ""));
 }
 function subarray(arr: unknown[], start: number, end?: number): unknown[] {
   return Array.isArray(arr) ? arr.slice(start - 1, end) : [];
@@ -1175,9 +1168,8 @@ function nonePass<T>(fn: (item: T) => boolean, ...items: T[]): boolean {
   return !items.some(fn);
 }
 function altered<T, U>(fn: (item: T, index: number) => U, ...items: T[]): U[] {
-  const flatItems = items.flat() as T[];
-  if (typeof fn !== "function") return flatItems as unknown as U[];
-  return flatItems.map(fn);
+  if (typeof fn !== "function") return items as unknown as U[];
+  return items.map(fn);
 }
 function sortedBy<T>(fn: (item: T) => unknown, ...items: T[]): T[] {
   const arr = [...items];
@@ -1188,15 +1180,16 @@ function sortedBy<T>(fn: (item: T) => unknown, ...items: T[]): T[] {
     return Number(ka) - Number(kb);
   });
 }
-function interlaced(...arrays: unknown[]): unknown[] {
-  const arrs = arrays.map((a) => Array.isArray(a) ? a : [a]);
-  if (arrs.length === 0) return [];
+// Harlowe: (interlaced: array1, array2, ...) — each argument IS an array.
+// Returns elements interleaved, stopping at the shortest array.
+function interlaced<T>(...arrays: T[][]): T[] {
+  if (arrays.length === 0) return [];
   // Harlowe stops at the shortest array (Math.min, not Math.max).
-  const minLen = Math.min(...arrs.map((a) => a.length));
-  const result: unknown[] = [];
+  const minLen = Math.min(...arrays.map((a) => a.length));
+  const result: T[] = [];
   for (let i = 0; i < minLen; i++) {
-    for (const arr of arrs) {
-      result.push(arr[i]);
+    for (const arr of arrays) {
+      result.push(arr[i]!);
     }
   }
   return result;
@@ -1207,22 +1200,20 @@ function repeated(n: number, ...values: unknown[]): unknown[] {
   return result;
 }
 function folded<T, A>(fn: (item: T, acc: A) => A, initial: A, ...items: T[]): A {
-  const flatItems = items.flat() as T[];
   if (typeof fn !== "function") return initial;
-  return flatItems.reduce((acc: A, item: T) => fn(item, acc), initial);
+  return items.reduce((acc: A, item: T) => fn(item, acc), initial);
 }
 
 function pass<T>(value: T): T { return value; }
 
-function unique(...items: unknown[]): unknown[] {
-  return [...new Set(items.flat())];
+function unique<T>(...items: T[]): T[] {
+  return [...new Set(items)];
 }
 
-function rotatedTo(target: unknown, ...items: unknown[]): unknown[] {
-  const arr = items.flat();
-  const idx = arr.indexOf(target);
-  if (idx < 0) return arr;
-  return [...arr.slice(idx), ...arr.slice(0, idx)];
+function rotatedTo<T>(target: T, ...items: T[]): T[] {
+  const idx = items.indexOf(target);
+  if (idx < 0) return [...items];
+  return [...items.slice(idx), ...items.slice(0, idx)];
 }
 
 function splitStr(sep: string, str: string): string[] {
@@ -1238,17 +1229,16 @@ function dmAltered(fn: any, map: any): Map<any, any> {
   return result;
 }
 
-function permutations(...items: unknown[]): unknown[][] {
-  const flat = items.flat();
-  if (flat.length === 0) return [[]];
-  const result: unknown[][] = [];
-  function perm(arr: unknown[], current: unknown[]): void {
+function permutations<T>(...items: T[]): T[][] {
+  if (items.length === 0) return [[]];
+  const result: T[][] = [];
+  function perm(arr: T[], current: T[]): void {
     if (arr.length === 0) { result.push(current); return; }
     for (let i = 0; i < arr.length; i++) {
-      perm([...arr.slice(0, i), ...arr.slice(i + 1)], [...current, arr[i]]);
+      perm([...arr.slice(0, i), ...arr.slice(i + 1)], [...current, arr[i]!]);
     }
   }
-  perm(flat, []);
+  perm([...items], []);
   return result;
 }
 
