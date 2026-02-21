@@ -1550,58 +1550,6 @@ impl<'a> Structurizer<'a> {
             };
         }
 
-        // GML OR: then-branch jumps to merge with const_truthy (e.g. 1),
-        // else-branch computes rhs and jumps to merge with it.
-        // GML bytecode doesn't forward the condition value for short-circuit;
-        // it pushes a constant 1 as the truthy result instead.
-        // The then_body may contain the const instruction (not empty),
-        // but it's trivially pure and safe to discard.
-        // Guard: the else (rhs) side must have real computation — if both
-        // sides are trivially pure consts, it's a genuine ternary (e.g.
-        // `cond ? 1 : 2`), not a short-circuit.
-        if then_assigns.is_empty()
-            && then_trailing_assigns.len() == 1
-            && is_const_truthy(self.func, then_trailing_assigns[0].src)
-            && shape_is_trivially_pure(self.func, then_body)
-            && !shape_is_trivially_pure(self.func, else_body)
-            && else_assigns.is_empty()
-            && else_trailing_assigns.len() == 1
-            && else_trailing_assigns[0].dst == then_trailing_assigns[0].dst
-        {
-            let phi = then_trailing_assigns[0].dst;
-            let rhs = else_trailing_assigns[0].src;
-            return Shape::LogicalOr {
-                block,
-                cond,
-                phi,
-                rhs_body: else_body.clone(),
-                rhs,
-            };
-        }
-
-        // GML AND: else-branch jumps to merge with const_falsy (e.g. 0),
-        // then-branch computes rhs and jumps to merge with it.
-        // Same guard: the then (rhs) side must have real computation.
-        if else_assigns.is_empty()
-            && else_trailing_assigns.len() == 1
-            && is_const_falsy(self.func, else_trailing_assigns[0].src)
-            && shape_is_trivially_pure(self.func, else_body)
-            && !shape_is_trivially_pure(self.func, then_body)
-            && then_assigns.is_empty()
-            && then_trailing_assigns.len() == 1
-            && then_trailing_assigns[0].dst == else_trailing_assigns[0].dst
-        {
-            let phi = else_trailing_assigns[0].dst;
-            let rhs = then_trailing_assigns[0].src;
-            return Shape::LogicalAnd {
-                block,
-                cond,
-                phi,
-                rhs_body: then_body.clone(),
-                rhs,
-            };
-        }
-
         // Inverted AND: then assigns phi=!cond (always false when cond is
         // truthy), else computes rhs → phi = !cond && rhs
         //
@@ -1817,63 +1765,6 @@ fn values_equivalent(func: &Function, a: ValueId, b: ValueId) -> bool {
         _ => None,
     });
     matches!((a_const, b_const), (Some(a), Some(b)) if a == b)
-}
-
-/// Check if a shape contains only trivially pure instructions (constants
-/// and terminators). Used to verify the short-circuit branch body is safe
-/// to discard when converting to LogicalOr/LogicalAnd.
-fn shape_is_trivially_pure(func: &Function, shape: &Shape) -> bool {
-    match shape {
-        Shape::Seq(shapes) => shapes.iter().all(|s| shape_is_trivially_pure(func, s)),
-        Shape::Block(block_id) => {
-            let blk = &func.blocks[*block_id];
-            blk.insts.iter().all(|&inst_id| {
-                matches!(
-                    &func.insts[inst_id].op,
-                    Op::Const(_)
-                        | Op::Br { .. }
-                        | Op::BrIf { .. }
-                        | Op::Switch { .. }
-                        | Op::Return(_)
-                )
-            })
-        }
-        _ => false,
-    }
-}
-
-/// Check if a value is a constant truthy value (true, 1, 1.0).
-/// Used for GML short-circuit OR detection where the then-branch assigns
-/// a constant 1 instead of forwarding the condition.
-fn is_const_truthy(func: &Function, v: ValueId) -> bool {
-    func.insts.iter().any(|(_, inst)| {
-        if inst.result != Some(v) {
-            return false;
-        }
-        match &inst.op {
-            Op::Const(Constant::Bool(true)) | Op::Const(Constant::Int(1)) => true,
-            Op::Const(Constant::Float(f)) => *f == 1.0,
-            _ => false,
-        }
-    })
-}
-
-/// Check if a value is a constant falsy value (false, 0, 0.0, null).
-/// Used for GML short-circuit AND detection where the else-branch assigns
-/// a constant 0 instead of forwarding the condition.
-fn is_const_falsy(func: &Function, v: ValueId) -> bool {
-    func.insts.iter().any(|(_, inst)| {
-        if inst.result != Some(v) {
-            return false;
-        }
-        match &inst.op {
-            Op::Const(Constant::Bool(false))
-            | Op::Const(Constant::Int(0))
-            | Op::Const(Constant::Null) => true,
-            Op::Const(Constant::Float(f)) => *f == 0.0,
-            _ => false,
-        }
-    })
 }
 
 // -------------------------------------------------------------------------

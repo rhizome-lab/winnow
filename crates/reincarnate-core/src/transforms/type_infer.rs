@@ -318,12 +318,20 @@ fn infer_inst_type(
     let inferred = match &inst.op {
         Op::Const(c) => c.ty(),
 
-        // Arithmetic: propagate type of first operand.
-        Op::Add(a, _)
-        | Op::Sub(a, _)
-        | Op::Mul(a, _)
-        | Op::Div(a, _)
-        | Op::Rem(a, _) => func.value_types[*a].clone(),
+        // Arithmetic: propagate the type of the first operand.
+        // For Add this is conservative (can be string concat in JS), so we keep it as-is.
+        Op::Add(a, _) => func.value_types[*a].clone(),
+        // Sub/Mul/Div/Rem are always numeric. If the lhs is Dynamic but rhs is
+        // concrete (e.g. `state.get("x") - 1.0`), use the rhs type so the result
+        // doesn't poison downstream inference with Dynamic.
+        Op::Sub(a, b) | Op::Mul(a, b) | Op::Div(a, b) | Op::Rem(a, b) => {
+            let ty_a = &func.value_types[*a];
+            if *ty_a == Type::Dynamic {
+                func.value_types[*b].clone()
+            } else {
+                ty_a.clone()
+            }
+        }
         Op::Neg(a) => func.value_types[*a].clone(),
 
         // Bitwise: propagate type of first operand.
@@ -623,9 +631,16 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
             changed = true;
         }
 
-        // Block parameter refinement: check incoming branch arguments.
+        // Block parameter refinement: widen to union of all concrete incoming types.
         // Skip Dynamic args so back-edges (which depend on the param's own type)
         // don't poison the join and prevent convergence in loops.
+        //
+        // We use union_type rather than refine here because block params are join
+        // points — their type must accommodate all incoming branches. If the first
+        // iteration sees only one concrete branch (e.g. Bool from the false arm of
+        // `&&`) and types the param as Bool, a later iteration may reveal that the
+        // true arm brings a different concrete type (e.g. String). union_type widens
+        // Bool → String | Bool correctly, whereas refine would block the update.
         let incoming = collect_branch_args(func);
         for (block_id, block) in func.blocks.iter() {
             for (i, param) in block.params.iter().enumerate() {
@@ -635,8 +650,14 @@ fn infer_function(func: &mut Function, ctx: &ModuleContext) -> bool {
                             .map(|v| &func.value_types[*v])
                             .filter(|ty| **ty != Type::Dynamic),
                     );
-                    if let Some(refined) = refine(&func.value_types[param.value], &common) {
-                        func.value_types[param.value] = refined;
+                    if common == Type::Dynamic {
+                        // All incoming were Dynamic — no useful type info yet.
+                        continue;
+                    }
+                    let current = func.value_types[param.value].clone();
+                    let unified = union_type(current.clone(), common);
+                    if unified != current {
+                        func.value_types[param.value] = unified;
                         changed = true;
                     }
                 }
