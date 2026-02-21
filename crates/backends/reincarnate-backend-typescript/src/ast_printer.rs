@@ -211,9 +211,12 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
                             JsExpr::ArrayInit(elems) if elems.is_empty() => {
                                 Some("unknown[]")
                             }
-                            JsExpr::ObjectInit(pairs) if pairs.is_empty() => {
-                                Some("Record<string, unknown>")
-                            }
+                            // Any object literal without an explicit type annotation is
+                            // treated as a dynamic map. TypeScript would otherwise infer
+                            // a narrow structural type (`{}` or `{ k: T; ... }`) with no
+                            // index signature, causing TS7053 when the object is later
+                            // accessed with a dynamic or `any`-typed key.
+                            JsExpr::ObjectInit(_) => Some("Record<string, any>"),
                             _ => None,
                         };
                         if let Some(ann) = annotation {
@@ -239,7 +242,15 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
 
         JsStmt::Assign { target, value } => {
             let tgt = print_expr(target);
-            let val = print_expr(value);
+            // Any object literal assigned to an untyped variable causes TypeScript to
+            // infer a narrow structural type (`{}` or `{ k: T; ... }`), which has no
+            // index signature. Subsequent dynamic-key access then fails with TS7053.
+            // Cast to Record<string, any> to match the VarDecl treatment.
+            let val = if matches!(value, JsExpr::ObjectInit(_)) {
+                format!("{} as Record<string, any>", print_expr(value))
+            } else {
+                print_expr(value)
+            };
             if tgt.starts_with('{') {
                 let _ = writeln!(out, "{indent}({tgt}) = {val};");
             } else {
@@ -532,7 +543,15 @@ fn print_expr(expr: &JsExpr) -> String {
         }
 
         JsExpr::Index { collection, index } => {
-            format!("{}[{}]", print_expr_operand(collection), print_expr(index))
+            // An inline object literal used as a map (e.g. `{ k: v }[key]`) has no index
+            // signature, causing TS7053 when the key is `any`-typed. Cast to Record so
+            // the lookup is well-typed.
+            let coll_str = if matches!(collection.as_ref(), JsExpr::ObjectInit(_)) {
+                format!("({} as Record<string, any>)", print_expr(collection))
+            } else {
+                print_expr_operand(collection)
+            };
+            format!("{coll_str}[{}]", print_expr(index))
         }
 
         JsExpr::Call { callee, args } => {

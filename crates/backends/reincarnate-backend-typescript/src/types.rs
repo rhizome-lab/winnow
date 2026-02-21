@@ -27,6 +27,12 @@ pub fn ts_type(ty: &Type) -> String {
         }
         Type::Struct(name) | Type::Enum(name) => {
             let short = name.rsplit("::").next().unwrap_or(name);
+            // AS3/JS `Object` is a dynamic property bag, not TypeScript's `Object`
+            // interface. TypeScript's `Object` has no index signature, so any dynamic
+            // key access causes TS7053. Map it to `Record<string, any>` instead.
+            if short == "Object" {
+                return "Record<string, any>".into();
+            }
             sanitize_ident(short)
         }
         Type::Function(sig) => {
