@@ -1525,8 +1525,14 @@ impl TranslateCtx {
     }
 
     pub fn lower_macro(&mut self, mac: &MacroNode) {
-        // Custom Macro.add() overrides shadow built-in lowering.
-        if self.overridden_macros.contains(mac.name.as_str()) {
+        // Custom Macro.add() overrides shadow built-in lowering — EXCEPT for
+        // "widget", which is a compile-time definition macro. Games override
+        // "widget" to patch registration behavior (e.g. DoL adds DOL.Stack /
+        // vStack frame management), but the compile-time outcome is identical:
+        // the body must become a named widget_<name>() function. We can't
+        // support the runtime wikifyEval() path used by the overriding handler,
+        // so lower_widget always wins for <<widget>> regardless of override.
+        if self.overridden_macros.contains(mac.name.as_str()) && mac.name != "widget" {
             return self.lower_unknown_macro(mac);
         }
         match mac.name.as_str() {
