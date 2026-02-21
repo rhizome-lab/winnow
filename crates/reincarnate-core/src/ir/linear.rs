@@ -1177,6 +1177,9 @@ struct EmitCtx<'a> {
     se_flush_declared: HashSet<ValueId>,
     /// Block-param ValueIds referenced during emission.
     referenced_block_params: HashSet<ValueId>,
+    /// All non-entry block-param ValueIds (for distinguishing true params from
+    /// arbitrary values that fell through build_val).
+    all_block_params: HashSet<ValueId>,
     /// Pending-lazy values protected from flush_pending_reads (header reads
     /// that shouldn't be flushed into nested bodies).
     flush_protected: HashSet<ValueId>,
@@ -1373,6 +1376,13 @@ impl<'a> EmitCtx<'a> {
             .map(|(name, _)| name.to_string())
             .collect();
 
+        let all_block_params: HashSet<ValueId> = func
+            .blocks
+            .iter()
+            .filter(|(bid, _)| *bid != func.entry)
+            .flat_map(|(_, block)| block.params.iter().map(|p| p.value))
+            .collect();
+
         Self {
             func,
             config,
@@ -1385,6 +1395,7 @@ impl<'a> EmitCtx<'a> {
             side_effecting_inlines: HashMap::new(),
             se_flush_declared: HashSet::new(),
             referenced_block_params: HashSet::new(),
+            all_block_params,
             flush_protected: HashSet::new(),
         }
     }
@@ -1728,9 +1739,16 @@ impl<'a> EmitCtx<'a> {
             let expr = self.side_effecting_inlines.remove(&v).unwrap();
             self.se_flush_declared.insert(v);
             let name = self.value_name(v);
-            if self.shared_names.contains(&name)
-                || self.referenced_block_params.contains(&v)
-            {
+            // Emit Assign only when a `let name;` declaration already exists:
+            // - shared_names → always emitted by collect_block_param_decls.
+            // - true block param in referenced_block_params → also emitted.
+            // Non-block-params that fell through build_val land in
+            // referenced_block_params too, but they have no pre-existing
+            // declaration — emit VarDecl so they declare themselves.
+            let has_preexisting_decl = self.shared_names.contains(&name)
+                || (self.all_block_params.contains(&v)
+                    && self.referenced_block_params.contains(&v));
+            if has_preexisting_decl {
                 stmts.push(Stmt::Assign {
                     target: Expr::Var(name),
                     value: expr,
@@ -1846,11 +1864,25 @@ impl<'a> EmitCtx<'a> {
         } else if count == 0 {
             stmts.push(Stmt::Expr(expr));
         } else {
+            // count >= 2: materialize into a named variable.
             self.referenced_block_params.insert(v);
-            stmts.push(Stmt::Assign {
-                target: Expr::Var(self.value_name(v)),
-                value: expr,
-            });
+            let name = self.value_name(v);
+            // If name is in shared_names, a hoisted `let name;` exists from
+            // collect_block_param_decls. Otherwise emit a VarDecl — this is
+            // the sole definition point for this non-block-param value.
+            if self.shared_names.contains(&name) {
+                stmts.push(Stmt::Assign {
+                    target: Expr::Var(name),
+                    value: expr,
+                });
+            } else {
+                stmts.push(Stmt::VarDecl {
+                    name,
+                    ty: None,
+                    init: Some(expr),
+                    mutable: false,
+                });
+            }
         }
     }
 
