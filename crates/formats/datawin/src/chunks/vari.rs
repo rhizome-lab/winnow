@@ -38,6 +38,16 @@ impl Vari {
     ///
     /// `chunk_data` is the raw chunk content (after the 8-byte header).
     pub fn parse(chunk_data: &[u8], version: BytecodeVersion) -> Result<Self> {
+        // A 0-size VARI chunk means the game was compiled with YYC (no bytecode); return empty.
+        if chunk_data.is_empty() {
+            return Ok(Self {
+                instance_var_count: 0,
+                instance_var_count_max: 0,
+                max_local_var_count: 0,
+                variables: Vec::new(),
+            });
+        }
+
         let mut c = Cursor::new(chunk_data);
 
         let (instance_var_count, instance_var_count_max, max_local_var_count) =

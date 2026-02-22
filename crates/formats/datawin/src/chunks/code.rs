@@ -37,6 +37,11 @@ impl Code {
         chunk_data_offset: usize,
         version: BytecodeVersion,
     ) -> Result<Self> {
+        // A 0-size CODE chunk means the game was compiled with YYC (no bytecode); return empty.
+        if chunk_data.is_empty() {
+            return Ok(Self { entries: Vec::new() });
+        }
+
         let mut c = Cursor::new(chunk_data);
         let ptrs = c.read_pointer_list()?;
 
