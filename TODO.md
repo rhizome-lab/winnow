@@ -210,6 +210,51 @@ improve output fidelity:
 
 ## GameMaker Frontend
 
+### GML `with` Statement Bugs (critical)
+
+Discovered via Bounty reference comparison (2026-02-22). The GML `with(obj) { ... }` statement
+has two distinct bugs in the frontend translator:
+
+- [ ] **`with` loop body uses outer `self` for all field accesses** — Inside a `with` loop,
+  `self` should refer to the currently iterated instance, not the outer object. The IR uses
+  `v0` (the outer method's `self` param) for all `get_field`/`set_field` ops inside the loop,
+  so reads/writes that should target the iterated instance hit the wrong object instead.
+  Examples: `EquipReader::step` (should read from StoreButton, writes `this.type = this.type`),
+  `OptionsReader::step` (should update OptionsReader from OptionButton), `RaceReader::step`,
+  `MainLocMain::create`. Root cause: the GML translator doesn't set up a separate "current
+  with-instance" variable when entering a `with` body — it keeps using the original `v0`.
+
+- [ ] **Post-`with` code not captured** — Any code that follows a `with` statement in the same
+  GML function is dropped from the IR. The `with` loop is modeled as `withBegin → [self-loop:
+  body + withEnd → back to body]`, with no exit edge to reach the continuation. The continuation
+  block exists (e.g., block13 in LocationStore::create, block3/4 in GeneralEnd::step) but is
+  empty because no instructions were emitted into it. Examples: `LocationStore::create` missing
+  `instance_destroy()` (the object self-destructs after setup), `GeneralEnd::step` missing
+  `instance_create(0,0,obj_stats)` + `room_goto(rm_start)` after destroying Stats instances.
+  Root cause: the GML bytecode `popenv` instruction creates a `hasNext2`-style branch to either
+  re-enter the loop OR fall through to post-loop code, but our IR encodes only the re-enter
+  edge (`br block_body`) and drops the fall-through edge.
+
+Both bugs affect every `with` statement that (a) accesses self-relative fields or (b) is followed
+by more code. Fix requires changes to `crates/frontends/reincarnate-frontend-gamemaker/src/`.
+
+### Other GML Logic Bugs Found in Bounty Comparison
+
+- [ ] **Location::create scroll condition inverted** — Reference: `if (i > 440)` sets
+  `scroll = true` and skips destroying LocationScroll; `else` destroys LocationScroll.
+  Emitted: condition is `<= 440` (inverted) and `scroll` is set to 1 unconditionally after
+  the branch. Also text width for scale computation is 380 instead of 390.
+
+- [ ] **Location::step/draw debug check missing** — Reference: `if (instance_exists(obj_location_scroll) && obj_stats.debug)` before drawing debug overlay. Emitted: missing the `&& obj_stats.debug` guard.
+
+- [ ] **EquipReader::step missing `get_text_equip_description()` call** — The step function
+  should call `get_text_equip_description(level, type)` to update `this.text` after reading
+  button state, but this call is absent from the emitted code (and from the IR).
+
+- [ ] **GeneralGotoMain::step missing debug mode cleanup** — Reference sets `obj_stats.debug = false`
+  and deletes `obj_stats.alarm[0]` when navigating from the debug room. Both ops are absent.
+  Additionally TS has an extra `save_config()` call not in the reference.
+
 ### Boolean / Short-Circuit Detection (open)
 
 - [ ] **Numeric booleans: `=== 1` / `=== 0` instead of boolean tests** —
