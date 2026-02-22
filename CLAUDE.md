@@ -216,13 +216,13 @@ Test projects live under `~/reincarnate/<engine>/<game>/`:
 - GML (GMS2): `~/reincarnate/gamemaker/deadestate/`
 - Twine: `~/reincarnate/twine/` (subfolders `dol/`, `trc/`, and 19+ Harlowe games)
 
-**Checking TypeScript output:** Always run `tsc` from the `out/` subdirectory, not from the game root. The `tsconfig.json` lives in `out/`, so running from the game root silently passes (no tsconfig found = no files checked).
+**Checking TypeScript output:** Use `@typescript/native-preview` (tsgo, ~4× faster than tsc, bug-for-bug compatible). Always run from the `out/` subdirectory — the `tsconfig.json` lives there; running from the game root silently passes (no tsconfig found = no files checked).
 ```bash
-# Correct: run from out/
-(cd ~/reincarnate/twine/mygame/out && bunx tsc --noEmit)
+# Correct: run from out/ with native preview
+(cd ~/reincarnate/twine/mygame/out && bunx @typescript/native-preview --noEmit)
 
 # Wrong: running from game root silently finds nothing
-bunx tsc --noEmit  # from ~/reincarnate/twine/mygame/ — always exits 0
+bunx @typescript/native-preview --noEmit  # from ~/reincarnate/twine/mygame/ — always exits 0
 ```
 
 ## Crate Structure
