@@ -991,44 +991,70 @@ impl<'a> Structurizer<'a> {
                     .copied()
                     .filter(|&m| m != block);
 
-                // Reorder cases so that when multiple cases share the same
-                // target block, the secondary (fall-through) cases come before
-                // the primary case that will get the body.  The `emitted` set
-                // means only the first `structurize_region` call for a given
-                // block produces a body — subsequent calls return empty.  By
-                // putting empty cases first, the printer can emit fall-through
-                // labels (`case X:` with no body/break).
-                let mut ordered_indices: Vec<usize> = (0..cases.len()).collect();
-                {
-                    // For each target, record the first index that maps to it
-                    // (the "primary" — the one that will get the body).
-                    let mut first_for_target: HashMap<BlockId, usize> = HashMap::new();
-                    for (i, (_constant, target, _args)) in cases.iter().enumerate() {
-                        first_for_target.entry(*target).or_insert(i);
-                    }
-                    // Sort: secondary cases (not the first for their target)
-                    // come before primary ones within each target group.
-                    // Preserve original order otherwise.
-                    ordered_indices.sort_by_key(|&i| {
-                        let target = cases[i].1;
-                        let is_primary = first_for_target[&target] == i;
-                        (target.index(), is_primary as u32, i)
-                    });
+                // When multiple switch cases share the same target block,
+                // one is "primary" (first in the cases list for that target)
+                // and the rest are "secondary" (fall-through labels).
+                // The `emitted` set means only the first `structurize_region`
+                // call for a given block produces a body — subsequent calls
+                // return empty.
+                //
+                // We need two orderings:
+                //   Processing order: primaries before secondaries within each
+                //     target group, so the primary gets the body and secondaries
+                //     get the empty fallthrough shape.
+                //   Display order: secondaries (empty) before primaries (body),
+                //     so the printer emits `case X:` fall-through labels before
+                //     the `case Y: body; break;` case.
+                //
+                // Strategy: build case_shapes in processing order, then sort
+                // the completed vec into display order.
+
+                // For each target, record the first index that maps to it
+                // (the "primary" — the one that will get the body).
+                let mut first_for_target: HashMap<BlockId, usize> = HashMap::new();
+                for (i, (_constant, target, _args)) in cases.iter().enumerate() {
+                    first_for_target.entry(*target).or_insert(i);
                 }
 
-                let mut case_shapes = Vec::with_capacity(cases.len());
-                for &idx in &ordered_indices {
+                // Processing order: primaries first within each target group.
+                let mut processing_indices: Vec<usize> = (0..cases.len()).collect();
+                processing_indices.sort_by_key(|&i| {
+                    let target = cases[i].1;
+                    let is_secondary = first_for_target[&target] != i;
+                    (target.index(), is_secondary as u32, i)
+                });
+
+                // Build case_shapes with (original_index, shape) so we can
+                // sort into display order afterwards.
+                let mut indexed_shapes: Vec<(usize, SwitchCase)> =
+                    Vec::with_capacity(cases.len());
+                for &idx in &processing_indices {
                     let (constant, target, args) = &cases[idx];
                     let entry_assigns = self.branch_assigns(*target, args);
                     let body = self.structurize_region(*target, merge, loop_body);
-                    let trailing_assigns = merge.map_or(vec![], |m| self.trailing_merge_assigns(&body, m));
-                    case_shapes.push(SwitchCase {
-                        value: constant.clone(),
-                        entry_assigns,
-                        body: Box::new(body),
-                        trailing_assigns,
-                    });
+                    let trailing_assigns =
+                        merge.map_or(vec![], |m| self.trailing_merge_assigns(&body, m));
+                    indexed_shapes.push((
+                        idx,
+                        SwitchCase {
+                            value: constant.clone(),
+                            entry_assigns,
+                            body: Box::new(body),
+                            trailing_assigns,
+                        },
+                    ));
                 }
+
+                // Display order: secondaries (fallthrough labels) before the
+                // primary (body) within each target group.
+                indexed_shapes.sort_by_key(|(i, _)| {
+                    let target = cases[*i].1;
+                    let is_primary = first_for_target[&target] == *i;
+                    (target.index(), is_primary as u32, *i)
+                });
+
+                let case_shapes: Vec<SwitchCase> =
+                    indexed_shapes.into_iter().map(|(_, s)| s).collect();
 
                 let default_assigns =
                     self.branch_assigns(default.0, &default.1);
