@@ -320,33 +320,23 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
 
 ### 1. `argument` inside `with`-body panics — blocks 10SecNinjaX, 12BetterThan6, VA-11 HALL-A
 
-- [ ] **`argument[N]` accessed inside a `with`-body closes over wrong param index** —
-  `translate_push_variable` computes `param_offset = has_self(1) + has_other(1)` and reads
-  `fb.param(param_offset + arg_idx)`. Inside a `translate_with_body` closure the function only
-  has the explicit capture params (`_self`, maybe `_other`) — `argument[N]` from the *outer*
-  scope are not present. Fix: detect `argument` access in a with-body context and emit a capture
-  for each `argument[N]` used, similar to how `_other` is captured. The inner function receives
-  it as an additional capture parameter.
+- [x] **`argument[N]` accessed inside a `with`-body closes over wrong param index** — **FIXED**.
+  Guards added to `translate_push_variable` and `translate_pop` for both the named (`argument0`)
+  and stacktop (`argument[N]`) forms: check `locals` map for `_argumentN` capture first (with-body
+  case), then bounds-check before calling `fb.param()`. Unblocked 10SecNinjaX, 12BetterThan6.
 
 ### 2. TXTR external textures panic — blocks Downwell
 
-- [ ] **`txtr.rs:102` slice-end underflow when textures are stored externally** —
-  `get_texture_data(index)` computes `end = next_texture.data_offset`. In GMS2.3+ (and some
-  GMS2 builds), textures are stored as external `.png` files on disk; the `data_offset` fields
-  still exist in TXTR but point into an external file, not into the `data.win` blob. When
-  `data_offset` of texture N+1 is 0 (or smaller than texture N's offset), `data[start..end]`
-  panics. Fix: detect out-of-range `data_offset` and return `None` (texture data not embedded).
-  Downwell has new chunks `FEDS, ACRV, SEQN, TAGS` suggesting GMS2.3+.
+- [x] **`txtr.rs:102` slice-end underflow when textures are stored externally** — **FIXED**.
+  `texture_data()` now returns `None` when `end < start || end > data.len()`. Downwell now emits
+  (remaining errors are runtime API gaps, not parse bugs).
 
 ### 3. PE-embedded `data.win` not supported — blocks Momodora RUtM
 
-- [ ] **Reader requires FORM at offset 0, but Momodora embeds it in a PE exe** —
-  `MomodoraRUtM.exe` has the FORM blob appended after the PE image (found at offset 9417748 by
-  scanning for a valid FORM). The CLI and `DataWin::parse()` currently require the slice to
-  start at FORM. Fix: in the CLI's `load_data` path, detect PE magic (`MZ`) at offset 0 and
-  scan for the first valid FORM header (magic=`FORM`, stated size fits within file). Pass the
-  sub-slice from that offset. No streaming/seeking parser needed — we already mmap/read the whole
-  file; just find the offset and slice.
+- [x] **Reader requires FORM at offset 0, but Momodora embeds it in a PE exe** — **FIXED**.
+  `DataWin::parse` detects MZ magic and scans all FORM occurrences for the first one whose
+  declared size fits within the file (avoids false positives in PE sections). Also fixed 0-size
+  CODE/VARI/FUNC chunks for YYC-compiled games (early-return empty structs). Momodora now emits.
 
 ### 4. Forager parse error at EOF / Risk of Rain CODE chunk empty
 
@@ -356,12 +346,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   a function entry whose stated length extends to exactly EOF, then attempting to read past.
   Needs `--dump-ir` + targeted investigation.
 
-- [ ] **Risk of Rain `game.unx` has empty CODE/VARI/FUNC chunks (YYC-compiled)** — chunk scan
-  shows `CODE 0 bytes, VARI 0 bytes, FUNC 0 bytes`. This is the GMS1 YYC signature: chunks
-  exist but are empty. Our reader fails with "unexpected end of data at offset 0x0" when trying
-  to read CODE entries from a zero-length chunk. Fix: detect zero-length CODE chunk and emit a
-  clear "YYC-compiled, no bytecode available" error instead of panicking. Also update our
-  chunk-scan heuristic to check `CODE size > 0`, not just presence of the `CODE` tag.
+- [x] **Risk of Rain `game.unx` has empty CODE/VARI/FUNC chunks (YYC-compiled)** — **FIXED**
+  by the same early-return guards added for Momodora (Bug 3). Both GMS1 and GMS2 YYC games now
+  parse correctly with empty bytecode chunks.
 
 ### 5. Sprite name bracket notation missing for access side — blocks Nubby's, Mindwave, MaxManos2
 
