@@ -249,25 +249,17 @@ by more code. Fix requires changes to `crates/frontends/reincarnate-frontend-gam
   `(pressed === 2) ? (locked === 0) : 0` (equivalent to `pressed===2 && locked===0`).
   The switch detection also fires correctly now, producing `switch(this.type)` blocks.
 
-### GML 2D Array Compound-Assignment Bug (critical)
+### GML 2D Array Compound-Assignment Bug — FIXED (commit b3db317)
 
-Discovered via Bounty reference comparison (2026-02-22).
+Discovered via Bounty reference comparison (2026-02-22). Fixed 2026-02-22.
 
-- [ ] **2D array `+=` writes `inventory[sum] = const` instead of `inventory[idx] = sum`** —
-  For `self.inventory[i][1] += amount`, the IR generates:
-  ```
-  v32 = get_index(inventory, i*32000+1)   ← read current value
-  v33 = add(v32, amount)                  ← compute new value
-  set_index(inventory, v33, const 3)      ← WRONG: writes inventory[sum] = 3
-  ```
-  instead of:
-  ```
-  set_index(inventory, i*32000+1, v33)    ← CORRECT: writes inventory[idx] = sum
-  ```
-  The index and value operands are swapped, and a spurious `const 3` replaces the computed sum.
-  Affects `inventory_add` (increment path), `inventory_remove` (decrement path), and any other
-  GML function using 2D array compound assignment. Root cause unknown — likely a stack pop order
-  bug in the GML translator for the write-back phase of a 2D array compound assignment.
+- [x] **2D array `+=` wrote `inventory[sum] = const` instead of `inventory[idx] = sum`** —
+  Root cause: compound assignment uses the Dup pattern: `push dim2, push dim1, Dup, VARI-read,
+  arithmetic, VARI-write`. After the read+arithmetic, the stack is `[dim2, dim1, new_value]`
+  with new_value on top — opposite of simple assignment `[value, dim2, dim1]` with dim1 on top.
+  Fix: added `compound_2d_pending` flag, set by `translate_push_variable` when originals remain
+  after 2D VARI read (`stack.len() >= 2`). `translate_pop` uses reversed pop order when set.
+  Output: `self.inventory[(int(i)*32000)+1] += argument1` (correct compound assignment).
 
 ### Other GML Logic Bugs Found in Bounty Comparison
 
