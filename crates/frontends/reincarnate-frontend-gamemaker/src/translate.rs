@@ -135,6 +135,13 @@ pub fn translate_code_entry(
     let mut gml_sizes: HashMap<ValueId, u8> = HashMap::new();
     fb.switch_to_block(fb.entry_block());
     let mut terminated = false;
+    // Set to true when a 2D array VARI read leaves the original dim indices on
+    // the stack (compound assignment Dup pattern). The subsequent Pop must use
+    // reversed pop order: value on top, dim1 below, _dim2 at bottom.
+    // Set to true when a 2D array VARI read leaves the original dim indices on
+    // the stack (compound assignment Dup pattern). The subsequent Pop must use
+    // reversed pop order: value on top, dim1 below, _dim2 at bottom.
+    let mut compound_2d_pending = false;
 
     for (inst_idx, inst) in instructions.iter().enumerate() {
         // Check if this instruction starts a new block.
@@ -148,6 +155,7 @@ pub fn translate_code_entry(
                 }
                 fb.switch_to_block(block);
                 stack.clear();
+                compound_2d_pending = false;
                 if let Some(params) = block_params.get(&inst.offset) {
                     for &p in params {
                         // Block params are Variable-sized (16 bytes = 4 units).
@@ -175,6 +183,7 @@ pub fn translate_code_entry(
             &mut terminated,
             &block_entry_depths,
             &mut gml_sizes,
+            &mut compound_2d_pending,
         )?;
     }
 
@@ -988,6 +997,7 @@ fn translate_instruction(
     terminated: &mut bool,
     block_entry_depths: &HashMap<usize, usize>,
     gml_sizes: &mut HashMap<ValueId, u8>,
+    compound_2d_pending: &mut bool,
 ) -> Result<(), String> {
     match inst.opcode {
         // ============================================================
@@ -995,7 +1005,7 @@ fn translate_instruction(
         // ============================================================
         Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
             let depth_before = stack.len();
-            translate_push(inst, fb, stack, locals, ctx)?;
+            translate_push(inst, fb, stack, locals, ctx, compound_2d_pending)?;
             // Annotate newly pushed value with its GML type size.
             if stack.len() > depth_before {
                 if let Some(&val) = stack.last() {
@@ -1310,7 +1320,7 @@ fn translate_instruction(
         // Pop (variable store)
         // ============================================================
         Opcode::Pop => {
-            translate_pop(inst, fb, stack, locals, ctx)?;
+            translate_pop(inst, fb, stack, locals, ctx, compound_2d_pending)?;
         }
 
         // ============================================================
@@ -1509,6 +1519,7 @@ fn translate_push(
     stack: &mut Vec<ValueId>,
     locals: &mut HashMap<String, ValueId>,
     ctx: &TranslateCtx,
+    compound_2d_pending: &mut bool,
 ) -> Result<(), String> {
     match &inst.operand {
         Operand::Int16(v) => stack.push(fb.const_int(*v as i64)),
@@ -1524,7 +1535,7 @@ fn translate_push(
             stack.push(fb.const_string(s));
         }
         Operand::Variable { var_ref, instance } => {
-            translate_push_variable(inst, fb, stack, locals, ctx, var_ref, *instance)?;
+            translate_push_variable(inst, fb, stack, locals, ctx, var_ref, *instance, compound_2d_pending)?;
         }
         _ => {
             return Err(format!(
@@ -1537,6 +1548,7 @@ fn translate_push(
 }
 
 /// Translate a Push with Variable operand (load from variable).
+#[allow(clippy::too_many_arguments)]
 fn translate_push_variable(
     inst: &Instruction,
     fb: &mut FunctionBuilder,
@@ -1545,6 +1557,7 @@ fn translate_push_variable(
     ctx: &TranslateCtx,
     var_ref: &VariableRef,
     instance: i16,
+    compound_2d_pending: &mut bool,
 ) -> Result<(), String> {
     let var_name = resolve_variable_name(inst, ctx);
 
@@ -1571,6 +1584,13 @@ fn translate_push_variable(
         // dim1 is the meaningful first-dimension index.
         let dim1 = pop(stack, inst)?; // first-dimension index (top of stack)
         let _dim2 = pop(stack, inst)?; // second-dimension (ignored for 1D)
+        // If the stack still has 2+ items after popping the indices, those are
+        // the original (pre-Dup) copies left by a compound assignment pattern:
+        //   push dim2, push dim1, Dup, VARI-read (← here), arithmetic, VARI-write
+        // The subsequent Pop must use reversed order: new_value=top, dim1, dim2.
+        if stack.len() >= 2 {
+            *compound_2d_pending = true;
+        }
         if var_name == "argument" {
             // argument[N] → function parameter access
             if let Some(Constant::Int(idx)) = fb.try_get_const(dim1) {
@@ -1809,6 +1829,7 @@ fn translate_pop(
     stack: &mut Vec<ValueId>,
     locals: &mut HashMap<String, ValueId>,
     ctx: &TranslateCtx,
+    compound_2d_pending: &mut bool,
 ) -> Result<(), String> {
     if let Operand::Variable { var_ref, instance } = &inst.operand {
         let var_name = resolve_variable_name(inst, ctx);
@@ -1830,13 +1851,30 @@ fn translate_pop(
         }
 
         // Handle 2D array access (ref_type == 0 with non-negative instance).
-        // Stack layout: [value, dim2, dim1] with dim1 on top.
-        // dim1 is the meaningful first-dimension index; dim2 is the second
-        // dimension (or a don't-care value for 1D arrays).
+        //
+        // Simple assignment: stack is [value, dim2, dim1] with dim1 on top.
+        // The value was pushed first, then the indices.
+        //
+        // Compound assignment (+=, -=, etc.): the compiler Dups the indices
+        // before the VARI read, leaving originals below. After the read and
+        // arithmetic, the stack becomes [dim2, dim1, new_value] with new_value
+        // on top. The `compound_2d_pending` flag is set by translate_push_variable
+        // when it detects the originals remaining after the 2D read.
         if is_2d_array_access(var_ref, *instance) {
-            let dim1 = pop(stack, inst)?; // first-dimension index (top of stack)
-            let _dim2 = pop(stack, inst)?; // second-dimension (ignored for 1D)
-            let value = pop(stack, inst)?; // value to store (bottom)
+            let (dim1, value) = if *compound_2d_pending {
+                *compound_2d_pending = false;
+                // Compound: new_value=top, dim1=next, _dim2=bottom
+                let value = pop(stack, inst)?;
+                let dim1 = pop(stack, inst)?;
+                let _dim2 = pop(stack, inst)?;
+                (dim1, value)
+            } else {
+                // Simple: dim1=top, _dim2=next, value=bottom
+                let dim1 = pop(stack, inst)?;
+                let _dim2 = pop(stack, inst)?;
+                let value = pop(stack, inst)?;
+                (dim1, value)
+            };
             if var_name == "argument" {
                 // argument[N] = value → store to function parameter slot
                 if let Some(Constant::Int(idx)) = fb.try_get_const(dim1) {
@@ -2269,6 +2307,107 @@ mod tests {
     // -----------------------------------------------------------------------
     // argument[N] variable mapping — 2D array pattern (GMS1)
     // -----------------------------------------------------------------------
+
+    /// Build a Dup instruction.
+    fn dup_inst(n: u16, type1: DataType) -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Dup,
+            type1,
+            type2: DataType::Double,
+            operand: Operand::Dup(n),
+        }
+    }
+
+    /// Build an Add instruction (no operand, operates on stack).
+    fn add_inst(type1: DataType) -> Instruction {
+        Instruction {
+            offset: 0,
+            opcode: Opcode::Add,
+            type1,
+            type2: DataType::Double,
+            operand: Operand::None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 2D array compound assignment — correct stack layout (value on top)
+    // -----------------------------------------------------------------------
+
+    /// Compound 2D array write: `myarray[5] += 10`
+    ///
+    /// GML bytecode for compound assignment uses the Dup pattern:
+    ///   push dim2 (artifact), push dim1 (index), Dup, Push.v.v (read), arithmetic, Pop.v.v (write)
+    ///
+    /// After the Dup+read+arithmetic, the stack is `[dim2, dim1, new_value]` with
+    /// new_value on TOP — the OPPOSITE of simple assignment `[value, dim2, dim1]`.
+    /// The `compound_2d_pending` flag, set by translate_push_variable, causes
+    /// translate_pop to use the reversed pop order: value=top, dim1=next, dim2=bottom.
+    ///
+    /// This test guards that:
+    /// 1. A `SetIndex` (not `SetField`) is emitted — index was non-scalar.
+    /// 2. The index passed to `SetIndex` is the ORIGINAL dim1 constant (5), not
+    ///    the Add result — confirming the new_value is stored, not used as index.
+    #[test]
+    fn test_2d_array_compound_write_uses_correct_operands() {
+        // Bytecode sequence for `myarray[5] += 10`:
+        // offset  0: PushI.i16 3  (dim2 artifact, 1 unit)    → 4 bytes
+        // offset  4: PushI.i16 5  (dim1 = array index 5)     → 4 bytes
+        // offset  8: Dup.i16 1    (dup top 2 items: 2 units)  → 4 bytes
+        // offset 12: Push.v.v     (VARI read: pops dim1_copy+dim2_copy, pushes current) → 8 bytes
+        // offset 20: PushI.i16 10 (value to add)              → 4 bytes
+        // offset 24: Add.i16      (sum = current + 10)        → 4 bytes
+        // offset 28: Pop.v.v      (VARI write, compound)      → 8 bytes
+        // offset 36: Exit                                      → 4 bytes
+        let instructions = vec![
+            pushi(3),               // dim2 artifact
+            pushi(5),               // dim1 = index
+            dup_inst(1, DataType::Int16), // dup top 2 Int16 items (2 * 1 unit each)
+            push_var(3, 0),         // 2D VARI read (ref_type=0, instance=3 ≥ 0)
+            pushi(10),              // value to add
+            add_inst(DataType::Int16), // sum
+            pop_var(3, 0),          // 2D VARI write (same variable)
+            exit_inst(),
+        ];
+        let bytecode = encode(&instructions);
+
+        let vars: Vec<(String, i32)> = vec![("myarray".into(), -1)];
+        // Push.v.v is at offset 12, Pop.v.v is at offset 28.
+        let vari_ref_map: HashMap<usize, usize> =
+            [(12, 0), (28, 0)].into_iter().collect();
+        let fn_names: HashMap<u32, String> = HashMap::new();
+        let func_ref_map: HashMap<usize, usize> = HashMap::new();
+        let obj_names: Vec<String> = vec!["Obj0".into(); 4]; // index 3 valid
+        let script_names: HashSet<String> = HashSet::new();
+        let ctx = make_ctx(true, 0, &vars, &vari_ref_map, &func_ref_map, &obj_names, &fn_names, &script_names);
+
+        let func = translate_code_entry(&bytecode, "test_compound_2d", &ctx)
+            .expect("translation failed");
+
+        // Collect (op, result_value_id) pairs to trace operand relationships.
+        let insts: Vec<_> = func.insts.values().collect();
+
+        // Find the SetIndex instruction.
+        let set_index = insts.iter().find(|i| matches!(i.op, Op::SetIndex { .. }));
+        assert!(set_index.is_some(), "expected SetIndex for compound 2D write; ops: {:?}",
+            insts.iter().map(|i| &i.op).collect::<Vec<_>>());
+
+        let Op::SetIndex { index, value, .. } = &set_index.unwrap().op else { unreachable!() };
+
+        // The index must be the constant 5 (original dim1), NOT the Add result.
+        let index_is_const_5 = insts.iter().any(|i| {
+            i.result == Some(*index) && matches!(i.op, Op::Const(reincarnate_core::ir::Constant::Int(5)))
+        });
+        assert!(index_is_const_5,
+            "SetIndex index should be dim1=const(5), not the Add result; index={index:?}, ops={insts:?}");
+
+        // The value must NOT be the constant 10 or 3 — it should be the Add result.
+        let value_is_plain_const = insts.iter().any(|i| {
+            i.result == Some(*value) && matches!(i.op, Op::Const(_))
+        });
+        assert!(!value_is_plain_const,
+            "SetIndex value should be the Add result (sum), not a plain constant; value={value:?}");
+    }
 
     /// `argument[1]` push with 2D array encoding maps to `fb.param(1)`, not a
     /// heap allocation or runtime lookup.
