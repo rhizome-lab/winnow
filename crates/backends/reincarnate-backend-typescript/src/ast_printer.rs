@@ -175,12 +175,7 @@ fn print_stmt(stmt: &JsStmt, out: &mut String, indent: &str) {
                     );
                 }
                 (Some(ty), None) => {
-                    // Definite assignment assertion (`!`) suppresses TS2454
-                    // "variable used before assigned" for block-param hoists.
-                    // Every block param in the IR is always assigned by all
-                    // predecessor blocks, so the assertion is always safe.
-                    let suffix = if *mutable { "!" } else { "" };
-                    let _ = writeln!(out, "{indent}{kw} {name_str}{suffix}: {};", ts_type(ty));
+                    let _ = writeln!(out, "{indent}{kw} {name_str}: {};", ts_type(ty));
                 }
                 (None, Some(init)) => {
                     // Cast → determine if the cast form is a TS assertion (strippable
