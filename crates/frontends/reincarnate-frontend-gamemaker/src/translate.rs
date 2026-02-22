@@ -1127,7 +1127,8 @@ fn translate_instruction(
         Opcode::B => {
             if let Operand::Branch(offset) = inst.operand {
                 let (target_off, target) = resolve_branch_target(inst, offset, block_map)?;
-                let args = get_branch_args(stack, block_entry_depths.get(&target_off).copied().unwrap_or(0));
+                let depth = block_entry_depths.get(&target_off).copied().unwrap_or(0);
+                let args = get_branch_args(stack, depth);
                 fb.br(target, &args);
                 *terminated = true;
             }

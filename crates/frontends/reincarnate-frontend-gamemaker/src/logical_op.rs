@@ -53,11 +53,16 @@ fn normalize_logical_ops(func: &mut Function) -> bool {
         })
         .collect();
 
-    for (_, cond, then_target, else_target) in brifs {
+    for (_, cond, then_target, else_target) in &brifs {
+        let (cond, then_target, else_target) = (*cond, *then_target, *else_target);
         // Try GML OR: then-block is trivially pure with a const-truthy result,
         // else-block has real computation.
+        // Guard: skip if the trivial block is shared by multiple BrIf predecessors —
+        // normalizing a shared block is unsafe because the replacement value (cond)
+        // is only correct for THIS BrIf, not for the other predecessor(s).
         if let Some(br_inst_id) = trivially_pure_const_branch(func, then_target, true) {
-            if !is_trivially_pure_block(func, else_target) {
+            let then_pred_count = brifs.iter().filter(|(_, _, t, _)| *t == then_target).count();
+            if then_pred_count == 1 && !is_trivially_pure_block(func, else_target) {
                 func.insts[br_inst_id].op = replace_br_arg(func, br_inst_id, cond);
                 changed = true;
                 continue;
@@ -66,7 +71,8 @@ fn normalize_logical_ops(func: &mut Function) -> bool {
         // Try GML AND: else-block is trivially pure with a const-falsy result,
         // then-block has real computation.
         if let Some(br_inst_id) = trivially_pure_const_branch(func, else_target, false) {
-            if !is_trivially_pure_block(func, then_target) {
+            let else_pred_count = brifs.iter().filter(|(_, _, _, e)| *e == else_target).count();
+            if else_pred_count == 1 && !is_trivially_pure_block(func, then_target) {
                 func.insts[br_inst_id].op = replace_br_arg(func, br_inst_id, cond);
                 changed = true;
             }
@@ -157,5 +163,91 @@ fn is_const_falsy(c: &Constant) -> bool {
         Constant::Bool(false) | Constant::Int(0) | Constant::Null => true,
         Constant::Float(f) => *f == 0.0,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reincarnate_core::ir::builder::FunctionBuilder;
+    use reincarnate_core::ir::{CmpKind, FunctionSig, Op, Type, Visibility};
+    use reincarnate_core::ir::builder::ModuleBuilder;
+
+    /// GML compiles `a && b && c` with a SHARED else-block:
+    ///   Bf(else)  // if !a
+    ///   Bf(else)  // if !b
+    ///   [c]
+    ///   B(merge)
+    /// else:
+    ///   push 0
+    ///   // fall-through to merge
+    ///
+    /// The normalization pass must NOT replace the shared else-block's
+    /// `br merge(const_0)` with `br merge(cond_a)`, because when
+    /// reached via the inner BrIf (cond_a = true, cond_b = false),
+    /// using cond_a=true would incorrectly make the merge condition true.
+    #[test]
+    fn test_shared_else_block_not_normalized() {
+        // IR:
+        //   block0: br_if cond_a, block1, block3
+        //   block1: br_if cond_b, block2, block3    ← block3 shared
+        //   block2: v_cmp = cmp.lt a, b; br block4(v_cmp)
+        //   block3: v_zero = const 0; br block4(v_zero)   ← shared else
+        //   block4(v_merge: bool): return v_merge
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Bool, Type::Int(64), Type::Int(64)],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("double_and", sig, Visibility::Public);
+        let cond_a = fb.param(0);
+        let cond_b = fb.param(1);
+        let a = fb.param(2);
+        let b = fb.param(3);
+
+        let block1 = fb.create_block();
+        let block2 = fb.create_block();
+        let block3 = fb.create_block(); // shared else
+        let (block4, block4_params) = fb.create_block_with_params(&[Type::Bool]);
+        let v_merge = block4_params[0];
+
+        // block0: br_if cond_a, block1, block3
+        fb.br_if(cond_a, block1, &[], block3, &[]);
+
+        // block1: br_if cond_b, block2, block3
+        fb.switch_to_block(block1);
+        fb.br_if(cond_b, block2, &[], block3, &[]);
+
+        // block2: v_cmp = cmp.lt(a, b); br block4(v_cmp)
+        fb.switch_to_block(block2);
+        let v_cmp = fb.cmp(CmpKind::Lt, a, b);
+        fb.br(block4, &[v_cmp]);
+
+        // block3 (shared else): v_zero = const 0; br block4(v_zero)
+        fb.switch_to_block(block3);
+        let v_zero = fb.const_int(0);
+        fb.br(block4, &[v_zero]);
+
+        // block4: return v_merge
+        fb.switch_to_block(block4);
+        fb.ret(Some(v_merge));
+
+        let func = fb.build();
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+
+        // Run the normalization pass.
+        let result = GmlLogicalOpNormalize.apply(module).unwrap();
+        assert!(!result.changed, "Pass must not modify a shared else-block");
+
+        // Find block3's Br and confirm its arg is still v_zero (const 0), not cond_a.
+        let func = result.module.functions.values().next().unwrap();
+        let b3 = &func.blocks[block3];
+        let last_inst = func.insts[*b3.insts.last().unwrap()].op.clone();
+        let Op::Br { args, .. } = last_inst else {
+            panic!("Expected Br terminator in block3");
+        };
+        assert_eq!(args[0], v_zero, "block3's Br arg must remain v_zero (const 0), not be replaced with cond_a");
     }
 }
