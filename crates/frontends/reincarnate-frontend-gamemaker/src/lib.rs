@@ -196,6 +196,19 @@ fn translate_scripts(
 
         let code_entry = &code.entries[code_idx];
         let code_name = dw.resolve_string(code_entry.name).unwrap_or_default();
+
+        // In GMS2.3+ games migrated from GMS1, the SCPT chunk contains both:
+        //   1. A legacy entry whose code name starts with "gml_GlobalScript_" — an
+        //      empty stub kept for backward compatibility. The 0x8000 bit is set in
+        //      args_count for these entries.
+        //   2. A modern entry whose code name starts with "gml_Script_" — the real
+        //      implementation using GMS2.3+ named-function syntax.
+        // Emitting both produces duplicate TypeScript function exports. Skip the
+        // legacy stub; the real implementation comes from the gml_Script_ entry.
+        if code_name.starts_with("gml_GlobalScript_") {
+            continue;
+        }
+
         let clean_name = strip_script_prefix(&script_name);
         let func_name = clean_name.to_string();
 
