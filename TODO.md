@@ -103,13 +103,77 @@ Measured after TypeInference + ConstraintSolve + Alloc refinement.
   - **Sentinel elimination** — recognize sentinel-then-overwrite → `Option<T>`
   - Emit union type annotation (`number | string`) instead of `any`
 
-## Runtime Type Audit
+## Runtime Audits (Evergreen)
 
-- [ ] **Periodic `git blame` audit of runtime type signatures** — Review Harlowe/SugarCube runtime files
-  (`engine.ts`, `context.ts`, `state.ts`, etc.) for any type signatures that were widened (e.g. `string`
-  → `any`, required param made optional) to silence TypeScript errors from game code. Such changes hide
-  real bugs. The rule: never widen types to accommodate buggy game code — TypeScript catching game author
-  mistakes is correct behavior. Audit files: `runtime/twine/ts/harlowe/`, `runtime/twine/ts/sugarcube/`.
+These are recurring health-checks, not one-off fixes. Run them periodically and update the "last audited" date.
+
+### Module-level mutable state — last audited 2026-02-22
+
+State at module scope prevents two game instances from coexisting on the same page. Any `let` or lowercase-named singleton `const` at the top level of a `.ts` file is a smell.
+
+```bash
+# Top-level let declarations (mutable by definition)
+grep -rn "^let \|^export let " runtime/ --include="*.ts" | grep -v node_modules
+
+# Top-level singleton instances (lowercase name + new = likely singleton)
+grep -rn "^const [a-z].* = new " runtime/ --include="*.ts" | grep -v node_modules
+```
+
+Known violations as of 2026-02-22 (see high-priority issues below for details):
+- `runtime/flash/ts/flash/display.ts` — `export let _dragTarget/Bounds/LockCenter/OffsetX/OffsetY`
+- `runtime/flash/ts/audio.ts` — `audioCtx`, `channels`
+- `runtime/flash/ts/input.ts` — `state` (InputState singleton)
+- `runtime/flash/ts/timing.ts` — `state` (TimingState singleton)
+- `runtime/flash/ts/renderer.ts` — `canvas`, `ctx` (hardcoded DOM element)
+- `runtime/twine/ts/platform/save.ts` — `state`, `backend`, `gotoFn`, `slotPrefix`, `autosaveEnabled`
+- `runtime/twine/ts/platform/_overlay.ts` — `dialog` (DialogManager singleton)
+- `runtime/twine/ts/platform/input.ts` — `input` (InputManager singleton)
+- `runtime/twine/ts/platform/layout.ts` — `layout` (LayoutManager singleton)
+- `runtime/twine/ts/platform/save-ui.ts` — `saveUI` (SaveUI singleton)
+- `runtime/twine/ts/platform/settings-ui.ts` — `settingsUI` (SettingsUI singleton)
+
+### Runtime type widening — last audited: (never)
+
+Review runtime files for type signatures widened to silence TypeScript errors from game code (e.g. `string` → `any`, required param made optional). Such changes hide real bugs.
+
+```bash
+# Hunt for any-typed params/returns that shouldn't be
+grep -rn ": any\b" runtime/ --include="*.ts" | grep -v node_modules | grep -v "Record<string, any>"
+```
+
+Audit targets: `runtime/twine/ts/harlowe/`, `runtime/twine/ts/sugarcube/`.
+
+The rule: never widen types to accommodate buggy game code — TypeScript catching game author mistakes is correct behavior.
+
+---
+
+## Runtime Architecture — High Priority
+
+### Flash runtime: module-level singletons (multi-instance blocker)
+
+All mutable state in the Flash runtime lives at module scope, which means two Flash games cannot run on the same page and a second `createFlashRuntime()` call would stomp on the first. All of the following need to move onto the `FlashRuntime` instance (analogous to how `GameRuntime` was designed from the start).
+
+- [ ] **`flash/display.ts` — exported drag state** (`_dragTarget`, `_dragBounds`, `_dragLockCenter`, `_dragOffsetX`, `_dragOffsetY`, lines 712–720) and `_displayState` singleton (line 1213). Drag state is `export let`, meaning any importer can mutate it — remove the export, move onto runtime instance.
+- [ ] **`flash/timing.ts` — `TimingState` singleton** — `state = new TimingState()` at module scope (line 9); `timing` object wraps it. Move to `FlashRuntime.timing` instance field; same pattern as `GameRuntime.onTick`.
+- [ ] **`flash/input.ts` — `InputState` singleton** — `state = new InputState()` at module scope (line 12); DOM event listeners registered unconditionally on import. Move to `FlashRuntime.input`; attach/detach listeners in `start()`/`stop()`.
+- [ ] **`flash/audio.ts` — `AudioContext` + `channels` set** — `audioCtx = new AudioContext()` and `channels: Set<ChannelHandle>` at module scope (lines 1, 12). Move to `FlashRuntime.audio`.
+- [ ] **`flash/renderer.ts` — hardcoded canvas** — `canvas = document.getElementById("reincarnate-canvas")` at module scope (lines 1–2). Move to `FlashRuntime.renderer`; accept canvas element (or ID) as a constructor arg.
+- [ ] **`flash/memory.ts` — shared heap** — `heap = new ArrayBuffer(HEAP_SIZE)` and typed array views at module scope (lines 4–13). Unlikely to matter in practice (single game per page for Flash), but still wrong in principle. Move to `FlashRuntime`.
+
+### Twine platform: module-level singletons (multi-instance blocker)
+
+The Twine platform modules (`save`, `input`, `layout`, `save-ui`, `settings-ui`, `_overlay`) all follow the same pattern: define a class, instantiate it once at module scope, export methods that close over the singleton. They should export the class (or a factory) and let the runtime wire instances together — same as how GML's `GameRuntime` works.
+
+- [ ] **`platform/save.ts`** — five `let` declarations at module scope (`state`, `backend`, `gotoFn`, `slotPrefix`, `autosaveEnabled`). Export a `SaveManager` class; `SugarCubeRuntime`/`HarloweRuntime` constructs it.
+- [ ] **`platform/_overlay.ts`** — `dialog = new DialogManager()` singleton. Export the class.
+- [ ] **`platform/input.ts`** — `input = new InputManager()` singleton. Export the class.
+- [ ] **`platform/layout.ts`** — `layout = new LayoutManager()` singleton. Export the class.
+- [ ] **`platform/save-ui.ts`** — `saveUI = new SaveUI()` singleton. Export the class.
+- [ ] **`platform/settings-ui.ts`** — `settingsUI = new SettingsUI()` singleton. Export the class.
+
+### `flash/vector.ts` — `Array.prototype` mutation
+
+- [ ] **Prototype pollution** — `vector.ts` adds `removeAt` and `insertAt` to `Array.prototype` (lines 17–27) as a side effect of import. This bleeds across the entire page. Correct fix: either use a typed `Vector<T>` wrapper class (correct but invasive), or at minimum scope the side effect to only apply when the Flash runtime is initialized rather than on module load.
 
 ---
 
