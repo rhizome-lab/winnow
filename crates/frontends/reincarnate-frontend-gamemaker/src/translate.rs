@@ -875,6 +875,10 @@ fn run_translation_loop(
     // the stack (compound assignment Dup pattern). The subsequent Pop must use
     // reversed pop order: value on top, dim1 below, _dim2 at bottom.
     let mut compound_2d_pending = false;
+    // Array reference captured by pushac (0xFFFC) for use by popaf (0xFFFD).
+    // pushac pops the top-of-stack array reference and stores it here so that
+    // popaf can use it without popping a third item from the stack.
+    let mut pushac_array: Option<ValueId> = None;
     // When Some(n), skip instructions with index < n (with-body instructions
     // that have been extracted into a closure).
     let mut skip_until: Option<usize> = None;
@@ -900,6 +904,7 @@ fn run_translation_loop(
                 fb.switch_to_block(block);
                 stack.clear();
                 compound_2d_pending = false;
+                pushac_array = None;
                 if let Some(params) = block_params.get(&inst.offset) {
                     for &p in params {
                         // Block params are Variable-sized (16 bytes = 4 units).
@@ -1002,6 +1007,7 @@ fn run_translation_loop(
             block_entry_depths,
             &mut gml_sizes,
             &mut compound_2d_pending,
+            &mut pushac_array,
         )?;
     }
 
@@ -1187,10 +1193,11 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
         Opcode::Break => {
             if let Operand::Break { signal, .. } = inst.operand {
                 match signal {
-                    0xFFFF | 0xFFFC => (0, 0),            // chkindex, pushac
+                    0xFFFF => (0, 0),                     // chkindex
+                    0xFFFC => (1, 0),                     // pushac — captures array ref (pops 1)
                     0xFFFB => (1, 0),                     // setowner — pops owner ID
                     0xFFFE => (2, 1),                     // pushaf
-                    0xFFFD => (3, 0),                     // popaf
+                    0xFFFD => (2, 0),                     // popaf — pops value + index (array from pushac)
                     0xFFF6 => (0, 1),                     // chknullish — pushes boolean
                     0xFFF5 => (0, 1),                     // pushref — pushes function ref
                     0xFFFA => (0, 1),                     // isstaticok — pushes boolean
@@ -1312,6 +1319,7 @@ fn translate_instruction(
     block_entry_depths: &HashMap<usize, usize>,
     gml_sizes: &mut HashMap<ValueId, u8>,
     compound_2d_pending: &mut bool,
+    pushac_array: &mut Option<ValueId>,
 ) -> Result<(), String> {
     match inst.opcode {
         // ============================================================
@@ -1550,37 +1558,12 @@ fn translate_instruction(
                 if dup_extra != 0 && inst.type1 == DataType::Variable && dup_size == 0 {
                     // no-op
                 } else if dup_extra != 0 && dup_size > 0 {
-                    // Dup Swap mode: rearranges stack data without duplicating.
-                    // Pop `dup_size * type_unit` units from top, then `dup_extra * type_unit`
-                    // units from below, then push top back, then push bottom.
-                    // Net effect on item count: 0 (just reorders).
-                    let type_unit = gml_slot_units(inst.type1) as usize;
-                    let top_units_needed = dup_size * type_unit;
-                    let bottom_units_needed = dup_extra as usize * type_unit;
-
-                    // Pop top data
-                    let mut top_items = Vec::new();
-                    let mut top_units = 0;
-                    while top_units < top_units_needed && !stack.is_empty() {
-                        let v = stack.pop().unwrap();
-                        top_units += gml_sizes.get(&v).copied().unwrap_or(1) as usize;
-                        top_items.push(v);
-                    }
-                    // Pop bottom data
-                    let mut bottom_items = Vec::new();
-                    let mut bottom_units = 0;
-                    while bottom_units < bottom_units_needed && !stack.is_empty() {
-                        let v = stack.pop().unwrap();
-                        bottom_units += gml_sizes.get(&v).copied().unwrap_or(1) as usize;
-                        bottom_items.push(v);
-                    }
-                    // Push top back first, then bottom (reverses order)
-                    for &v in top_items.iter().rev() {
-                        stack.push(v);
-                    }
-                    for &v in bottom_items.iter().rev() {
-                        stack.push(v);
-                    }
+                    // Dup Swap mode: in the GML VM this reorders raw bytes on the stack
+                    // to align multi-byte Variable-type values for popaf's fixed-size
+                    // semantics.  Our IR decompiler uses one ValueId per logical value
+                    // regardless of byte size, so the items are already in the correct
+                    // order for the subsequent pushaf/popaf — no reorder needed.
+                    // Treating this as a no-op produces correct IR.
                 } else {
                     // Normal dup: duplicate (dup_size + 1) * type_unit units from stack top.
                     let type_unit = gml_slot_units(inst.type1) as usize;
@@ -1757,19 +1740,29 @@ fn translate_instruction(
                         stack.push(val);
                     }
                     0xFFFD => {
-                        // popaf — array set
+                        // popaf — array set.
+                        // The array reference was captured by the preceding pushac.
+                        // Pop value (top) and index; use the pushac-stored array.
                         let value = pop(stack, inst)?;
                         let index = pop(stack, inst)?;
-                        let array = pop(stack, inst)?;
+                        let array = pushac_array.take().unwrap_or_else(|| {
+                            pop(stack, inst).unwrap_or_else(|_| fb.const_int(-6))
+                        });
                         fb.set_index(array, index, value);
                     }
                     0xFFFC => {
-                        // pushac — array copy (push reference)
-                        // For decompilation, treat as a nop (value already on stack).
+                        // pushac — capture the array reference for the upcoming popaf.
+                        // GMS2.3+ uses this to anchor the array variable before the
+                        // value and index are pushed onto the stack.  We pop the
+                        // reference off the stack and stash it in pushac_array so
+                        // that popaf can retrieve it without over-popping.
+                        let arr = pop(stack, inst)?;
+                        *pushac_array = Some(arr);
                     }
                     0xFFFB => {
                         // setowner — pops the owner instance ID from the stack.
-                        let _ = pop(stack, inst)?;
+                        let owner = pop(stack, inst)?;
+                        let _ = owner;
                     }
                     0xFFFA => {
                         // isstaticok — static init guard. Pushes true if statics
