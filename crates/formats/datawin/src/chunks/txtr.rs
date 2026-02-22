@@ -92,12 +92,20 @@ impl Txtr {
             return None;
         }
 
-        // Find end: next texture's data_offset, or end of file
+        // Find end: next texture's data_offset, or end of file.
+        // In GMS2.3+ games with external textures, data_offset points into an
+        // external .png file rather than into the data.win blob. The next entry's
+        // data_offset may be 0 or smaller than start, making the slice invalid.
+        // Return None in that case — the caller will treat the texture as absent.
         let end = self
             .textures
             .get(index + 1)
             .map(|next| next.data_offset as usize)
             .unwrap_or(data.len());
+
+        if end < start || end > data.len() {
+            return None;
+        }
 
         Some(&data[start..end])
     }
