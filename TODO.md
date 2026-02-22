@@ -275,6 +275,45 @@ improve output fidelity:
   while→for promotions. Remaining while-loops use class fields, parameters,
   pre-increment patterns, or complex multi-step increments.
 
+## GameMaker — Version-Gating Audit (HIGH PRIORITY)
+
+The GML frontend does not pass `BytecodeVersion` to any translator, decoder, or rewrite.
+Every behavior runs unconditionally regardless of whether the game is GMS1, GMS2, or GMS2.3+.
+Many behaviors are version-specific and applying them to the wrong version can produce silent
+wrong output. The `BytecodeVersion` is already extracted from GEN8 and available on `DataWin`
+(`dw.bytecode_version()`). It needs to be threaded into `TranslateCtx` and all relevant code
+paths that make version-sensitive decisions.
+
+**What to audit** — every file under `crates/frontends/reincarnate-frontend-gamemaker/src/`:
+
+- [ ] **`lib.rs`** — `gml_GlobalScript_` skip (added for GMS2.3+ migration pattern; safe for
+  GMS1/GMS2 since those games don't have `gml_GlobalScript_*` CODE entries in SCPT, but should
+  be documented and guarded with a version assertion). Also: FUNC chunk translation, GLOB chunk
+  translation, `scan_code_refs` — all may need version guards.
+
+- [ ] **`decode.rs`** — Dup swap mode no-op (`dup_extra != 0` branch), Break signal decoding
+  (signals -10/-11 etc. are GMS2.3+ only; older games don't have them). The `DataType` and
+  `OpCode` decoding may differ between v14 and v15+ instruction formats — confirm `has_new_instruction_format` is respected.
+
+- [ ] **`translate.rs`** — All code that assumes GMS2.3+ behaviour:
+  - Shared bytecode blobs (`filter_reachable`) — only needed for GMS2.3+ shared CODE entries
+  - `scan_body_argument_indices` + `argument` captures in with-body — may not apply to GMS1 where `argument` is always global
+  - `InstanceType::Stacktop` (-9) as struct method self-reference — GMS2.3+ construct; in GMS1 `-9` is always a genuine stack pop
+  - `args_count & 0x7FFF` masking — 0x8000 flag meaning differs between versions
+  - Negative instance IDs below -9 (e.g. -16 for `Arg`) — confirm range is version-stable
+
+- [ ] **`object.rs`** — Event type encoding may differ between GMS1 and GMS2; object/event
+  structure differences (e.g. `persistent`, `visible` fields, parent indices).
+
+- [ ] **`data.rs`** — Sprite/texture/audio asset structures differ between versions. TXTR
+  external textures (GMS2.3+), SEQN/TAGS/ACRV/FEDS chunks — guard against parsing these on
+  older versions.
+
+**Action**: Add `bytecode_version: BytecodeVersion` to `TranslateCtx`; add version-check
+helper methods (`is_gms23_plus()`, `is_gms2_plus()`) to `BytecodeVersion`; replace any
+implicit version assumptions with explicit version guards. Log a warning when a GMS2.3+ feature
+is detected on a game that reports an older version.
+
 ## GameMaker — New Game Failures (discovered 2026-02-22)
 
 Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
