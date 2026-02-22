@@ -620,3 +620,187 @@ and add it to `~/reincarnate/twine/`.
 
 
 
+## GameMaker Bounty Translation - Critical Bugs Found
+
+**Session**: 2026-02-22, Tasks aa921b7, af2a8dd, ac9cd85, aae3079, a25da28, ab19d82
+
+Comprehensive semantic comparison against reference decompilation (`~/git/bounty/`) revealed **35+ bugs** across GameMaker Bounty translation. Organized by severity and root cause.
+
+### CRITICAL ISSUES (immediate blockers)
+
+#### 1. 2D Array Stride Calculation - BROKEN
+- **Affected**: `inventory_add()`, `save_game()`, `load_game()`, `inventory_exist()`
+- **Issue**: Uses incorrect magic constant `32000` for 2D array stride
+  - Reference: `inventory[i][0]` and `inventory[i][1]`
+  - Generated: `inventory[(int(i) * 32000) + 0]` and `inventory[(int(i) * 32000) + 1]`
+- **Impact**: All inventory operations access wrong memory locations
+- **Root cause**: Misunderstanding of how GameMaker 2D arrays flatten to 1D storage
+
+#### 2. inventory_add() - SEVERELY CORRUPTED
+- **Code**: `self.inventory[self.inventory[(int(i)*32000)+1]+argument1] = 3`
+- **Should be**: `obj_stats.inventory[i][1] += argument1`
+- **Impact**: Double array indexing with nonsensical nesting — game crash on item pickup/drop
+- **Cascades from**: 2D array stride bug above
+
+#### 3. do_gangbang_encounter() - MISSING ENTIRELY
+- **Size**: 488 lines
+- **Impact**: Major game mechanic completely absent — breaks core gameplay
+- **File**: Should be in function definitions but is omitted entirely
+
+#### 4. save_game() - INCOMPLETE IMPLEMENTATION
+- **Missing fields** (~13 INI writes):
+  - Character name
+  - Appearance: eye_color, skin_color, height, weight, hair_color, hair_length, hair_straightness, hair_style, other, racial
+  - Stats: o_prostitution, o_self_defense
+- **Impact**: Game saves lose all character customization data
+- **Results in**: Save/load cycle erases player-created character appearance
+
+#### 5. Stats Object - BROKEN INITIALIZATION
+- **Missing field initializations**:
+  - 6 boolean negotiate_* fields (negotiate_v, negotiate_inside_v, negotiate_a, negotiate_inside_a, negotiate_o, negotiate_inside_o)
+  - 2 stat fields: o_prostitution=2, o_self_defense=2
+  - 12 appearance fields: a_eye_color through a_hair_style
+- **Missing event handlers**: user0() [sets hspeed=0], user1() [sets vspeed=0]
+- **Missing keypress handlers**: 65, 67, 70, 72, 76, 77, 120 (debug commands)
+- **CRITICAL BUG in array initialization**:
+  ```typescript
+  let i: number = 0;
+  while (true) {
+    i = i < 20;  // Assigns BOOLEAN (true/false) to i!
+    if (!i) { break; }
+    this.advantages[int(i)] = "None";
+    i += 1;  // Now i is NaN or becomes 1 forever
+  }
+  ```
+  This breaks the loop entirely — advantages array never initializes properly.
+- **Impact**: Stats object incomplete; player has no appearance data; debug features inaccessible
+
+#### 6. EquipReader.step() - SELF-ASSIGNMENT BUG
+- **Reference**: Reads from button instance `obj_equip_reader.type = self.type`
+- **Generated**: `this.type = this.type` (no-op self-assignment)
+- **Impact**: Equipment reader never updates when button is clicked — equipment screen stuck
+
+#### 7. GeneralEnd.step() - INCOMPLETE FLOW
+- **Missing after Stats destruction**:
+  1. `instance_create(0, 0, obj_stats)` - never creates replacement Stats instance
+  2. `room_goto(Rooms.rm_start)` - never navigates to start room
+- **Impact**: Game appears to hang after attempting End Game
+
+#### 8. Location.create() - INVERTED SCROLL LOGIC
+- **Reference**: Sets `scroll = true` only when text exceeds 440 pixels
+- **Generated**: Always sets `scroll = 1` unconditionally
+- **Also**: Missing debug condition check: should only show debug text when `instance_exists(obj_location_scroll) && obj_stats.debug`, TS omits `debug` check
+- **Impact**: Location descriptions display incorrectly; debug info shows when it shouldn't
+
+#### 9. LocationStore.create() - MISSING CLEANUP
+- **Missing**: `instance_destroy()` call at end of function
+- **Impact**: LocationStore instance persists in room indefinitely (memory leak, UI duplicate)
+
+#### 10. Main.step() - MISSING DEBUG CLEANUP
+- **Missing**: Entire condition block that destroys MainDebug instances when `!obj_stats.debug`
+- **Impact**: Debug UI persists on screen even when debug mode disabled
+
+### MAJOR ISSUES (high severity)
+
+#### 11. ConfigMain.create() - LOOP MALFUNCTION
+- **Issue**: Loop creates only 1 Dice instance instead of 6; missing "Dice Size" button call
+- **Loop creates**: `Dice id=1` with hardcoded image scaling to 0
+- **Should create**: 6 Dice instances from loop with proper scaling from `obj_stats.dice_size`
+- **Missing button**: "Dice Size" button never created (should be between "Dice Type" and "Window Outline")
+- **Impact**: Config screen incomplete; dice subsystem broken
+
+#### 12. Dice.create() - CASE 5 EARLY RETURN
+- **Issue**: Case 5 has spurious `return` statement cutting off code:
+  ```typescript
+  case 5:
+    this.sprite_index = Sprites.D10;
+    return;  // <-- exits here, never reaches:
+  ```
+- **Missing assignments**: image_xscale and image_yscale never set for case 5
+- **Impact**: D10 dice doesn't scale properly
+
+#### 13. Encounter.create() - MULTIPLE CONTROL FLOW ERRORS
+- **Issues**:
+  1. Mood/hygiene display logic inverted: always shows "-" instead of checking sign
+  2. Switch statement for danger level has wrong case assignments and missing breaks
+  3. Complex nested conditions malformed during translation
+- **Impact**: Encounter display and logic severely broken
+
+#### 14. StatusAdv.step() - SPURIOUS EARLY RETURN
+- **Code**:
+  ```typescript
+  if (advantage_exist(..., "Free")) {
+    this.glow = 1;
+  } else {
+    this.glow = 0;
+    return;  // <-- WRONG! Exits handler early
+  }
+  ```
+- **Should**: Continue executing after setting glow=0
+- **Impact**: Step logic aborted prematurely when glow=false
+
+#### 15. StoreButton.step() - MALFORMED CONDITION
+- **Reference**: `self.pressed === MouseButtons.left && !self.locked`
+- **Generated**: `(this.pressed === 2) ? (this.locked === 0) : v30`
+- **Issue**: Ternary operator doesn't preserve AND logic — second operand only checked if first is true (wrong precedence)
+- **Impact**: Button click detection broken when locked state changes
+
+#### 16. AdvMain.create() - LOGIC REDUCTION
+- **Reference**: if-else branches with clear logic flow
+- **Generated**: Complex conditions converted to `&&` incorrectly
+- **Impact**: Advantage selection logic broken
+
+#### 17. AdvMainCreation.create() - OVERSIMPLIFIED CONDITION
+- **Reference**: 6-part OR condition checking multiple advantage/race combinations
+- **Generated**: Reduced to single condition `if (this.advantages[0] === "None")`
+- **Impact**: Character creation missing major logic paths
+
+### MODERATE ISSUES
+
+#### 18. roll_d6() - HARDCODED Y COORDINATE
+- **Reference**: Y position scales with dice size: `480 - 20 * size`
+- **Generated**: Hardcoded to `460` (loses scaling)
+- **Impact**: Dice position incorrect when size changes
+
+#### 19. DataLoad.step() & DataSave.step() - MISSING LOCKED CHECK
+- **Issue**: Missing `!self.locked` condition check
+- **Impact**: Data load/save can execute even when UI locked
+
+#### 20. DayBegin.create() - FUNCTION CALL REPLACEMENT
+- **Reference**: Calls `stat_low()` function to determine hygiene level
+- **Generated**: Uses hardcoded comparison `> 70` and `> 40`
+- **Impact**: Different encounter branching logic
+
+### Statistics
+
+- **Total files affected**: 30+
+- **Functions with bugs**: 15+
+- **Objects with bugs**: 18+
+- **Logic errors**: 6
+- **Missing code blocks**: 4
+- **Self-assignment bugs**: 2
+- **Loop/initialization bugs**: 2
+- **Array indexing bugs**: 2
+- **Missing event handlers**: 8+
+- **Missing field initializations**: 15+
+
+### Root Cause Categories
+
+1. **2D Array Flattening** (3 bugs) — Incorrect stride calculation cascades through inventory system
+2. **Control Flow Transformation** (5 bugs) — if-else/&&/ternary operators incorrectly converted
+3. **Missing Code Sections** (4 bugs) — Entire functions or blocks omitted during translation
+4. **Self-Assignment Errors** (2 bugs) — Instance iteration variables confused with loop targets
+5. **Early Returns** (2 bugs) — Spurious return statements in conditional branches
+6. **Incomplete Initialization** (8+ bugs) — Fields/handlers/events not declared during object creation
+7. **Logic Inversion** (2 bugs) — Boolean conditions or comparison operators flipped
+
+### Action Items
+
+1. **URGENT**: Fix 2D array stride constant in GML translator
+2. **URGENT**: Add `do_gangbang_encounter()` function
+3. **URGENT**: Complete `save_game()` with all character fields
+4. **HIGH**: Fix `Stats` initialization loop and missing fields
+5. **HIGH**: Fix control flow bugs (EquipReader, Encounter, Location, etc.)
+6. **HIGH**: Add missing instance cleanup (`instance_destroy`, debug UI destruction)
+7. **MEDIUM**: Add missing event handlers (user0, user1, keypress handlers)
+8. **MEDIUM**: Fix loop/array initialization issues
