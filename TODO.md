@@ -343,29 +343,40 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   synthetic local (`_local_neg6`). Root cause is likely a negative local variable offset in the
   GML bytecode that isn't in our name map.
 
+### 7. Dead Estate regression — 102k TS errors since with-body closures
+
+- [ ] **Dead Estate was at 0 TS errors, now ~102k** — regression introduced by
+  `feat(gml): extract with-bodies as closures in the IR` (commit 7c4dc61). The errors are
+  `TS7053: Element implicitly has an 'any' type because expression of type '"fieldName"' can't
+  be used to index type 'Number'` — struct field accesses on values typed as `Number`. Root
+  cause is likely that some value that was previously `any` is now inferred as `number` due to
+  how captures interact with type inference, or a struct access target is being resolved to the
+  wrong local slot. Investigate by bisecting between `7c4dc61~1` and the current state.
+
 ### New game inventory
 
 | Game | Source | Status |
 |------|--------|--------|
-| 10 Second Ninja X | `data.win` 134MB | ❌ `argument` in with-body |
-| 12 is Better Than 6 | `game.unx` 179MB | ❌ `argument` in with-body |
+| 10 Second Ninja X | `data.win` 134MB | ⚠️ emits (TS errors TBD) |
+| 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
+| Dead Estate | `data.win` 192MB | ⚠️ 102k TS errors (regression from with-body closures) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
 | Max Manos | `data.win` 47MB | ⚠️ 2 TS errors (local var pop raw index) |
 | Max Manos 2 | `data.win` 10MB | ⚠️ 4 TS errors (local var pop raw index) |
-| MINDWAVE Demo | `data.win` 324MB | ⚠️ 6 TS errors (sprite bracket notation) |
+| MINDWAVE Demo | `data.win` 324MB | ⚠️ ~26k TS errors (runtime API gaps) |
 | Momodora RUtM | `.exe` 36MB | ❌ PE-embedded FORM |
 | Nova Drift | `data.win` 415MB | ❌ YYC |
-| Nubby's Number Factory | `data.win` 66MB | ⚠️ 6 TS errors (sprite bracket notation) |
+| Nubby's Number Factory | `data.win` 66MB | ⚠️ ~77k TS errors (runtime API gaps) |
 | Risk of Rain | `game.unx` 34MB | ❌ YYC (empty CODE chunk) |
 | Rocket Rats | `data.win` 2MB | ❌ YYC |
-| Schism | `data.win` 77MB | ❌ `argument` in with-body |
+| Schism | `data.win` 77MB | ⚠️ emits (TS errors TBD) |
 | Shelldiver | `data.win` 2MB | ❌ YYC |
 | Soulknight Survivor | `data.win` 35MB | ❌ YYC |
-| VA-11 HALL-A | `game.unx` 212MB | ❌ `argument` in with-body |
+| VA-11 HALL-A | `game.unx` 212MB | ⚠️ emits (TS errors TBD) |
 
 ---
 
