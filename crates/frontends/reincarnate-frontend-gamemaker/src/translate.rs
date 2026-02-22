@@ -686,6 +686,17 @@ fn scan_body_local_names(body_insts: &[Instruction], ctx: &TranslateCtx<'_>) -> 
     names
 }
 
+/// Return true if any VARI instruction in `body_insts` uses `InstanceType::Other`.
+/// Used to decide whether to capture the outer self for `other.field` access.
+fn scan_body_uses_other(body_insts: &[Instruction], _ctx: &TranslateCtx<'_>) -> bool {
+    body_insts.iter().any(|inst| {
+        matches!(&inst.operand,
+            Operand::Variable { instance, .. }
+                if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Other))
+        )
+    })
+}
+
 /// Create IR blocks for a set of instructions, skipping with-body offsets.
 ///
 /// Returns `(block_map, block_params, block_entry_depths)`.
@@ -747,6 +758,7 @@ fn translate_with_body(
     inner_name: &str,
     ctx: &TranslateCtx<'_>,
     captured_names: &[String],
+    has_outer_self: bool,
     extra_funcs: &mut Vec<Function>,
 ) -> Result<Function, String> {
     use reincarnate_core::ir::ty::FunctionSig;
@@ -789,7 +801,7 @@ fn translate_with_body(
     // Inner context: same VARI/FUNC tables but no declared args, class-typed self.
     let inner_ctx = TranslateCtx {
         has_self: true,
-        has_other: false,
+        has_other: has_outer_self,
         arg_count: 0,
         class_name: None,
         function_names: ctx.function_names,
@@ -904,21 +916,37 @@ fn run_translation_loop(
                 let body_insts = &instructions[inst_idx + 1..popenv_idx];
 
                 // Determine which outer locals the body needs to capture.
-                let captured_names = scan_body_local_names(body_insts, ctx);
-                let capture_vals: Vec<ValueId> = captured_names
-                    .iter()
-                    .map(|name| {
-                        let &slot = locals
-                            .get(name)
-                            .expect("captured local must have an alloc slot");
-                        fb.load(slot, Type::Dynamic)
-                    })
-                    .collect();
+                let scanned_names = scan_body_local_names(body_insts, ctx);
+                // If the outer context has a self and the body accesses `other`, capture
+                // the outer self as _other (prepended so it becomes the first capture param).
+                let has_outer_self =
+                    ctx.has_self && scan_body_uses_other(body_insts, ctx);
+                let mut captured_names: Vec<String> = Vec::new();
+                let mut capture_vals: Vec<ValueId> = Vec::new();
+                if has_outer_self {
+                    captured_names.push("_other".to_string());
+                    // Outer self is always param 0 (both for regular event handlers and
+                    // nested with-bodies where param 0 is the current iterated _self).
+                    capture_vals.push(fb.param(0));
+                }
+                for name in &scanned_names {
+                    captured_names.push(name.clone());
+                    let &slot = locals
+                        .get(name)
+                        .expect("captured local must have an alloc slot");
+                    capture_vals.push(fb.load(slot, Type::Dynamic));
+                }
 
                 // Build the inner closure function (may recursively extract nested withs).
                 let inner_name = format!("{func_name}_with_{:04x}", inst.offset);
-                let inner_func =
-                    translate_with_body(body_insts, &inner_name, ctx, &captured_names, extra_funcs)?;
+                let inner_func = translate_with_body(
+                    body_insts,
+                    &inner_name,
+                    ctx,
+                    &captured_names,
+                    has_outer_self,
+                    extra_funcs,
+                )?;
                 extra_funcs.push(inner_func);
 
                 // Emit: withInstances(target, closure)
