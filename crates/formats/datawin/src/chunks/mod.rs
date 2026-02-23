@@ -1,4 +1,5 @@
 pub mod audo;
+pub mod bgnd;
 pub mod code;
 pub mod font;
 pub mod func;
@@ -9,6 +10,7 @@ pub mod objt;
 pub mod optn;
 pub mod room;
 pub mod scpt;
+pub mod shdr;
 pub mod sond;
 pub mod sprt;
 pub mod tpag;

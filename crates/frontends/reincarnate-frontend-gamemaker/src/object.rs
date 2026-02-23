@@ -15,6 +15,7 @@ pub fn translate_objects(
     dw: &DataWin,
     code: &datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
+    asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
@@ -104,6 +105,7 @@ pub fn translate_objects(
                         crate::resolve_local_names(locals, dw.data());
                     let ctx = TranslateCtx {
                         function_names,
+                        asset_ref_names,
                         variables,
                         func_ref_map,
                         vari_ref_map,

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::chunks::audo::Audo;
+use crate::chunks::bgnd::Bgnd;
 use crate::chunks::code::Code;
 use crate::chunks::font::Font;
 use crate::chunks::func::Func;
@@ -12,6 +13,7 @@ use crate::chunks::objt::Objt;
 use crate::chunks::optn::Optn;
 use crate::chunks::room::Room;
 use crate::chunks::scpt::Scpt;
+use crate::chunks::shdr::Shdr;
 use crate::chunks::sond::Sond;
 use crate::chunks::sprt::Sprt;
 use crate::chunks::tpag::Tpag;
@@ -210,6 +212,24 @@ impl DataWin {
             Sprt::parse(chunk_data, &self.data)
         })?;
         Ok(self.cached(b"SPRT"))
+    }
+
+    /// BGND chunk (background/tileset definitions). Returns `Err` if not present.
+    pub fn bgnd(&self) -> Result<&Bgnd> {
+        self.get_or_parse(b"BGND", || {
+            let chunk_data = self.index.chunk_data(&self.data, b"BGND")?;
+            Bgnd::parse(chunk_data, &self.data)
+        })?;
+        Ok(self.cached(b"BGND"))
+    }
+
+    /// SHDR chunk (shader definitions). Returns `Err` if not present.
+    pub fn shdr(&self) -> Result<&Shdr> {
+        self.get_or_parse(b"SHDR", || {
+            let chunk_data = self.index.chunk_data(&self.data, b"SHDR")?;
+            Shdr::parse(chunk_data, &self.data)
+        })?;
+        Ok(self.cached(b"SHDR"))
     }
 
     /// TPAG chunk (texture page items).

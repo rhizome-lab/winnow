@@ -28,6 +28,7 @@ pub fn generate_data_files(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: 
     generate_fonts(dw, catalog);
     generate_rooms(dw, catalog, obj_names);
     generate_objects(catalog, obj_names);
+    generate_asset_ids(dw, catalog);
 }
 
 /// Generate `data/textures.ts` from TPAG entries.
@@ -283,6 +284,89 @@ fn generate_objects(catalog: &mut AssetCatalog, obj_names: &[String]) {
         kind: AssetKind::Data,
         original_name: "objects".into(),
         path: PathBuf::from("data/objects.ts"),
+        size: out.len() as u64,
+        data: out.into_bytes(),
+    });
+}
+
+/// Generate `data/asset_ids.d.ts` — ambient declarations for all named GML assets.
+///
+/// GML code references asset names (sprites, sounds, fonts, shaders, etc.) as
+/// bare identifiers (e.g. `spr_player`, `snd_jump`). In the lifted TypeScript these
+/// become global constant references that need `declare const` declarations so the
+/// TypeScript compiler knows they exist and have type `number`.
+fn generate_asset_ids(dw: &DataWin, catalog: &mut AssetCatalog) {
+    let mut out = String::new();
+    out.push_str("// GML asset ID declarations — auto-generated, do not edit.\n");
+    out.push_str("// Each constant is the numeric asset index used by the GameMaker runtime.\n\n");
+
+    // Helper: emit `declare const <name>: number;` for each resolved name.
+    let mut emit_group = |label: &str, names: Vec<String>| {
+        if names.is_empty() {
+            return;
+        }
+        let _ = writeln!(out, "// {label}");
+        for name in &names {
+            if is_valid_js_ident(name) {
+                let _ = writeln!(out, "declare const {name}: number;");
+            }
+        }
+        out.push('\n');
+    };
+
+    // Sprites.
+    let sprite_names: Vec<String> = dw.sprt()
+        .map(|sprt| {
+            sprt.sprites.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Sprites", sprite_names);
+
+    // Sounds.
+    let sound_names: Vec<String> = dw.sond()
+        .map(|sond| {
+            sond.sounds.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Sounds", sound_names);
+
+    // Backgrounds.
+    let bgnd_names: Vec<String> = dw.bgnd()
+        .map(|bgnd| {
+            bgnd.backgrounds.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Backgrounds", bgnd_names);
+
+    // Fonts.
+    let font_names: Vec<String> = dw.font()
+        .map(|font| {
+            font.fonts.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Fonts", font_names);
+
+    // Shaders.
+    let shdr_names: Vec<String> = dw.shdr()
+        .map(|shdr| {
+            shdr.shaders.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Shaders", shdr_names);
+
+    // Rooms.
+    let room_names: Vec<String> = dw.room()
+        .map(|room| {
+            room.rooms.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+        })
+        .unwrap_or_default();
+    emit_group("Rooms", room_names);
+
+    catalog.add(Asset {
+        id: "data_asset_ids".into(),
+        kind: AssetKind::Data,
+        original_name: "asset_ids".into(),
+        path: PathBuf::from("data/asset_ids.d.ts"),
         size: out.len() as u64,
         data: out.into_bytes(),
     });

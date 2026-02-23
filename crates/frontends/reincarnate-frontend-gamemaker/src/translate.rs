@@ -15,6 +15,10 @@ use reincarnate_core::ir::value::{Constant, ValueId};
 pub struct TranslateCtx<'a> {
     /// FUNC function entries: entry_index → resolved name.
     pub function_names: &'a HashMap<u32, String>,
+    /// GMS2.3+ pushref asset name map: (type_tag << 24) | asset_idx → raw GML name.
+    /// Built from SPRT (type 1), SOND (type 2), BGND (type 3), SCPT (type 5),
+    /// FONT (type 6), SHDR (type 8), ROOM (type 9).
+    pub asset_ref_names: &'a HashMap<u32, String>,
     /// VARI variable entries: entry_index → (name, instance_type).
     pub variables: &'a [(String, i32)],
     /// FUNC linked-list reference map: absolute bytecode address → func entry index.
@@ -929,6 +933,7 @@ fn translate_with_body(
         arg_count: 0,
         class_name: None,
         function_names: ctx.function_names,
+        asset_ref_names: ctx.asset_ref_names,
         variables: ctx.variables,
         func_ref_map: ctx.func_ref_map,
         vari_ref_map: ctx.vari_ref_map,
@@ -1938,8 +1943,15 @@ fn translate_instruction(
                         // Fall back to func_ref_map (for GMS1 compatibility) and
                         // then to a placeholder.
                         let func_name = if let Operand::Break { extra: Some(idx), .. } = inst.operand {
-                            ctx.function_names.get(&(idx as u32))
-                                .cloned()
+                            let key = idx as u32;
+                            let type_tag = key >> 24;
+                            if type_tag == 0 {
+                                // Type 0: direct FUNC index.
+                                ctx.function_names.get(&key).cloned()
+                            } else {
+                                // Non-zero type tag: look up named asset (sprite, sound, font, etc.).
+                                ctx.asset_ref_names.get(&key).cloned()
+                            }
                         } else {
                             None
                         }
@@ -2688,6 +2700,9 @@ mod tests {
     use datawin::bytecode::types::{DataType, VariableRef};
     use reincarnate_core::ir::inst::Op;
 
+    static EMPTY_ASSET_REF_NAMES: std::sync::LazyLock<HashMap<u32, String>> =
+        std::sync::LazyLock::new(HashMap::new);
+
     /// Build a minimal `TranslateCtx` for tests.
     ///
     /// `bytecode_offset = 0` so vari_ref_map keys equal decoded instruction offsets.
@@ -2704,6 +2719,7 @@ mod tests {
     ) -> TranslateCtx<'a> {
         TranslateCtx {
             function_names,
+            asset_ref_names: &EMPTY_ASSET_REF_NAMES,
             variables,
             func_ref_map,
             vari_ref_map,

@@ -96,9 +96,12 @@ impl Frontend for GameMakerFrontend {
         // Build code-name → index map for GMS2.3+ constructor script lookup.
         let code_name_map = build_code_name_map(&dw, code);
 
+        // Build GMS2.3+ pushref asset name map: (type_tag << 24) | idx → raw GML name.
+        let asset_ref_names = build_asset_ref_names(&dw, scpt);
+
         // Translate scripts.
         let (script_ok, script_err) =
-            translate_scripts(&dw, code, scpt, &code_name_map, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &input, &obj_names, &script_names)?;
+            translate_scripts(&dw, code, scpt, &code_name_map, &function_names, &asset_ref_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &input, &obj_names, &script_names)?;
         eprintln!("[gamemaker] translated {script_ok} scripts ({script_err} errors)");
 
         // Translate objects → ClassDefs with event handler methods.
@@ -106,6 +109,7 @@ impl Frontend for GameMakerFrontend {
             &dw,
             code,
             &function_names,
+            &asset_ref_names,
             &variables,
             &func_ref_map,
             &vari_ref_map,
@@ -123,7 +127,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate global init scripts (GLOB chunk).
         let glob_count = translate_global_inits(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
+            &dw, code, &function_names, &asset_ref_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
         );
         if glob_count > 0 {
             eprintln!("[gamemaker] translated {glob_count} global init scripts");
@@ -131,7 +135,7 @@ impl Frontend for GameMakerFrontend {
 
         // Translate room creation code.
         let (room_count, room_creation_code) = translate_room_creation(
-            &dw, code, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
+            &dw, code, &function_names, &asset_ref_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &obj_names, &script_names,
         );
         if room_count > 0 {
             eprintln!("[gamemaker] translated {room_count} room creation scripts");
@@ -170,6 +174,7 @@ fn translate_scripts(
     scpt: &datawin::chunks::scpt::Scpt,
     code_name_map: &HashMap<String, usize>,
     function_names: &HashMap<u32, String>,
+    asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
@@ -250,6 +255,7 @@ fn translate_scripts(
 
         let ctx = TranslateCtx {
             function_names,
+            asset_ref_names,
             variables,
             func_ref_map,
             vari_ref_map,
@@ -291,6 +297,7 @@ fn translate_global_inits(
     dw: &DataWin,
     code: &datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
+    asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
@@ -323,6 +330,7 @@ fn translate_global_inits(
 
         let ctx = TranslateCtx {
             function_names,
+            asset_ref_names,
             variables,
             func_ref_map,
             vari_ref_map,
@@ -360,6 +368,7 @@ fn translate_room_creation(
     dw: &DataWin,
     code: &datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
+    asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
@@ -396,6 +405,7 @@ fn translate_room_creation(
 
         let ctx = TranslateCtx {
             function_names,
+            asset_ref_names,
             variables,
             func_ref_map,
             vari_ref_map,
@@ -636,4 +646,87 @@ fn strip_script_prefix(name: &str) -> &str {
     name.strip_prefix("gml_GlobalScript_")
         .or_else(|| name.strip_prefix("gml_Script_"))
         .unwrap_or(name)
+}
+
+/// Build the GMS2.3+ pushref asset name map.
+///
+/// In GMS2.3+, the `Break -11` (pushref) instruction's `extra` field encodes both
+/// an asset type tag and an asset index as `(type_tag << 24) | asset_index`:
+///
+///   Type 0 → FUNC entries (handled separately via `function_names`)
+///   Type 1 → SPRT sprites
+///   Type 2 → SOND sounds
+///   Type 3 → BGND backgrounds
+///   Type 5 → SCPT scripts (functions, handled separately)
+///   Type 6 → FONT fonts
+///   Type 8 → SHDR shaders
+///   Type 9 → ROOM rooms
+///
+/// Returns a map of `(type_tag << 24) | asset_index → raw GML asset name`.
+fn build_asset_ref_names(dw: &DataWin, scpt: &datawin::chunks::scpt::Scpt) -> HashMap<u32, String> {
+    let mut map = HashMap::new();
+
+    // Type 1: sprites.
+    if let Ok(sprt) = dw.sprt() {
+        for (i, entry) in sprt.sprites.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((1u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    // Type 2: sounds.
+    if let Ok(sond) = dw.sond() {
+        for (i, entry) in sond.sounds.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((2u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    // Type 3: backgrounds.
+    if let Ok(bgnd) = dw.bgnd() {
+        for (i, entry) in bgnd.backgrounds.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((3u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    // Type 5: scripts (referenced as integer IDs, not as function calls).
+    for (i, entry) in scpt.scripts.iter().enumerate() {
+        if let Ok(name) = dw.resolve_string(entry.name) {
+            let clean = strip_script_prefix(&name).to_string();
+            map.insert((5u32 << 24) | i as u32, clean);
+        }
+    }
+
+    // Type 6: fonts.
+    if let Ok(font) = dw.font() {
+        for (i, entry) in font.fonts.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((6u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    // Type 8: shaders.
+    if let Ok(shdr) = dw.shdr() {
+        for (i, entry) in shdr.shaders.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((8u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    // Type 9: rooms.
+    if let Ok(room) = dw.room() {
+        for (i, entry) in room.rooms.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert((9u32 << 24) | i as u32, name);
+            }
+        }
+    }
+
+    map
 }
