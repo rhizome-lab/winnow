@@ -1920,13 +1920,27 @@ fn translate_instruction(
                     }
                     0xFFF5 => {
                         // pushref — push function reference onto stack.
-                        // The extra Int32 operand is part of the FUNC reference chain.
-                        // Resolve the function name the same way Call does.
-                        let abs_addr = ctx.bytecode_offset + inst.offset;
-                        let func_name = ctx.func_ref_map.get(&abs_addr)
-                            .and_then(|&idx| ctx.function_names.get(&(idx as u32)))
-                            .cloned()
-                            .unwrap_or_else(|| format!("func_ref_unknown_{:#x}", abs_addr));
+                        // The extra Int32 operand is a direct FUNC table index (not
+                        // a linked-list offset like Call operands). Look up the name
+                        // in function_names using the extra value as the index.
+                        // Fall back to func_ref_map (for GMS1 compatibility) and
+                        // then to a placeholder.
+                        let func_name = if let Operand::Break { extra: Some(idx), .. } = inst.operand {
+                            ctx.function_names.get(&(idx as u32))
+                                .cloned()
+                        } else {
+                            None
+                        }
+                        .or_else(|| {
+                            let abs_addr = ctx.bytecode_offset + inst.offset;
+                            ctx.func_ref_map.get(&abs_addr)
+                                .and_then(|&i| ctx.function_names.get(&(i as u32)))
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| {
+                            let abs_addr = ctx.bytecode_offset + inst.offset;
+                            format!("func_ref_unknown_{:#x}", abs_addr)
+                        });
                         let val = fb.global_ref(&func_name, Type::Dynamic);
                         gml_sizes.insert(val, 4); // Variable (16 bytes)
                         stack.push(val);
