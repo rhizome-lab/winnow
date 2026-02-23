@@ -2514,6 +2514,7 @@ fn emit_function(
             .map(|t| t.name.as_str())
             .unwrap_or("GameRuntime");
         js_func.params.insert(0, ("_rt".into(), Type::Struct(rt_type_name.into())));
+        js_func.param_defaults.insert(0, None);
         let names: Vec<&str> = stateful_names.iter().map(|s| s.as_str()).collect();
         Some(format!("const {{ {} }} = _rt;", names.join(", ")))
     } else if !stateful_system_aliases.is_empty() {
@@ -2523,6 +2524,7 @@ fn emit_function(
             .map(|t| t.name.as_str())
             .unwrap_or("SugarCubeRuntime");
         js_func.params.insert(0, ("_rt".into(), Type::Struct(rt_type_name.into())));
+        js_func.param_defaults.insert(0, None);
         // If a context_type is configured, retype the first Dynamic param after `_rt`
         // (e.g. `h: any` → `h: HarloweContext`).
         if let Some(ctx_type) = runtime_config.and_then(|c| c.context_type.as_ref()) {
