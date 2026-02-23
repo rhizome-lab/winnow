@@ -255,14 +255,17 @@ generic unknown-call spam.
   variable_ref bit layout, instance_type enum, branch offset encoding.
   Lives at `crates/formats/datawin/gml_bytecode.ksy`.
 
-- [ ] **datawin fixture tests (ongoing)** — 15 synthetic fixtures covering all 20
-  chunk types now exist in `crates/formats/datawin/tests/fixtures/` (57 Rust tests,
-  validated by Kaitai). When there's time, keep expanding coverage: GMS2 TXTR entries
-  (currently only GMS1 is tested), OBJT with actual events, ROOM with object instances,
-  physics vertices, BC≥17 OBJT `_managed` field, SPRT with multiple tpag entries,
-  multi-entry FONT, etc. Each new case: add builder in `gen_fixtures.rs`, regenerate,
-  add tests in `fixture_tests.rs`, update `kaitai_validate.py`. Real-game tests in
-  `tests/read_files.rs` still provide broader coverage when run with `--include-ignored`.
+- [ ] **datawin fixture tests (ongoing — goal: 100% format coverage)** — 15 synthetic
+  fixtures covering all 20 chunk types now exist in `crates/formats/datawin/tests/fixtures/`
+  (57 Rust tests, validated by Kaitai). The goal is complete coverage of every variant the
+  format specifies: every field, every conditional branch, every version difference. Keep
+  expanding when there's time: GMS2 TXTR entries (currently only GMS1 format tested),
+  OBJT with actual events + event actions, ROOM with object instances, physics vertices,
+  BC≥17 OBJT `_managed` field, SPRT with multiple tpag entries, multi-entry FONT with
+  multiple glyphs, SEQN with GMS2.3+ full entries, etc. Each new case: add builder in
+  `gen_fixtures.rs`, regenerate (`cargo run -p datawin --bin gen_fixtures`), add tests in
+  `fixture_tests.rs`, update `kaitai_validate.py`. Real-game tests in `tests/read_files.rs`
+  still provide broader coverage when run with `--include-ignored`.
 
 ## Future
 

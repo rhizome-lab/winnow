@@ -138,9 +138,9 @@ Swap platforms by changing the re-export in `platform/index.ts` — zero runtime
 
 **Batch cargo commands** to minimize round-trips:
 ```bash
-cargo clippy --all-targets --all-features -- -D warnings && cargo test
+cargo clippy --all-targets --all-features -- -D warnings && cargo test -- --include-ignored
 ```
-After editing multiple files, run the full check once — not after each edit. Formatting is handled automatically by the pre-commit hook (`cargo fmt`).
+Always pass `--include-ignored` when running tests locally — some tests (e.g. real-game datawin tests) are gated with `#[ignore]` for CI but must pass locally. After editing multiple files, run the full check once — not after each edit. Formatting is handled automatically by the pre-commit hook (`cargo fmt`).
 
 **When making the same change across multiple crates**, edit all files first, then build once.
 
