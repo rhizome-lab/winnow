@@ -664,7 +664,7 @@ fn strip_script_prefix(name: &str) -> &str {
 ///   Type 6 → FONT fonts            (asset_font)
 ///   Type 7 → TMLN timelines        (asset_timeline)
 ///   Type 8 → SHDR shaders          (asset_shader in GMS2.3+ encoding)
-///   Type 9 → BGND backgrounds/tilesets (asset_tiles; BGND chunk may be empty in GMS2)
+///   Type 9 → SEQN sequences        (GMS2.3+ sequences; not present in GMS1)
 ///
 /// Note: empirical evidence from Dead Estate (GMS2.3+) confirms:
 ///   - type=3 used with room_goto → ROOM
@@ -727,9 +727,9 @@ fn build_asset_ref_names(dw: &DataWin, scpt: &datawin::chunks::scpt::Scpt) -> Ha
         }
     }
 
-    // Type 9: backgrounds/tilesets (BGND chunk; may be empty in GMS2 games).
-    if let Ok(bgnd) = dw.bgnd() {
-        for (i, entry) in bgnd.backgrounds.iter().enumerate() {
+    // Type 9: sequences (SEQN chunk, GMS2.3+).
+    if let Ok(Some(seqn)) = dw.seqn() {
+        for (i, entry) in seqn.sequences.iter().enumerate() {
             if let Ok(name) = dw.resolve_string(entry.name) {
                 map.insert((9u32 << 24) | i as u32, name);
             }

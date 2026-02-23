@@ -10,6 +10,7 @@ pub mod objt;
 pub mod optn;
 pub mod room;
 pub mod scpt;
+pub mod seqn;
 pub mod shdr;
 pub mod sond;
 pub mod sprt;

@@ -13,6 +13,7 @@ use crate::chunks::objt::Objt;
 use crate::chunks::optn::Optn;
 use crate::chunks::room::Room;
 use crate::chunks::scpt::Scpt;
+use crate::chunks::seqn::Seqn;
 use crate::chunks::shdr::Shdr;
 use crate::chunks::sond::Sond;
 use crate::chunks::sprt::Sprt;
@@ -221,6 +222,18 @@ impl DataWin {
             Bgnd::parse(chunk_data, &self.data)
         })?;
         Ok(self.cached(b"BGND"))
+    }
+
+    /// SEQN chunk (sequence definitions). Returns `None` if not present.
+    pub fn seqn(&self) -> Result<Option<&Seqn>> {
+        if !self.has_chunk(b"SEQN") {
+            return Ok(None);
+        }
+        self.get_or_parse(b"SEQN", || {
+            let chunk_data = self.index.chunk_data(&self.data, b"SEQN")?;
+            Seqn::parse(chunk_data, &self.data)
+        })?;
+        Ok(Some(self.cached(b"SEQN")))
     }
 
     /// SHDR chunk (shader definitions). Returns `Err` if not present.

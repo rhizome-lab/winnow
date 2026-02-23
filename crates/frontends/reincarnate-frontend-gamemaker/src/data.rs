@@ -354,13 +354,15 @@ fn generate_asset_ids(dw: &DataWin, catalog: &mut AssetCatalog) {
         .unwrap_or_default();
     emit_group("Shaders", shdr_names);
 
-    // Backgrounds/tilesets (type=9; BGND chunk; may be empty in GMS2 games).
-    let bgnd_names: Vec<String> = dw.bgnd()
-        .map(|bgnd| {
-            bgnd.backgrounds.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
+    // Sequences (type=9; SEQN chunk; GMS2.3+ only).
+    let seqn_names: Vec<String> = dw.seqn()
+        .ok()
+        .flatten()
+        .map(|seqn| {
+            seqn.sequences.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
         })
         .unwrap_or_default();
-    emit_group("Backgrounds", bgnd_names);
+    emit_group("Sequences", seqn_names);
 
     catalog.add(Asset {
         id: "data_asset_ids".into(),
