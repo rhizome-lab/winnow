@@ -200,6 +200,9 @@ fn build_class_names(module: &Module) -> HashMap<String, String> {
 struct ClassMeta {
     ancestor_sets: HashMap<String, HashSet<String>>,
     method_name_sets: HashMap<String, HashSet<String>>,
+    /// Methods visible in the PARENT class (not the class itself).
+    /// Used to determine which methods need the `override` modifier.
+    parent_method_name_sets: HashMap<String, HashSet<String>>,
     instance_field_sets: HashMap<String, HashSet<String>>,
     static_method_owner_map: HashMap<String, HashMap<String, String>>,
     static_field_owner_map: HashMap<String, HashMap<String, String>>,
@@ -209,10 +212,14 @@ struct ClassMeta {
 
 impl ClassMeta {
     fn build(module: &Module, type_defs: &BTreeMap<String, ExternalTypeDef>) -> Self {
+        let method_name_sets = build_method_name_sets(module, type_defs);
+        let instance_field_sets = build_instance_field_sets(module, type_defs);
+        let parent_method_name_sets = build_parent_member_sets(module, &method_name_sets, &instance_field_sets, type_defs);
         Self {
             ancestor_sets: build_ancestor_sets(module, type_defs),
-            method_name_sets: build_method_name_sets(module, type_defs),
-            instance_field_sets: build_instance_field_sets(module, type_defs),
+            parent_method_name_sets,
+            method_name_sets,
+            instance_field_sets,
             static_method_owner_map: build_static_method_owner_map(module),
             static_field_owner_map: build_static_field_owner_map(module),
             bindable_method_sets: build_bindable_method_sets(module, type_defs),
@@ -512,6 +519,65 @@ fn build_method_name_sets(module: &Module, type_defs: &BTreeMap<String, External
             }
         }
         result.insert(qualified_class_name(class), names);
+    }
+    result
+}
+
+/// Build a mapping from qualified class name → set of member names (fields + methods)
+/// visible in the PARENT class.
+///
+/// For a class X extending parent P:
+/// - If P is an in-module class: parent members = P's method_name_sets ∪ P's instance_field_sets.
+/// - If P is an external type (e.g. GMLObject from runtime.json): walk `type_defs` from P.
+/// - If X has no parent: empty set.
+///
+/// Used to determine which methods and fields need the `override` modifier in TypeScript output.
+fn build_parent_member_sets(
+    module: &Module,
+    method_name_sets: &HashMap<String, HashSet<String>>,
+    instance_field_sets: &HashMap<String, HashSet<String>>,
+    type_defs: &BTreeMap<String, ExternalTypeDef>,
+) -> HashMap<String, HashSet<String>> {
+    let class_by_short: HashMap<&str, &ClassDef> =
+        module.classes.iter().map(|c| (c.name.as_str(), c)).collect();
+    let class_by_qualified: HashMap<String, &ClassDef> =
+        module.classes.iter().map(|c| (qualified_class_name(c), c)).collect();
+
+    let mut result = HashMap::new();
+    for class in &module.classes {
+        let qualified = qualified_class_name(class);
+        let parent_members = if let Some(ref sc) = class.super_class {
+            match resolve_parent(sc, &class_by_qualified, &class_by_short) {
+                Some(parent) => {
+                    // In-module parent: union of their method set and field set.
+                    let parent_q = qualified_class_name(parent);
+                    let mut names = method_name_sets.get(&parent_q).cloned().unwrap_or_default();
+                    if let Some(fields) = instance_field_sets.get(&parent_q) {
+                        names.extend(fields.iter().cloned());
+                    }
+                    names
+                }
+                None => {
+                    // External parent: walk type_defs collecting methods and fields.
+                    let short = sc.rsplit("::").next().unwrap_or(sc);
+                    let mut names = HashSet::new();
+                    let mut ext_cur: Option<&str> = Some(short);
+                    while let Some(ext_name) = ext_cur {
+                        if let Some(def) = type_defs.get(ext_name) {
+                            names.extend(def.methods.keys().cloned());
+                            names.extend(def.fields.keys().cloned());
+                            ext_cur = def.extends.as_deref();
+                        } else {
+                            break;
+                        }
+                    }
+                    names
+                }
+            }
+        } else {
+            HashSet::new()
+        };
+        result.insert(qualified, parent_members);
     }
     result
 }
@@ -2643,6 +2709,10 @@ fn emit_class(
         let _ = writeln!(out, "  static [QN_KEY] = \"{qualified}\";");
     }
 
+    // Hoist parent member set lookup so it's available for field override detection below.
+    let empty_set_early: HashSet<String> = HashSet::new();
+    let parent_method_names_early = class_meta.parent_method_name_sets.get(&qualified).unwrap_or(&empty_set_early);
+
     // Static fields from ClassDef (class-level Slot/Const + promoted instance Consts).
     for (name, ty, default) in &group.class_def.static_fields {
         let ident = sanitize_ident(name);
@@ -2658,14 +2728,16 @@ fn emit_class(
     for (name, ty, default) in &group.struct_def.fields {
         let ident = sanitize_ident(name);
         let ts = ts_type(ty);
+        // A field that shadows a parent-class field/method needs `override`.
+        let ov = if parent_method_names_early.contains(name.as_str()) { "override " } else { "" };
         if let Some(val) = default {
             if let Some(resolved) = resolve_sprite_constant(name, val, &module.sprite_names) {
-                let _ = writeln!(out, "  {ident}: {ts} = {resolved};");
+                let _ = writeln!(out, "  {ov}{ident}: {ts} = {resolved};");
             } else {
-                let _ = writeln!(out, "  {ident}: {ts} = {};", crate::ast_printer::emit_constant(val));
+                let _ = writeln!(out, "  {ov}{ident}: {ts} = {};", crate::ast_printer::emit_constant(val));
             }
         } else {
-            let _ = writeln!(out, "  {ident}: {ts};");
+            let _ = writeln!(out, "  {ov}{ident}: {ts};");
         }
     }
     let has_fields = !group.struct_def.fields.is_empty() || !group.class_def.static_fields.is_empty();
@@ -2704,6 +2776,7 @@ fn emit_class(
     let empty_map = HashMap::new();
     let ancestors = class_meta.ancestor_sets.get(&qualified).unwrap_or(&empty_set);
     let method_names = class_meta.method_name_sets.get(&qualified).unwrap_or(&empty_set);
+    let parent_method_names = class_meta.parent_method_name_sets.get(&qualified).unwrap_or(&empty_set);
     let instance_fields = class_meta.instance_field_sets.get(&qualified).unwrap_or(&empty_set);
     let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_map);
     let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_map);
@@ -2731,7 +2804,7 @@ fn emit_class(
         if i > 0 {
             out.push('\n');
         }
-        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, stateful_names, free_func_names, debug, out)?;
+        emit_class_method(&mut module.functions[fid], class_names, ancestors, method_names, parent_method_names, instance_fields, &static_fields, static_method_owners, static_field_owners, suppress_super, &const_instance_fields, &class_name, mutable_global_names, late_bound, short_to_qualified, bindable_methods, &closure_bodies, known_classes, lowering_config, engine, &module.sprite_names, stateful_names, free_func_names, debug, out)?;
     }
 
     let _ = writeln!(out, "}}\n");
@@ -2801,6 +2874,7 @@ fn emit_class_method(
     class_names: &HashMap<String, String>,
     ancestors: &HashSet<String>,
     method_names: &HashSet<String>,
+    parent_method_names: &HashSet<String>,
     instance_fields: &HashSet<String>,
     static_fields: &HashSet<String>,
     static_method_owners: &HashMap<String, String>,
@@ -2926,7 +3000,12 @@ fn emit_class_method(
     } else {
         None
     };
-    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), out);
+    // A method needs `override` if a parent class defines a method with the same name.
+    // Constructors and cinit blocks are excluded — TypeScript forbids `override` on them.
+    let is_override = !is_cinit
+        && !matches!(func.method_kind, MethodKind::Constructor | MethodKind::Static)
+        && parent_method_names.contains(&raw_name);
+    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), is_override, out);
     Ok(())
 }
 /// Prepend a runtime argument to calls to free functions.

@@ -570,6 +570,9 @@ fn rewrite_expr(expr: &mut JsExpr, sprite_names: &[String], closure_bodies: &Has
 
     if let Some(new_expr) = replacement {
         *expr = new_expr;
+        // Re-recurse into the replacement's children so that SystemCalls
+        // inside an inlined closure body (ArrowFunction) are also rewritten.
+        rewrite_expr_children(expr, sprite_names, closure_bodies);
     }
 }
 

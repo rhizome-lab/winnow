@@ -67,6 +67,19 @@
         "ystart": "number",
         "xprevious": "number",
         "yprevious": "number"
+      },
+      "methods": {
+        "create": { "params": [], "returns": "void" },
+        "destroy": { "params": [], "returns": "void" },
+        "draw": { "params": [], "returns": "void" },
+        "mouseenter": { "params": [], "returns": "void" },
+        "mouseleave": { "params": [], "returns": "void" },
+        "roomstart": { "params": [], "returns": "void" },
+        "roomend": { "params": [], "returns": "void" },
+        "beginstep": { "params": [], "returns": "void" },
+        "step": { "params": [], "returns": "void" },
+        "endstep": { "params": [], "returns": "void" },
+        "drawgui": { "params": [], "returns": "void" }
       }
     }
   },

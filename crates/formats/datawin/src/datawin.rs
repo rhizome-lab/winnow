@@ -36,11 +36,21 @@ pub struct DataWin {
 }
 
 impl DataWin {
-    /// Parse a data.win file from raw bytes.
+    /// Parse a data.win file (or a PE exe containing an embedded data.win) from raw bytes.
+    ///
+    /// If `data` begins with the PE magic `MZ`, the file is a Windows executable with an
+    /// embedded GameMaker FORM blob (e.g. `MomodoraRUtM.exe`). In that case, the FORM header
+    /// is located by scanning for the `FORM` signature and the data is trimmed to start there.
     ///
     /// Only the FORM envelope and chunk index are parsed eagerly.
     /// Individual chunk contents are parsed lazily on first access.
-    pub fn parse(data: Vec<u8>) -> Result<Self> {
+    pub fn parse(mut data: Vec<u8>) -> Result<Self> {
+        // Detect PE-wrapped data.win and strip the PE prefix.
+        if data.starts_with(b"MZ") {
+            if let Some(offset) = find_embedded_form(&data) {
+                data.drain(..offset);
+            }
+        }
         let index = ChunkIndex::parse(&data)?;
         Ok(Self {
             data,
@@ -274,6 +284,33 @@ impl DataWin {
         })?;
         Ok(Some(self.cached(b"LANG")))
     }
+}
+
+/// Scan `data` (a Windows PE executable) for an embedded GameMaker FORM blob.
+///
+/// Searches every `FORM` occurrence and validates that the declared FORM size fits
+/// within the remaining file. Returns the byte offset of the first valid FORM header,
+/// or `None` if no valid FORM is found.
+///
+/// A PE file may contain false-positive `FORM` byte sequences (e.g. inside the
+/// import table or resource section), so each candidate is validated before accepting.
+fn find_embedded_form(data: &[u8]) -> Option<usize> {
+    const FORM: &[u8] = b"FORM";
+    // Walk every byte looking for the FORM signature. The PE prefix is typically
+    // several MB so this linear scan is acceptable (done once at startup).
+    for offset in 0..data.len().saturating_sub(7) {
+        if &data[offset..offset + 4] != FORM {
+            continue;
+        }
+        // Read the 4-byte little-endian size field immediately after the magic.
+        let size_bytes: [u8; 4] = data[offset + 4..offset + 8].try_into().ok()?;
+        let form_size = u32::from_le_bytes(size_bytes) as usize;
+        // Validate: 8-byte header + content must fit within the file.
+        if offset + 8 + form_size <= data.len() {
+            return Some(offset);
+        }
+    }
+    None
 }
 
 impl std::fmt::Debug for DataWin {

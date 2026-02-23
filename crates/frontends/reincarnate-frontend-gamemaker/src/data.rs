@@ -100,8 +100,10 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
 
     out.push_str("];\n\n");
 
-    // Sprites enum: PascalCase name → index
-    out.push_str("export const Sprites: Record<string, number> = {\n");
+    // Sprites enum: PascalCase name → index.
+    // Use `as const` (no explicit type) so property access returns the exact literal
+    // type (e.g. `322`) rather than `number | undefined` under noUncheckedIndexedAccess.
+    out.push_str("export const Sprites = {\n");
     for (i, sprite) in sprt.sprites.iter().enumerate() {
         let raw = dw.resolve_string(sprite.name).unwrap_or_else(|_| format!("spr_{i}"));
         let key = naming::sprite_name_to_pascal(&raw);
@@ -115,7 +117,7 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
         };
         let _ = writeln!(out, "  {key_token}: {i},");
     }
-    out.push_str("};\n");
+    out.push_str("} as const;\n");
 
     catalog.add(Asset {
         id: "data_sprites".into(),
@@ -245,14 +247,14 @@ fn generate_rooms(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: &[String]
 
     out.push_str("];\n\n");
 
-    // Rooms enum: PascalCase name → index
-    out.push_str("export const Rooms: Record<string, number> = {\n");
+    // Rooms enum: PascalCase name → index (as const for exact literal types).
+    out.push_str("export const Rooms = {\n");
     for (i, entry) in room.rooms.iter().enumerate() {
         let raw = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("room_{i}"));
         let key = naming::room_name_to_pascal(&raw);
         let _ = writeln!(out, "  {key}: {i},");
     }
-    out.push_str("};\n");
+    out.push_str("} as const;\n");
 
     // Suppress unused variable warning
     let _ = obj_names;
@@ -270,11 +272,11 @@ fn generate_rooms(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: &[String]
 /// Generate `data/objects.ts` — Classes name→index enum.
 fn generate_objects(catalog: &mut AssetCatalog, obj_names: &[String]) {
     let mut out = String::new();
-    out.push_str("export const Classes: Record<string, number> = {\n");
+    out.push_str("export const Classes = {\n");
     for (i, name) in obj_names.iter().enumerate() {
         let _ = writeln!(out, "  {name}: {i},");
     }
-    out.push_str("};\n");
+    out.push_str("} as const;\n");
 
     catalog.add(Asset {
         id: "data_objects".into(),

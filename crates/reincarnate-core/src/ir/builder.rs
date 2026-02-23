@@ -192,6 +192,36 @@ impl FunctionBuilder {
         None
     }
 
+    /// Like [`try_get_const`] but follows `Op::Copy` chains.
+    ///
+    /// In compound assignments (e.g. `obj.field += expr`), the GML compiler
+    /// emits a `Dup` before the read-modify-write sequence.  The `Dup` is
+    /// translated to `Op::Copy` instructions, so the target value may be a
+    /// copy of a constant (-9 self-sentinel) rather than a constant itself.
+    pub fn try_resolve_const(&self, mut value: ValueId) -> Option<Constant> {
+        // Follow Copy chains (max 8 hops to avoid infinite loops on malformed IR).
+        for _ in 0..8 {
+            let mut found_copy: Option<ValueId> = None;
+            for inst in self.func.insts.values() {
+                if inst.result == Some(value) {
+                    match &inst.op {
+                        Op::Const(c) => return Some(c.clone()),
+                        Op::Copy(src) => {
+                            found_copy = Some(*src);
+                            break;
+                        }
+                        _ => return None,
+                    }
+                }
+            }
+            match found_copy {
+                Some(src) => value = src,
+                None => return None, // block parameter or not found
+            }
+        }
+        None
+    }
+
     /// Consume the builder and return the constructed `Function`.
     pub fn build(self) -> Function {
         self.func

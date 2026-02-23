@@ -25,6 +25,8 @@ export { ACTIVE } from "./constants";
 const __baseproto = Object.getPrototypeOf(class {});
 
 export class GMLObject {
+  // GML objects are open — instance variables are set dynamically in event handlers.
+  [key: string]: any;
   _rt!: GameRuntime;
   x = 0;
   y = 0;
@@ -258,7 +260,7 @@ export class GameRuntime {
   roomVariables: GMLObject[] = [];
   classes: (typeof GMLObject)[] = [];
   _roomDatas: Room[] = [];
-  roomCreationCode: ((_rt: GameRuntime) => void)[] = [];
+  roomCreationCode: (((_rt: GameRuntime) => void) | undefined)[] = [];
   sprites: Sprite[] = [];
   textures: Texture[] = [];
   textureSheets: HTMLImageElement[] = [];
@@ -275,6 +277,12 @@ export class GameRuntime {
 
   // ---- API functions populated by factories ----
   // Explicitly declare internally-used factory functions for type safety.
+  getInstanceField!: (objId: number, field: string) => any;
+  setInstanceField!: (objId: number, field: string, value: any) => void;
+  setInstanceFieldIndex!: (objId: number, field: string, index: number, value: any) => void;
+  getAllField!: (field: string) => any;
+  setAllField!: (field: string, value: any) => void;
+  withInstances!: (target: number, callback: (inst: GMLObject) => void) => void;
   drawSprite!: (
     spriteIndex: number, imageIndex: number, x: number, y: number,
     opts?: { image_alpha?: number; image_xscale?: number; image_yscale?: number },
@@ -493,7 +501,7 @@ export interface GameConfig {
   classes: (typeof GMLObject)[];
   Classes: Record<string, number>;
   initialRoom: number;
-  roomCreationCode?: ((_rt: GameRuntime) => void)[];
+  roomCreationCode?: (((_rt: GameRuntime) => void) | undefined)[];
 }
 
 // ---- Factory function ----

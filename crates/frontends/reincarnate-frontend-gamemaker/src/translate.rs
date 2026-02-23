@@ -1943,18 +1943,33 @@ fn translate_push_variable(
     let var_name = resolve_variable_name(inst, ctx);
 
     // Handle stacktop-via-ref_type (ref_type == 0x80 with instance >= 0).
-    // In pre-GMS2 bytecode, the instance is on the stack rather than encoded
-    // as instance type -9. Pop the instance and read the field from it.
+    // The target instance is on the stack (pushed before this instruction).
+    // In GMS2.3+, Push Int32(-9) followed by a stacktop variable access is
+    // the "self" pattern — resolve to the self parameter directly.
     if is_stacktop_ref(var_ref, instance) {
-        let target = pop(stack, inst)?;
-        let name_val = fb.const_string(&var_name);
-        let val = fb.system_call(
-            "GameMaker.Instance",
-            "getField",
-            &[target, name_val],
-            Type::Dynamic,
-        );
-        stack.push(val);
+        let raw_target = pop(stack, inst)?;
+        let target = if ctx.has_self {
+            if matches!(fb.try_resolve_const(raw_target), Some(Constant::Int(-9))) {
+                fb.param(0)
+            } else {
+                raw_target
+            }
+        } else {
+            raw_target
+        };
+        if ctx.has_self && target == fb.param(0) {
+            let val = fb.get_field(target, &var_name, Type::Dynamic);
+            stack.push(val);
+        } else {
+            let name_val = fb.const_string(&var_name);
+            let val = fb.system_call(
+                "GameMaker.Instance",
+                "getField",
+                &[target, name_val],
+                Type::Dynamic,
+            );
+            stack.push(val);
+        }
         return Ok(());
     }
 
@@ -2130,7 +2145,19 @@ fn translate_push_variable(
             stack.push(val);
         }
         Some(InstanceType::Stacktop) => {
-            let target = pop(stack, inst)?;
+            let raw_target = pop(stack, inst)?;
+            // In GMS2.3+ struct methods, `Push Int32(-9)` followed by a Stacktop
+            // variable access is the "push current struct self" pattern.
+            // Resolve to self parameter instead of emitting the literal -9.
+            let target = if ctx.has_self {
+                if matches!(fb.try_resolve_const(raw_target), Some(Constant::Int(-9))) {
+                    fb.param(0)
+                } else {
+                    raw_target
+                }
+            } else {
+                raw_target
+            };
             if var_name == "argument" {
                 // argument[N] → function parameter access
                 if let Some(Constant::Int(idx)) = fb.try_get_const(target) {
@@ -2149,6 +2176,10 @@ fn translate_push_variable(
                     );
                     stack.push(val);
                 }
+            } else if ctx.has_self && target == fb.param(0) {
+                // Self-field read in struct method — use get_field for clean output.
+                let val = fb.get_field(target, &var_name, Type::Dynamic);
+                stack.push(val);
             } else {
                 let name_val = fb.const_string(&var_name);
                 let val = fb.system_call(
@@ -2230,18 +2261,32 @@ fn translate_pop(
         let var_name = resolve_variable_name(inst, ctx);
 
         // Handle stacktop-via-ref_type (ref_type == 0x80 with instance >= 0).
-        // In pre-GMS2 bytecode, the instance is on the stack. Pop the
-        // instance (top), then pop the value (below), and store.
+        // The target instance is on the stack (top), value to store is below.
+        // In GMS2.3+, Push Int32(-9) is the "self" sentinel — resolve to the
+        // self parameter directly.
         if is_stacktop_ref(var_ref, *instance) {
-            let target = pop(stack, inst)?; // instance (top of stack)
+            let raw_target = pop(stack, inst)?; // instance (top of stack)
             let value = pop(stack, inst)?; // value to store (below)
-            let name_val = fb.const_string(&var_name);
-            fb.system_call(
-                "GameMaker.Instance",
-                "setField",
-                &[target, name_val, value],
-                Type::Void,
-            );
+            let target = if ctx.has_self {
+                if matches!(fb.try_resolve_const(raw_target), Some(Constant::Int(-9))) {
+                    fb.param(0)
+                } else {
+                    raw_target
+                }
+            } else {
+                raw_target
+            };
+            if ctx.has_self && target == fb.param(0) {
+                fb.set_field(target, &var_name, value);
+            } else {
+                let name_val = fb.const_string(&var_name);
+                fb.system_call(
+                    "GameMaker.Instance",
+                    "setField",
+                    &[target, name_val, value],
+                    Type::Void,
+                );
+            }
             return Ok(());
         }
 
@@ -2433,7 +2478,17 @@ fn translate_pop(
                 );
             }
             Some(InstanceType::Stacktop) => {
-                let target = pop(stack, inst)?;
+                let raw_target = pop(stack, inst)?;
+                // In GMS2.3+ struct methods, -9 is the self-reference sentinel.
+                let target = if ctx.has_self {
+                    if matches!(fb.try_resolve_const(raw_target), Some(Constant::Int(-9))) {
+                        fb.param(0)
+                    } else {
+                        raw_target
+                    }
+                } else {
+                    raw_target
+                };
                 if var_name == "argument" {
                     // argument[N] = value → store to function parameter slot
                     if let Some(Constant::Int(idx)) = fb.try_get_const(target) {
@@ -2466,6 +2521,9 @@ fn translate_pop(
                             Type::Void,
                         );
                     }
+                } else if ctx.has_self && target == fb.param(0) {
+                    // Self-field write in struct method — use set_field for clean output.
+                    fb.set_field(target, &var_name, value);
                 } else {
                     let name_val = fb.const_string(&var_name);
                     fb.system_call(

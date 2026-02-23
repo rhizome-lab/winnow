@@ -46,6 +46,7 @@ pub fn print_class_method(
     raw_name: &str,
     skip_self: bool,
     preamble: Option<&str>,
+    is_override: bool,
     out: &mut String,
 ) {
     let params = if skip_self && !js.params.is_empty() {
@@ -65,17 +66,18 @@ pub fn print_class_method(
         return;
     }
 
+    let ov = if is_override { "override " } else { "" };
     match js.method_kind {
         MethodKind::Constructor => {
             let _ = writeln!(out, "  constructor({params_str}) {{");
         }
         MethodKind::Getter => {
             let name = raw_name.strip_prefix("get_").unwrap_or(raw_name);
-            let _ = writeln!(out, "  get {name}(): {ret_ty} {{");
+            let _ = writeln!(out, "  {ov}get {name}(): {ret_ty} {{");
         }
         MethodKind::Setter => {
             let name = raw_name.strip_prefix("set_").unwrap_or(raw_name);
-            let _ = writeln!(out, "  set {name}({params_str}) {{");
+            let _ = writeln!(out, "  {ov}set {name}({params_str}) {{");
         }
         MethodKind::Static => {
             let _ = writeln!(
@@ -87,7 +89,7 @@ pub fn print_class_method(
         _ => {
             let _ = writeln!(
                 out,
-                "  {star}{}({params_str}): {ret_ty} {{",
+                "  {ov}{star}{}({params_str}): {ret_ty} {{",
                 sanitize_ident(raw_name),
             );
         }

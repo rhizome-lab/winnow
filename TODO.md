@@ -352,22 +352,22 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
 
 ### 5. Sprite name bracket notation missing for access side — blocks Nubby's, Mindwave, MaxManos2
 
-- [ ] **`Sprites.3DPegBase` emitted instead of `Sprites["3DPegBase"]`** — the sprite-key quoting
-  fix (`is_valid_js_ident` + `serde_json::to_string`) was applied to the *declaration* side in
-  `data/sprites.ts` object literal keys, but the *access* side in class files still uses dot
-  notation (`Sprites.Name`). When the sprite name is not a valid JS identifier (starts with a
-  digit, contains hyphens, etc.), bracket notation is required. Fix: in the emit path that writes
-  `Sprites.{name}` field accesses (likely `resolve_sprite_constant` or the AST printer), apply
-  `is_valid_js_ident` and emit `Sprites["{name}"]` when false.
+- [x] **`Sprites.3DPegBase` emitted instead of `Sprites["3DPegBase"]`** — **FIXED** in commit
+  `9e1b5d7`. Both `resolve_sprite_constant` (emit.rs) and `try_resolve_sprite_assign` (rewrites/
+  gamemaker.rs) apply `is_valid_js_ident` and use bracket notation when false. Remaining errors
+  in Nubby's/MINDWAVE/MaxManos2 are Bug 7 (struct field access on Number) and runtime API gaps.
 
-### 6. Local variable pop emits raw index as subscript — blocks Max Manos, Schism
+### 6. pushac/popaf array capture coerces array to int — Schism syntax errors
 
-- [ ] **`-6[-6] = 0` emitted for a local variable write** — a `SetLocal`/`PopLocal` operation
-  fails to resolve the local variable name and falls back to emitting the raw signed integer
-  index as both the target and the subscript (`-6[-6]`). Fix: handle the unresolved local case
-  gracefully — either resolve the variable from the local name table or emit a clearly-named
-  synthetic local (`_local_neg6`). Root cause is likely a negative local variable offset in the
-  GML bytecode that isn't in our name map.
+- [ ] **`int(argument0)[FxDoomApply.gunMod] = 0` produces TS1005 syntax error** — `pushac`
+  captures `int(argument0)` as the "array reference", but `argument0` is actually an array
+  passed by reference. The `coerce v1, i32` from a preceding `Push Variable(argument0,
+  type=Int32)` converts the array to an integer before `pushac` saves it. `popaf` then calls
+  `set_index(int_value, array_value, 0)` which the TS printer emits as `int(argument0)[array]
+  = 0` — invalid JS. Root cause: type mismatch between the Int32 push type and the actual
+  array type of argument0. Fix requires either: (a) not coercing when the value is used as a
+  pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
+  to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
 ### 7. Dead Estate regression — 102k TS errors since with-body closures
 
