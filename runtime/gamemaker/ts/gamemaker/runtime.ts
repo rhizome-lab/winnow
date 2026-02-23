@@ -1262,8 +1262,8 @@ export class GameRuntime {
   collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_circle_list: requires collision system implementation"); }
 
   // ---- More draw ----
-  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _outline: boolean = false): void {}
-  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: boolean): void {}
+  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _outline: number | boolean = 0): void {}
+  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: number | boolean): void {}
   draw_sprite_stretched(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number): void {
     throw new Error("draw_sprite_stretched: implement in graphics layer");
   }
