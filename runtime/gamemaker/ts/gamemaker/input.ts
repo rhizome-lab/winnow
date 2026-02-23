@@ -1,7 +1,7 @@
 /** GML input handling — mouse, keyboard. */
 
 import type { GameRuntime } from "./runtime";
-import { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp } from "./platform";
+import { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onMouseWheel } from "./platform";
 import { ACTIVE, noop } from "./constants";
 
 interface ButtonState { pressed: boolean; released: boolean; held: boolean; }
@@ -15,6 +15,8 @@ export class InputState {
       { pressed: false, released: false, held: false }, // mb_right (GML 2)
       { pressed: false, released: false, held: false }, // mb_middle (GML 3)
     ] as ButtonState[],
+    wheelUp: false,
+    wheelDown: false,
   };
   domButtonMap = [0, 2, 1];
   keyboard_string = "";
@@ -28,6 +30,8 @@ export function createInputAPI(rt: GameRuntime) {
 
   function mouse_x(): number { return input.mouse.x; }
   function mouse_y(): number { return input.mouse.y; }
+  function mouse_wheel_up(): boolean { return input.mouse.wheelUp; }
+  function mouse_wheel_down(): boolean { return input.mouse.wheelDown; }
 
   function mouse_check_button(button: number): boolean {
     return input.mouse.buttons[button - 1]?.held ?? false;
@@ -58,6 +62,8 @@ export function createInputAPI(rt: GameRuntime) {
       b.pressed = false;
       b.released = false;
     }
+    input.mouse.wheelUp = false;
+    input.mouse.wheelDown = false;
     input.keysPressed.clear();
     input.keysReleased.clear();
   }
@@ -124,6 +130,11 @@ export function createInputAPI(rt: GameRuntime) {
       input.keysReleased.add(keyCode);
       input.keysDown.delete(keyCode);
     });
+
+    onMouseWheel(canvas, (delta) => {
+      if (delta < 0) input.mouse.wheelUp = true;
+      else input.mouse.wheelDown = true;
+    });
   }
 
   function dispatchKeyPress(keyCode: number): void {
@@ -137,6 +148,7 @@ export function createInputAPI(rt: GameRuntime) {
 
   return {
     mouse_x, mouse_y,
+    mouse_wheel_up, mouse_wheel_down,
     mouse_check_button, mouse_check_button_pressed, mouse_check_button_released,
     keyboard_check, keyboard_check_pressed, keyboard_check_released,
     resetFrameInput, activateMouse, setupInput, dispatchKeyPress,

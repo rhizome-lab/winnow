@@ -6,6 +6,7 @@ import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, sch
 import type { RenderRoot } from "../../../shared/ts/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
+import { gmlColorToCss } from "./color";
 import { StorageState, createStorageAPI } from "./storage";
 import { MathState, createMathAPI } from "./math";
 import { createGlobalAPI } from "./global";
@@ -328,6 +329,8 @@ export class GameRuntime {
   mouse_check_button!: (button: number) => boolean;
   mouse_check_button_pressed!: (button: number) => boolean;
   mouse_check_button_released!: (button: number) => boolean;
+  mouse_wheel_up!: () => boolean;
+  mouse_wheel_down!: () => boolean;
 
   // Storage API (from createStorageAPI)
   ini_open!: (path: string) => void;
@@ -819,8 +822,8 @@ export class GameRuntime {
     const s = n.toFixed(dec);
     return s.length < tot ? s.padStart(tot) : s;
   }
-  font_get_name(_font: number): string { throw new Error("font_get_name: not yet implemented"); }
-  font_exists(_font: number): boolean { throw new Error("font_exists: not yet implemented"); }
+  font_get_name(font: number): string { return this.fonts[font]?.name ?? ""; }
+  font_exists(font: number): boolean { return font >= 0 && font < this.fonts.length && this.fonts[font] != null; }
 
   // ---- Camera API ----
   camera_get_view_x(_cam: number): number { throw new Error("camera_get_view_x: not yet implemented"); }
@@ -854,26 +857,55 @@ export class GameRuntime {
     ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  draw_sprite_stretched_ext(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number, _col: number, _alpha: number): void {
-    throw new Error("draw_sprite_stretched_ext: implement in graphics layer");
+  draw_sprite_stretched_ext(spr: number, sub: number, x: number, y: number, w: number, h: number, _col: number, alpha: number): void {
+    const ctx = this._gfx.ctx;
+    const prev = this._draw.alpha;
+    if (alpha !== prev) ctx.globalAlpha = this._draw.alpha = alpha;
+    this.draw_sprite_stretched(spr, sub, x, y, w, h);
+    if (alpha !== prev) ctx.globalAlpha = this._draw.alpha = prev;
   }
-  draw_circle(_x: number, _y: number, _r: number, _outline: boolean): void {
-    throw new Error("draw_circle: implement in graphics layer");
+  draw_circle(x: number, y: number, r: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    const css = gmlColorToCss(this._draw.config.color);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    if (outline) { ctx.strokeStyle = css; ctx.stroke(); }
+    else { ctx.fillStyle = css; ctx.fill(); }
   }
   draw_vertex(_x: number, _y: number): void { throw new Error("draw_vertex: not yet implemented"); }
   draw_primitive_begin(_kind: number): void { throw new Error("draw_primitive_begin: not yet implemented"); }
   draw_primitive_end(): void { throw new Error("draw_primitive_end: not yet implemented"); }
-  draw_rectangle_color(_x1: number, _y1: number, _x2: number, _y2: number, _c1: number, _c2: number, _c3: number, _c4: number, _outline: boolean): void {
-    throw new Error("draw_rectangle_color: implement in graphics layer");
+  draw_rectangle_color(x1: number, y1: number, x2: number, y2: number, c1: number, _c2: number, _c3: number, _c4: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    if (outline) { ctx.strokeStyle = gmlColorToCss(c1); ctx.strokeRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1); }
+    else { ctx.fillStyle = gmlColorToCss(c1); ctx.fillRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1); }
   }
   draw_sprite_tiled_ext(_spr: number, _sub: number, _x: number, _y: number, _xscale: number, _yscale: number, _col: number, _alpha: number): void {
-    throw new Error("draw_sprite_tiled_ext: implement in graphics layer");
+    throw new Error("draw_sprite_tiled_ext: not yet implemented");
   }
-  draw_ellipse_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: boolean): void {
-    throw new Error("draw_ellipse_color: implement in graphics layer");
+  draw_ellipse_color(x1: number, y1: number, x2: number, y2: number, col1: number, col2: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    if (outline) { ctx.strokeStyle = gmlColorToCss(col1); ctx.stroke(); }
+    else {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rx, ry));
+      g.addColorStop(0, gmlColorToCss(col1)); g.addColorStop(1, gmlColorToCss(col2));
+      ctx.fillStyle = g; ctx.fill();
+    }
   }
-  draw_sprite_part(_spr: number, _sub: number, _left: number, _top: number, _w: number, _h: number, _x: number, _y: number): void {
-    throw new Error("draw_sprite_part: implement in graphics layer");
+  draw_sprite_part(spr: number, sub: number, left: number, top: number, w: number, h: number, x: number, y: number): void {
+    const sprite = this.sprites[spr];
+    if (!sprite) return;
+    const texIdx = sprite.textures[sub] ?? sprite.textures[0];
+    if (texIdx === undefined) return;
+    const tex = this.textures[texIdx];
+    if (!tex) return;
+    const sheet = this.textureSheets[tex.sheetId];
+    if (!sheet) return;
+    this._gfx.ctx.drawImage(sheet, tex.src.x + left, tex.src.y + top, w, h, x, y, w, h);
   }
   draw_get_color(): number { return this._draw.config.color; }
   draw_get_halign(): number { return this._draw.config.halign; }
@@ -994,20 +1026,45 @@ export class GameRuntime {
   }
 
   // ---- More draw ----
-  draw_line(_x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("draw_line: not yet implemented"); }
-  draw_line_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number): void { throw new Error("draw_line_color: not yet implemented"); }
-  draw_point_color(_x: number, _y: number, _col: number): void { throw new Error("draw_point_color: not yet implemented"); }
-  draw_triangle(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _outline: boolean): void { throw new Error("draw_triangle: not yet implemented"); }
-  draw_triangle_color(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _c1: number, _c2: number, _c3: number, _outline: boolean): void { throw new Error("draw_triangle_color: not yet implemented"); }
+  draw_line(x1: number, y1: number, x2: number, y2: number): void {
+    const ctx = this._gfx.ctx;
+    ctx.strokeStyle = gmlColorToCss(this._draw.config.color);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  draw_line_color(x1: number, y1: number, x2: number, y2: number, col1: number, col2: number): void {
+    const ctx = this._gfx.ctx;
+    const g = ctx.createLinearGradient(x1, y1, x2, y2);
+    g.addColorStop(0, gmlColorToCss(col1)); g.addColorStop(1, gmlColorToCss(col2));
+    ctx.strokeStyle = g;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+  draw_point_color(x: number, y: number, col: number): void {
+    const ctx = this._gfx.ctx;
+    ctx.fillStyle = gmlColorToCss(col);
+    ctx.fillRect(x, y, 1, 1);
+  }
+  draw_triangle(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    const css = gmlColorToCss(this._draw.config.color);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
+    if (outline) { ctx.strokeStyle = css; ctx.stroke(); }
+    else { ctx.fillStyle = css; ctx.fill(); }
+  }
+  draw_triangle_color(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, c1: number, _c2: number, _c3: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
+    if (outline) { ctx.strokeStyle = gmlColorToCss(c1); ctx.stroke(); }
+    else { ctx.fillStyle = gmlColorToCss(c1); ctx.fill(); }
+  }
   draw_primitive_begin_texture(_kind: number, _tex: number): void { throw new Error("draw_primitive_begin_texture: not yet implemented"); }
-  draw_set_circle_precision(_n: number): void { throw new Error("draw_set_circle_precision: not yet implemented"); }
+  draw_set_circle_precision(_n: number): void { /* canvas uses native arcs */ }
   draw_sprite_part_ext(_spr: number, _sub: number, _left: number, _top: number, _width: number, _height: number, _x: number, _y: number, _xscale: number, _yscale: number, _col: number, _alpha: number): void { throw new Error("draw_sprite_part_ext: not yet implemented"); }
   draw_sprite_pos(_spr: number, _sub: number, _x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _x4: number, _y4: number, _alpha: number): void { throw new Error("draw_sprite_pos: not yet implemented"); }
   draw_sprite_tiled(_spr: number, _sub: number, _x: number, _y: number): void { throw new Error("draw_sprite_tiled: not yet implemented"); }
   draw_surface_stretched_ext(_surf: number, _x: number, _y: number, _w: number, _h: number, _col: number, _alpha: number): void {
     throw new Error("draw_surface_stretched_ext: requires WebGL implementation");
   }
-  draw_get_font(): number { throw new Error("draw_get_font: not yet implemented"); }
+  draw_get_font(): number { return this._draw.config.font; }
 
   // ---- DS extras ----
   ds_grid_read(_grid: number, _str: string): void { throw new Error("ds_grid_read: not yet implemented"); }
@@ -1201,8 +1258,16 @@ export class GameRuntime {
   draw_surface_stretched(_surf: number, _x: number, _y: number, _w: number, _h: number): void {
     throw new Error("draw_surface_stretched: requires WebGL implementation");
   }
-  draw_circle_color(_x: number, _y: number, _r: number, _col1: number, _col2: number, _outline: boolean): void {
-    throw new Error("draw_circle_color: implement in graphics layer");
+  draw_circle_color(x: number, y: number, r: number, col1: number, col2: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    if (outline) { ctx.strokeStyle = gmlColorToCss(col1); ctx.stroke(); }
+    else {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, gmlColorToCss(col1)); g.addColorStop(1, gmlColorToCss(col2));
+      ctx.fillStyle = g; ctx.fill();
+    }
   }
   draw_path(_path: number, _x: number, _y: number, _absolute: boolean): void { throw new Error("draw_path: not yet implemented"); }
 
@@ -1262,13 +1327,50 @@ export class GameRuntime {
   collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_circle_list: requires collision system implementation"); }
 
   // ---- More draw ----
-  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _outline: number | boolean = 0): void { throw new Error("draw_roundrect: not yet implemented"); }
-  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: number | boolean): void { throw new Error("draw_roundrect_color: not yet implemented"); }
-  draw_sprite_stretched(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number): void {
-    throw new Error("draw_sprite_stretched: implement in graphics layer");
+  draw_roundrect(x1: number, y1: number, x2: number, y2: number, outline: number | boolean = 0): void {
+    const ctx = this._gfx.ctx;
+    const css = gmlColorToCss(this._draw.config.color);
+    const r = Math.round(Math.min(Math.abs(x2 - x1), Math.abs(y2 - y1)) / 6);
+    ctx.beginPath();
+    ctx.roundRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1), r);
+    if (outline) { ctx.strokeStyle = css; ctx.stroke(); }
+    else { ctx.fillStyle = css; ctx.fill(); }
   }
-  draw_line_width(_x1: number, _y1: number, _x2: number, _y2: number, _w: number): void { throw new Error("draw_line_width: not yet implemented"); }
-  draw_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _outline: boolean): void { throw new Error("draw_ellipse: not yet implemented"); }
+  draw_roundrect_color(x1: number, y1: number, x2: number, y2: number, col1: number, _col2: number, outline: number | boolean): void {
+    const ctx = this._gfx.ctx;
+    const r = Math.round(Math.min(Math.abs(x2 - x1), Math.abs(y2 - y1)) / 6);
+    ctx.beginPath();
+    ctx.roundRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1), r);
+    if (outline) { ctx.strokeStyle = gmlColorToCss(col1); ctx.stroke(); }
+    else { ctx.fillStyle = gmlColorToCss(col1); ctx.fill(); }
+  }
+  draw_sprite_stretched(spr: number, sub: number, x: number, y: number, w: number, h: number): void {
+    const sprite = this.sprites[spr];
+    if (!sprite) return;
+    const texIdx = sprite.textures[sub] ?? sprite.textures[0];
+    if (texIdx === undefined) return;
+    const tex = this.textures[texIdx];
+    if (!tex) return;
+    const sheet = this.textureSheets[tex.sheetId];
+    if (!sheet) return;
+    this._gfx.ctx.drawImage(sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h, x, y, w, h);
+  }
+  draw_line_width(x1: number, y1: number, x2: number, y2: number, w: number): void {
+    const ctx = this._gfx.ctx;
+    ctx.strokeStyle = gmlColorToCss(this._draw.config.color);
+    ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  draw_ellipse(x1: number, y1: number, x2: number, y2: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    const css = gmlColorToCss(this._draw.config.color);
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    if (outline) { ctx.strokeStyle = css; ctx.stroke(); }
+    else { ctx.fillStyle = css; ctx.fill(); }
+  }
 
   // ---- More string ----
   string_width_ext(_str: string, _sep: number, _w: number): number { return (_str?.length ?? 0) * 8; }
@@ -1304,7 +1406,7 @@ export class GameRuntime {
   room_get_name(room: number): string { return `room_${room}`; }
 
   // ---- Font extras ----
-  font_get_size(_font: number): number { throw new Error("font_get_size: not yet implemented"); }
+  font_get_size(font: number): number { return this.fonts[font]?.size ?? 0; }
 
   // ---- JSON legacy names ----
   json_encode(val: any): string { return JSON.stringify(val) ?? "undefined"; }
@@ -1386,9 +1488,7 @@ export class GameRuntime {
   video_get_duration(): number { throw new Error("video_get_duration: not yet implemented"); }
   video_set_volume(_vol: number): void { throw new Error("video_set_volume: not yet implemented"); }
 
-  // ---- Mouse wheel ----
-  mouse_wheel_up(): boolean { throw new Error("mouse_wheel_up: not yet implemented"); }
-  mouse_wheel_down(): boolean { throw new Error("mouse_wheel_down: not yet implemented"); }
+  // mouse_wheel_up / mouse_wheel_down delegated to createInputAPI
 
   // ---- Navigation mesh ----
   mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { throw new Error("mp_grid_path: requires pathfinding implementation"); }
