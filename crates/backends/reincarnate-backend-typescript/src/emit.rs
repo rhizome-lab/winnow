@@ -1359,6 +1359,19 @@ fn collect_call_names_from_funcs<'a>(
                         used.insert((*name).to_string());
                     }
                 }
+                // Function/asset references used as values (via @@pushref@@) — these
+                // appear as bare Var nodes in the emitted JS and need the same import
+                // treatment as direct calls.  Names are sanitized (e.g. `anon@N@...` →
+                // `anon_N_...`) at print time, and emit_free_function_imports applies
+                // the same sanitization to the import list.
+                Op::GlobalRef(name) => {
+                    used.insert(name.clone());
+                    if engine == EngineKind::GameMaker {
+                        for introduced in crate::rewrites::gamemaker::rewrite_introduced_direct_calls(name) {
+                            used.insert((*introduced).to_string());
+                        }
+                    }
+                }
                 // Coerce casts emit bare function calls: int(x), uint(x).
                 Op::Cast(_, Type::Int(32), CastKind::Coerce) => {
                     used.insert("int".to_string());
@@ -1442,7 +1455,14 @@ fn emit_free_function_imports(
     if needed.is_empty() {
         return;
     }
-    let names: Vec<&str> = needed.into_iter().collect();
+    // Sanitize identifier names (e.g. `anon@1155@...` → `anon_1155_...`) to match
+    // what `sanitize_ident` produces for the exported function name.
+    let mut names: Vec<String> = needed
+        .into_iter()
+        .map(sanitize_ident)
+        .collect();
+    names.sort();
+    names.dedup();
     // _init.ts lives in module_dir, so we go up `depth` levels (one per
     // namespace segment).  depth=0 → "./_init", depth=1 → "../_init", etc.
     let prefix = if depth == 0 {

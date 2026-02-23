@@ -93,9 +93,12 @@ impl Frontend for GameMakerFrontend {
         // Register global variables from VARI.
         register_globals(&dw, vari, &mut mb);
 
+        // Build code-name → index map for GMS2.3+ constructor script lookup.
+        let code_name_map = build_code_name_map(&dw, code);
+
         // Translate scripts.
         let (script_ok, script_err) =
-            translate_scripts(&dw, code, scpt, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &input, &obj_names, &script_names)?;
+            translate_scripts(&dw, code, scpt, &code_name_map, &function_names, &variables, &func_ref_map, &vari_ref_map, &code_locals_map, &string_table, &mut mb, &input, &obj_names, &script_names)?;
         eprintln!("[gamemaker] translated {script_ok} scripts ({script_err} errors)");
 
         // Translate objects → ClassDefs with event handler methods.
@@ -165,6 +168,7 @@ fn translate_scripts(
     dw: &DataWin,
     code: &datawin::chunks::code::Code,
     scpt: &datawin::chunks::scpt::Scpt,
+    code_name_map: &HashMap<String, usize>,
     function_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
@@ -185,11 +189,36 @@ fn translate_scripts(
             message: format!("failed to resolve script name: {e}"),
         })?;
 
-        let code_idx = script.code_id as usize;
-        if code_idx >= code.entries.len() {
-            eprintln!("[gamemaker] warn: script {script_name} references invalid code entry {code_idx}");
-            continue;
-        }
+        // In GMS2.3+ native games, constructor/nested-function SCPT entries have
+        // code_id with the high bit set (>= 0x80000000).  The lower bits are NOT a
+        // valid CODE chunk index.  Look up the CODE entry by canonical name instead.
+        let code_idx = if script.code_id & 0x8000_0000 != 0 {
+            let clean = strip_script_prefix(&script_name);
+            let code_name = if clean == script_name {
+                // Name has no gml_Script_ prefix — try both forms.
+                code_name_map
+                    .get(&format!("gml_Script_{clean}"))
+                    .or_else(|| code_name_map.get(clean))
+                    .copied()
+            } else {
+                // strip_script_prefix removed the prefix; reconstruct canonical name.
+                code_name_map.get(&format!("gml_Script_{clean}")).copied()
+            };
+            match code_name {
+                Some(idx) => idx,
+                None => {
+                    eprintln!("[gamemaker] warn: constructor script {script_name} has no CODE entry");
+                    continue;
+                }
+            }
+        } else {
+            let idx = script.code_id as usize;
+            if idx >= code.entries.len() {
+                eprintln!("[gamemaker] warn: script {script_name} references invalid code entry {idx}");
+                continue;
+            }
+            idx
+        };
 
         let bytecode = match code.entry_bytecode(code_idx, dw.data()) {
             Some(bc) => bc,
@@ -556,6 +585,24 @@ fn build_variable_table(
         vars.push((name, entry.instance_type));
     }
     Ok(vars)
+}
+
+/// Build code entry name → index mapping.
+///
+/// In GMS2.3+, SCPT entries for constructor scripts have `code_id` with the
+/// high bit set (≥ 0x80000000), meaning the code_id is not a direct CODE index.
+/// We look up the CODE entry by name (`gml_Script_<ScriptName>`) instead.
+fn build_code_name_map(
+    dw: &DataWin,
+    code: &datawin::chunks::code::Code,
+) -> HashMap<String, usize> {
+    let mut map = HashMap::new();
+    for (i, entry) in code.entries.iter().enumerate() {
+        if let Ok(name) = dw.resolve_string(entry.name) {
+            map.insert(name, i);
+        }
+    }
+    map
 }
 
 /// Build code entry name → CodeLocals mapping.
