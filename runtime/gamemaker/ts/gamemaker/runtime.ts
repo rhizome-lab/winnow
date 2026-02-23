@@ -115,7 +115,7 @@ for (const ev of [
 // ---- GMLRoom ----
 
 class GMLRoom {
-  constructor(private rt: GameRuntime) {}
+  constructor(private rt: GameRuntime)  { throw new Error("constructor: not yet implemented"); }
 
   draw(): void {
     const rt = this.rt;
@@ -464,20 +464,20 @@ export class GameRuntime {
     return false;
   }
 
-  layer_get_id(_name: string): number { return -1; }
+  layer_get_id(_name: string): number { throw new Error("layer_get_id: not yet implemented"); }
 
   // ---- Sprite API extensions ----
 
   sprite_get_xoffset(spr: number): number { return this.sprites[spr]?.origin.x ?? 0; }
   sprite_get_yoffset(spr: number): number { return this.sprites[spr]?.origin.y ?? 0; }
   sprite_get_number(spr: number): number { return this.sprites[spr]?.textures.length ?? 1; }
-  sprite_get_speed(_spr: number): number { return 1; }
+  sprite_get_speed(_spr: number): number { throw new Error("sprite_get_speed: not yet implemented"); }
   sprite_set_offset(spr: number, xoff: number, yoff: number): void {
     const s = this.sprites[spr];
     if (s) { s.origin.x = xoff; s.origin.y = yoff; }
   }
   sprite_get_texture(spr: number, sub: number): number { return this.sprites[spr]?.textures[sub] ?? -1; }
-  sprite_add_from_surface(_index: number, _srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean): void {}
+  sprite_add_from_surface(_index: number, _srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean): void { throw new Error("sprite_add_from_surface: not yet implemented"); }
   sprite_get_bbox_left(spr: number): number { return this.sprites[spr]?.bbox?.left ?? 0; }
   sprite_get_bbox_right(spr: number): number { return this.sprites[spr]?.bbox?.right ?? 0; }
   sprite_get_bbox_top(spr: number): number { return this.sprites[spr]?.bbox?.top ?? 0; }
@@ -486,7 +486,7 @@ export class GameRuntime {
 
   // ---- Alarm API ----
 
-  alarm_set(_alarm: number, _steps: number): void {}
+  alarm_set(_alarm: number, _steps: number): void { throw new Error("alarm_set: not yet implemented"); }
   alarm_get(inst: any, alarm: number): number {
     return inst?.alarm?.[alarm] ?? -1;
   }
@@ -503,9 +503,9 @@ export class GameRuntime {
     return Math.max(value - amount, target);
   }
 
-  asset_get_index(_name: string): number { return -1; }
-  asset_get_tags(_asset: number, _type: number = -1): string[] { return []; }
-  asset_has_tags(_asset: number, _tags: string | string[], _not?: boolean | number): boolean { return false; }
+  asset_get_index(_name: string): number { throw new Error("asset_get_index: not yet implemented"); }
+  asset_get_tags(_asset: number, _type: number = -1): string[] { throw new Error("asset_get_tags: not yet implemented"); }
+  asset_has_tags(_asset: number, _tags: string | string[], _not?: boolean | number): boolean { throw new Error("asset_has_tags: not yet implemented"); }
 
   // ---- Array API (GMS2 style) ----
 
@@ -713,8 +713,8 @@ export class GameRuntime {
   // GMS2.3+ emits __SetStatic__() / __CopyStatic__(n) calls to manage per-function
   // static-variable scopes.  In our translation we discard static semantics, so
   // these are safe no-ops.
-  __SetStatic__(): void {}
-  __CopyStatic__(_n: number): void {}
+  __SetStatic__(): void { throw new Error("__SetStatic__: not yet implemented"); }
+  __CopyStatic__(_n: number): void { throw new Error("__CopyStatic__: not yet implemented"); }
 
   // ---- Method binding ----
   // GML method(instance, func) binds `instance` as the self context for func.
@@ -819,20 +819,20 @@ export class GameRuntime {
     const s = n.toFixed(dec);
     return s.length < tot ? s.padStart(tot) : s;
   }
-  font_get_name(_font: number): string { return ""; }
-  font_exists(_font: number): boolean { return false; }
+  font_get_name(_font: number): string { throw new Error("font_get_name: not yet implemented"); }
+  font_exists(_font: number): boolean { throw new Error("font_exists: not yet implemented"); }
 
   // ---- Camera API ----
-  camera_get_view_x(_cam: number): number { return 0; }
-  camera_get_view_y(_cam: number): number { return 0; }
-  camera_set_view_pos(_cam: number, _x: number, _y: number): void {}
-  camera_get_view_width(_cam: number): number { return 800; }
-  camera_get_view_height(_cam: number): number { return 600; }
+  camera_get_view_x(_cam: number): number { throw new Error("camera_get_view_x: not yet implemented"); }
+  camera_get_view_y(_cam: number): number { throw new Error("camera_get_view_y: not yet implemented"); }
+  camera_set_view_pos(_cam: number, _x: number, _y: number): void { throw new Error("camera_set_view_pos: not yet implemented"); }
+  camera_get_view_width(_cam: number): number { throw new Error("camera_get_view_width: not yet implemented"); }
+  camera_get_view_height(_cam: number): number { throw new Error("camera_get_view_height: not yet implemented"); }
 
   // ---- Layer API ----
-  layer_background_get_id(_layer: any): number { return -1; }
-  layer_background_get_sprite(_id: number): number { return -1; }
-  layer_background_set_sprite(_id: number, _spr: number): void {}
+  layer_background_get_id(_layer: any): number { throw new Error("layer_background_get_id: not yet implemented"); }
+  layer_background_get_sprite(_id: number): number { throw new Error("layer_background_get_sprite: not yet implemented"); }
+  layer_background_set_sprite(_id: number, _spr: number): void { throw new Error("layer_background_set_sprite: not yet implemented"); }
 
   // ---- Keyboard (delegated to createInputAPI) ----
   keyboard_check!: (key: number) => boolean;
@@ -860,9 +860,9 @@ export class GameRuntime {
   draw_circle(_x: number, _y: number, _r: number, _outline: boolean): void {
     throw new Error("draw_circle: implement in graphics layer");
   }
-  draw_vertex(_x: number, _y: number): void {}
-  draw_primitive_begin(_kind: number): void {}
-  draw_primitive_end(): void {}
+  draw_vertex(_x: number, _y: number): void { throw new Error("draw_vertex: not yet implemented"); }
+  draw_primitive_begin(_kind: number): void { throw new Error("draw_primitive_begin: not yet implemented"); }
+  draw_primitive_end(): void { throw new Error("draw_primitive_end: not yet implemented"); }
   draw_rectangle_color(_x1: number, _y1: number, _x2: number, _y2: number, _c1: number, _c2: number, _c3: number, _c4: number, _outline: boolean): void {
     throw new Error("draw_rectangle_color: implement in graphics layer");
   }
@@ -890,8 +890,8 @@ export class GameRuntime {
   }
 
   // ---- Particle extra ----
-  part_system_automatic_draw(_syst: number, _on: boolean): void {}
-  part_type_exists(_part: number): boolean { return false; }
+  part_system_automatic_draw(_syst: number, _on: boolean): void { throw new Error("part_system_automatic_draw: not yet implemented"); }
+  part_type_exists(_part: number): boolean { throw new Error("part_type_exists: not yet implemented"); }
   part_type_shape(_type: number, _shape: number): void { throw new Error("part_type_shape: particle system not yet implemented"); }
   part_type_death(_type: number, _kind: number, _step: number): void { throw new Error("part_type_death: particle system not yet implemented"); }
   part_type_color_hsv(_type: number, _hmin: number, _hmax: number, _smin: number, _smax: number, _vmin: number, _vmax: number): void { throw new Error("part_type_color_hsv: particle system not yet implemented"); }
@@ -900,24 +900,24 @@ export class GameRuntime {
   part_type_size_y(_type: number, _ymin: number, _ymax: number, _yinc: number, _ywiggle: number): void { throw new Error("part_type_size_y: particle system not yet implemented"); }
 
   // ---- Instance activation/deactivation ----
-  instance_activate_object(_classIndex: number): void {}
-  instance_deactivate_object(_classIndex: number, _notme?: boolean): void {}
-  instance_deactivate_layer(_layer: any): void {}
-  instance_deactivate_region(_x1: number, _y1: number, _x2: number, _y2: number, _inside: boolean, _notme?: boolean): void {}
+  instance_activate_object(_classIndex: number): void { throw new Error("instance_activate_object: not yet implemented"); }
+  instance_deactivate_object(_classIndex: number, _notme?: boolean): void { throw new Error("instance_deactivate_object: not yet implemented"); }
+  instance_deactivate_layer(_layer: any): void { throw new Error("instance_deactivate_layer: not yet implemented"); }
+  instance_deactivate_region(_x1: number, _y1: number, _x2: number, _y2: number, _inside: boolean, _notme?: boolean): void { throw new Error("instance_deactivate_region: not yet implemented"); }
 
   // ---- Variable instance helpers ----
   variable_instance_get(inst: any, name: string): any { return inst?.[name]; }
   variable_instance_exists(inst: any, name: string): boolean { return inst != null && name in Object(inst); }
 
   // ---- Surface API (stubs — requires WebGL offscreen rendering) ----
-  surface_resize(_srf: number, _w: number, _h: number): void {}
-  surface_get_target(): number { return -1; }
+  surface_resize(_srf: number, _w: number, _h: number): void { throw new Error("surface_resize: not yet implemented"); }
+  surface_get_target(): number { throw new Error("surface_get_target: not yet implemented"); }
 
   // ---- Misc ----
   show_error(str: string, _abort: boolean): void { console.error("GML show_error:", str); }
-  event_user(_n: number): void {}
-  sprite_create_from_surface(_srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { return -1; }
-  vertex_normal(_vbuf: number, _x: number, _y: number, _z: number): void {}
+  event_user(_n: number): void { throw new Error("event_user: not yet implemented"); }
+  sprite_create_from_surface(_srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { throw new Error("sprite_create_from_surface: not yet implemented"); }
+  vertex_normal(_vbuf: number, _x: number, _y: number, _z: number): void { throw new Error("vertex_normal: not yet implemented"); }
 
   // ---- ds_exists ----
   ds_exists(id: number, type: number): boolean {
@@ -958,30 +958,30 @@ export class GameRuntime {
 
   // ---- Steam API (platform-provided or no-op) ----
 
-  steam_current_game_language(): string { return "english"; }
-  steam_inventory_result_destroy(_result: number): void {}
-  steam_ugc_get_item_install_info(_id: number, _arr: any): boolean { return false; }
-  steam_ugc_get_subscribed_items(_arr: any): number { return 0; }
-  steam_lobby_get_lobby_id(): number { return 0; }
-  steam_lobby_join_id(_id: number): void {}
-  steam_lobby_set_data(_key: string, _val: string, _lobby?: number): void {}
-  steam_lobby_get_data(_key: string, _lobby?: number): string { return ""; }
-  steam_activate_overlay_store(_app: number): void {}
-  steam_input_get_digital_action_handle(_name: string): number { return 0; }
-  steam_is_cloud_enabled_for_account(): boolean { return false; }
-  steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { return []; }
-  steam_lobby_get_member_id(_index: number, _lobby?: number): number { return 0; }
-  steam_input_get_action_set_handle(_name: string): number { return 0; }
-  steam_get_stat_float(_name: string): number { return 0; }
-  steam_get_global_stat_int(_name: string): number { return 0; }
-  steam_get_user_account_id(): number { return 0; }
-  steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { return false; }
-  steam_input_enable_device_callbacks(): void {}
-  steam_lobby_get_chat_message_text(_index: number, _lobby?: number): string { return ""; }
-  steam_lobby_get_owner_id(_lobby?: number): number { return 0; }
-  steam_request_friend_rich_presence(_steamid: number): void {}
-  steam_ugc_get_item_update_info(_handle: number, _arr: any): boolean { return false; }
-  steam_ugc_submit_item_update(_handle: number, _note: string): void {}
+  steam_current_game_language(): string { throw new Error("steam_current_game_language: not yet implemented"); }
+  steam_inventory_result_destroy(_result: number): void { throw new Error("steam_inventory_result_destroy: not yet implemented"); }
+  steam_ugc_get_item_install_info(_id: number, _arr: any): boolean { throw new Error("steam_ugc_get_item_install_info: not yet implemented"); }
+  steam_ugc_get_subscribed_items(_arr: any): number { throw new Error("steam_ugc_get_subscribed_items: not yet implemented"); }
+  steam_lobby_get_lobby_id(): number { throw new Error("steam_lobby_get_lobby_id: not yet implemented"); }
+  steam_lobby_join_id(_id: number): void { throw new Error("steam_lobby_join_id: not yet implemented"); }
+  steam_lobby_set_data(_key: string, _val: string, _lobby?: number): void { throw new Error("steam_lobby_set_data: not yet implemented"); }
+  steam_lobby_get_data(_key: string, _lobby?: number): string { throw new Error("steam_lobby_get_data: not yet implemented"); }
+  steam_activate_overlay_store(_app: number): void { throw new Error("steam_activate_overlay_store: not yet implemented"); }
+  steam_input_get_digital_action_handle(_name: string): number { throw new Error("steam_input_get_digital_action_handle: not yet implemented"); }
+  steam_is_cloud_enabled_for_account(): boolean { throw new Error("steam_is_cloud_enabled_for_account: not yet implemented"); }
+  steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { throw new Error("steam_inventory_result_get_items: not yet implemented"); }
+  steam_lobby_get_member_id(_index: number, _lobby?: number): number { throw new Error("steam_lobby_get_member_id: not yet implemented"); }
+  steam_input_get_action_set_handle(_name: string): number { throw new Error("steam_input_get_action_set_handle: not yet implemented"); }
+  steam_get_stat_float(_name: string): number { throw new Error("steam_get_stat_float: not yet implemented"); }
+  steam_get_global_stat_int(_name: string): number { throw new Error("steam_get_global_stat_int: not yet implemented"); }
+  steam_get_user_account_id(): number { throw new Error("steam_get_user_account_id: not yet implemented"); }
+  steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { throw new Error("steam_image_get_rgba: not yet implemented"); }
+  steam_input_enable_device_callbacks(): void { throw new Error("steam_input_enable_device_callbacks: not yet implemented"); }
+  steam_lobby_get_chat_message_text(_index: number, _lobby?: number): string { throw new Error("steam_lobby_get_chat_message_text: not yet implemented"); }
+  steam_lobby_get_owner_id(_lobby?: number): number { throw new Error("steam_lobby_get_owner_id: not yet implemented"); }
+  steam_request_friend_rich_presence(_steamid: number): void { throw new Error("steam_request_friend_rich_presence: not yet implemented"); }
+  steam_ugc_get_item_update_info(_handle: number, _arr: any): boolean { throw new Error("steam_ugc_get_item_update_info: not yet implemented"); }
+  steam_ugc_submit_item_update(_handle: number, _note: string): void { throw new Error("steam_ugc_submit_item_update: not yet implemented"); }
 
   // ---- More collision ----
   collision_point(_x: number, _y: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_point: requires collision system implementation"); }
@@ -994,26 +994,26 @@ export class GameRuntime {
   }
 
   // ---- More draw ----
-  draw_line(_x1: number, _y1: number, _x2: number, _y2: number): void {}
-  draw_line_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number): void {}
-  draw_point_color(_x: number, _y: number, _col: number): void {}
-  draw_triangle(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _outline: boolean): void {}
-  draw_triangle_color(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _c1: number, _c2: number, _c3: number, _outline: boolean): void {}
-  draw_primitive_begin_texture(_kind: number, _tex: number): void {}
-  draw_set_circle_precision(_n: number): void {}
-  draw_sprite_part_ext(_spr: number, _sub: number, _left: number, _top: number, _width: number, _height: number, _x: number, _y: number, _xscale: number, _yscale: number, _col: number, _alpha: number): void {}
-  draw_sprite_pos(_spr: number, _sub: number, _x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _x4: number, _y4: number, _alpha: number): void {}
-  draw_sprite_tiled(_spr: number, _sub: number, _x: number, _y: number): void {}
+  draw_line(_x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("draw_line: not yet implemented"); }
+  draw_line_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number): void { throw new Error("draw_line_color: not yet implemented"); }
+  draw_point_color(_x: number, _y: number, _col: number): void { throw new Error("draw_point_color: not yet implemented"); }
+  draw_triangle(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _outline: boolean): void { throw new Error("draw_triangle: not yet implemented"); }
+  draw_triangle_color(_x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _c1: number, _c2: number, _c3: number, _outline: boolean): void { throw new Error("draw_triangle_color: not yet implemented"); }
+  draw_primitive_begin_texture(_kind: number, _tex: number): void { throw new Error("draw_primitive_begin_texture: not yet implemented"); }
+  draw_set_circle_precision(_n: number): void { throw new Error("draw_set_circle_precision: not yet implemented"); }
+  draw_sprite_part_ext(_spr: number, _sub: number, _left: number, _top: number, _width: number, _height: number, _x: number, _y: number, _xscale: number, _yscale: number, _col: number, _alpha: number): void { throw new Error("draw_sprite_part_ext: not yet implemented"); }
+  draw_sprite_pos(_spr: number, _sub: number, _x1: number, _y1: number, _x2: number, _y2: number, _x3: number, _y3: number, _x4: number, _y4: number, _alpha: number): void { throw new Error("draw_sprite_pos: not yet implemented"); }
+  draw_sprite_tiled(_spr: number, _sub: number, _x: number, _y: number): void { throw new Error("draw_sprite_tiled: not yet implemented"); }
   draw_surface_stretched_ext(_surf: number, _x: number, _y: number, _w: number, _h: number, _col: number, _alpha: number): void {
     throw new Error("draw_surface_stretched_ext: requires WebGL implementation");
   }
-  draw_get_font(): number { return -1; }
+  draw_get_font(): number { throw new Error("draw_get_font: not yet implemented"); }
 
   // ---- DS extras ----
-  ds_grid_read(_grid: number, _str: string): void {}
-  ds_grid_value_exists(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): boolean { return false; }
-  ds_grid_value_x(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): number { return 0; }
-  ds_grid_value_y(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): number { return 0; }
+  ds_grid_read(_grid: number, _str: string): void { throw new Error("ds_grid_read: not yet implemented"); }
+  ds_grid_value_exists(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): boolean { throw new Error("ds_grid_value_exists: not yet implemented"); }
+  ds_grid_value_x(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): number { throw new Error("ds_grid_value_x: not yet implemented"); }
+  ds_grid_value_y(_grid: number, _x1: number, _y1: number, _x2: number, _y2: number, _val: any): number { throw new Error("ds_grid_value_y: not yet implemented"); }
   ds_list_copy(dst: number, src: number): void {
     const s = this._dsLists.get(src);
     if (s) this._dsLists.set(dst, [...s]);
@@ -1023,7 +1023,7 @@ export class GameRuntime {
     const l = this._dsLists.get(list);
     if (l) l[index] = val;
   }
-  ds_map_read(_map: number, _str: string): void {}
+  ds_map_read(_map: number, _str: string): void { throw new Error("ds_map_read: not yet implemented"); }
   ds_map_secure_load(_filename: string): number { return this.ds_map_create(); }
   ds_priority_clear(id: number): void { this._dsMaps.get(id)?.clear(); }
   ds_priority_delete_max(id: number): void {
@@ -1035,18 +1035,18 @@ export class GameRuntime {
   }
 
   // ---- File extras ----
-  file_text_open_read(_path: string): number { return -1; }
-  file_text_read_string(_file: number): string { return ""; }
-  file_delete(_path: string): void {}
-  file_find_first(_mask: string, _attr: number): string { return ""; }
-  file_find_next(): string { return ""; }
+  file_text_open_read(_path: string): number { throw new Error("file_text_open_read: not yet implemented"); }
+  file_text_read_string(_file: number): string { throw new Error("file_text_read_string: not yet implemented"); }
+  file_delete(_path: string): void { throw new Error("file_delete: not yet implemented"); }
+  file_find_first(_mask: string, _attr: number): string { throw new Error("file_find_first: not yet implemented"); }
+  file_find_next(): string { throw new Error("file_find_next: not yet implemented"); }
 
   // ---- Directory ----
-  directory_create(_path: string): void {}
-  directory_exists(_path: string): boolean { return false; }
+  directory_create(_path: string): void { throw new Error("directory_create: not yet implemented"); }
+  directory_exists(_path: string): boolean { throw new Error("directory_exists: not yet implemented"); }
 
   // ---- Audio extras ----
-  audio_sound_length(_sound: number): number { return 0; }
+  audio_sound_length(_sound: number): number { throw new Error("audio_sound_length: not yet implemented"); }
   audio_sound_get_pitch(_handle: number): number { throw new Error("audio_sound_get_pitch: implement in platform/audio.ts"); }
 
   // ---- Buffer extras ----
@@ -1057,16 +1057,16 @@ export class GameRuntime {
   buffer_set_surface(_buf: number, _surf: number, _offset: number): void {
     throw new Error("buffer_set_surface: requires WebGL implementation");
   }
-  buffer_async_group_begin(_groupname: string): void {}
-  buffer_async_group_end(): number { return 0; }
+  buffer_async_group_begin(_groupname: string): void { throw new Error("buffer_async_group_begin: not yet implemented"); }
+  buffer_async_group_end(): number { throw new Error("buffer_async_group_end: not yet implemented"); }
 
   // ---- Display extras ----
   display_get_gui_width(): number { return window.innerWidth; }
   display_get_gui_height(): number { return window.innerHeight; }
-  display_reset(_antialias: number, _vsync: boolean): void {}
+  display_reset(_antialias: number, _vsync: boolean): void { throw new Error("display_reset: not yet implemented"); }
 
   // ---- Font extras ----
-  font_add_sprite_ext(_spr: number, _str: string, _prop: boolean, _sep: number): number { return -1; }
+  font_add_sprite_ext(_spr: number, _str: string, _prop: boolean, _sep: number): number { throw new Error("font_add_sprite_ext: not yet implemented"); }
 
   // ---- String extras ----
   string_byte_length(str: string): number { return new TextEncoder().encode(str).length; }
@@ -1075,7 +1075,7 @@ export class GameRuntime {
 
   // ---- Struct extras ----
   struct_get(struct: any, name: string): any { return struct?.[name]; }
-  struct_get_from_hash(_struct: any, _hash: number): any { return undefined; }
+  struct_get_from_hash(_struct: any, _hash: number): any { throw new Error("struct_get_from_hash: not yet implemented"); }
 
   // ---- Surface extras ----
   surface_copy(_dest: number, _x: number, _y: number, _src: number): void {
@@ -1083,38 +1083,38 @@ export class GameRuntime {
   }
 
   // ---- Tags / misc ----
-  tag_get_assets(_tag: string, _kind?: number): any[] { return []; }
+  tag_get_assets(_tag: string, _kind?: number): any[] { throw new Error("tag_get_assets: not yet implemented"); }
   url_open_ext(url: string, _target: string): void { window.open(url, "_blank"); }
 
   // ---- View extras ----
-  view_set_hport(_view: number, _h: number): void {}
-  view_set_wport(_view: number, _w: number): void {}
+  view_set_hport(_view: number, _h: number): void { throw new Error("view_set_hport: not yet implemented"); }
+  view_set_wport(_view: number, _w: number): void { throw new Error("view_set_wport: not yet implemented"); }
 
   // ---- Window extras ----
   window_set_caption(_caption: string): void { document.title = _caption; }
-  window_set_cursor(_cursor: number): void {}
+  window_set_cursor(_cursor: number): void { throw new Error("window_set_cursor: not yet implemented"); }
   window_set_fullscreen(enable: boolean): void {
     if (enable) { document.documentElement.requestFullscreen?.(); }
     else { document.exitFullscreen?.(); }
   }
 
   // ---- More Steam API ----
-  steam_activate_overlay(_type: string): void {}
-  steam_activate_overlay_user(_type: string, _steamid: number): void {}
-  steam_get_app_id(): number { return 0; }
-  steam_get_user_persona_name_sync(_steamid?: number): string { return ""; }
-  steam_get_stat_int(_name: string): number { return 0; }
-  steam_get_global_stat_history_int(_name: string, _days?: number): number { return 0; }
-  steam_is_overlay_activated(): boolean { return false; }
-  steam_image_get_size(_image: number): [number, number] { return [0, 0]; }
-  steam_lobby_get_member_count(_lobby?: number): number { return 0; }
-  steam_lobby_list_add_string_filter(_key: string, _val: string, _type: number): void {}
-  steam_lobby_get_chat_message_data(_msg: number, _buf: number, _lobby?: number): number { return 0; }
-  steam_ugc_subscribe_item(_id: number): void {}
-  steam_input_run_frame(): void {}
-  steam_file_write(_path: string, _data: string, _length?: number): boolean { return false; }
-  steam_file_exists(_path: string): boolean { return false; }
-  psn_post_uds_event(_evtype: number, ..._args: any[]): void {}
+  steam_activate_overlay(_type: string): void { throw new Error("steam_activate_overlay: not yet implemented"); }
+  steam_activate_overlay_user(_type: string, _steamid: number): void { throw new Error("steam_activate_overlay_user: not yet implemented"); }
+  steam_get_app_id(): number { throw new Error("steam_get_app_id: not yet implemented"); }
+  steam_get_user_persona_name_sync(_steamid?: number): string { throw new Error("steam_get_user_persona_name_sync: not yet implemented"); }
+  steam_get_stat_int(_name: string): number { throw new Error("steam_get_stat_int: not yet implemented"); }
+  steam_get_global_stat_history_int(_name: string, _days?: number): number { throw new Error("steam_get_global_stat_history_int: not yet implemented"); }
+  steam_is_overlay_activated(): boolean { throw new Error("steam_is_overlay_activated: not yet implemented"); }
+  steam_image_get_size(_image: number): [number, number] { throw new Error("steam_image_get_size: not yet implemented"); }
+  steam_lobby_get_member_count(_lobby?: number): number { throw new Error("steam_lobby_get_member_count: not yet implemented"); }
+  steam_lobby_list_add_string_filter(_key: string, _val: string, _type: number): void { throw new Error("steam_lobby_list_add_string_filter: not yet implemented"); }
+  steam_lobby_get_chat_message_data(_msg: number, _buf: number, _lobby?: number): number { throw new Error("steam_lobby_get_chat_message_data: not yet implemented"); }
+  steam_ugc_subscribe_item(_id: number): void { throw new Error("steam_ugc_subscribe_item: not yet implemented"); }
+  steam_input_run_frame(): void { throw new Error("steam_input_run_frame: not yet implemented"); }
+  steam_file_write(_path: string, _data: string, _length?: number): boolean { throw new Error("steam_file_write: not yet implemented"); }
+  steam_file_exists(_path: string): boolean { throw new Error("steam_file_exists: not yet implemented"); }
+  psn_post_uds_event(_evtype: number, ..._args: any[]): void { throw new Error("psn_post_uds_event: not yet implemented"); }
 
   // ---- More file/buffer API ----
   file_text_open_write(_path: string): number {
@@ -1123,7 +1123,7 @@ export class GameRuntime {
   buffer_seek(_buffer: number, _base: number, _offset: number): void {
     throw new Error("buffer_seek: implement in platform layer");
   }
-  buffer_async_group_option(_option: string, _value: any): void {}
+  buffer_async_group_option(_option: string, _value: any): void { throw new Error("buffer_async_group_option: not yet implemented"); }
 
   // ---- Array/struct GML internals ----
   // GMS2.3+ runtime sentinels.  As values they act as: null object = null,
@@ -1146,16 +1146,16 @@ export class GameRuntime {
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  draw_vertex_texture(_x: number, _y: number, _xtex: number, _ytex: number): void {}
-  vertex_position(_vbuf: number, _x: number, _y: number, _z: number = 0): void {}
-  vertex_colour(_vbuf: number, _col: number, _alpha: number): void {}
+  draw_vertex_texture(_x: number, _y: number, _xtex: number, _ytex: number): void { throw new Error("draw_vertex_texture: not yet implemented"); }
+  vertex_position(_vbuf: number, _x: number, _y: number, _z: number = 0): void { throw new Error("vertex_position: not yet implemented"); }
+  vertex_colour(_vbuf: number, _col: number, _alpha: number): void { throw new Error("vertex_colour: not yet implemented"); }
   position_meeting(_x: number, _y: number, _classIndex: number): boolean {
     throw new Error("position_meeting: requires collision system implementation");
   }
   variable_instance_set(instance: any, name: string, value: any): void {
     if (instance != null) instance[name] = value;
   }
-  sprite_delete(_spr: number): void {}
+  sprite_delete(_spr: number): void { throw new Error("sprite_delete: not yet implemented"); }
   surface_get_texture(_surf: number): number {
     throw new Error("surface_get_texture: requires WebGL implementation");
   }
@@ -1168,26 +1168,26 @@ export class GameRuntime {
   room_duplicate(_room: number): number {
     throw new Error("room_duplicate: not implemented");
   }
-  room_set_persistent(_room: number, _persistent: boolean): void {}
-  event_perform(_type: number, _n: number): void {}
-  is_debug_overlay_open(): boolean { return false; }
-  path_exists(_path: number): boolean { return false; }
-  path_delete(_path: number): void {}
-  part_type_gravity(_part: number, _gx: number, _gy: number): void {}
-  part_system_depth(_syst: number, _depth: number): void {}
-  layer_background_visible(_bg: number, _visible: boolean): void {}
-  layer_sequence_create(_layer: any, _x: number, _y: number, _seq: number): number { return -1; }
-  layer_sequence_is_finished(_seq: number): boolean { return true; }
+  room_set_persistent(_room: number, _persistent: boolean): void { throw new Error("room_set_persistent: not yet implemented"); }
+  event_perform(_type: number, _n: number): void { throw new Error("event_perform: not yet implemented"); }
+  is_debug_overlay_open(): boolean { throw new Error("is_debug_overlay_open: not yet implemented"); }
+  path_exists(_path: number): boolean { throw new Error("path_exists: not yet implemented"); }
+  path_delete(_path: number): void { throw new Error("path_delete: not yet implemented"); }
+  part_type_gravity(_part: number, _gx: number, _gy: number): void { throw new Error("part_type_gravity: not yet implemented"); }
+  part_system_depth(_syst: number, _depth: number): void { throw new Error("part_system_depth: not yet implemented"); }
+  layer_background_visible(_bg: number, _visible: boolean): void { throw new Error("layer_background_visible: not yet implemented"); }
+  layer_sequence_create(_layer: any, _x: number, _y: number, _seq: number): number { throw new Error("layer_sequence_create: not yet implemented"); }
+  layer_sequence_is_finished(_seq: number): boolean { throw new Error("layer_sequence_is_finished: not yet implemented"); }
   string_repeat(str: string, count: number): string { return str.repeat(count); }
 
   // ---- Gamepad API (stubs) ----
-  gamepad_get_device_count(): number { return 0; }
-  gamepad_axis_value(_device: number, _axis: number): number { return 0; }
-  gamepad_button_check_pressed(_device: number, _button: number): boolean { return false; }
-  gamepad_button_check_released(_device: number, _button: number): boolean { return false; }
-  gamepad_button_check(_device: number, _button: number): boolean { return false; }
-  gamepad_is_connected(_device: number): boolean { return false; }
-  gamepad_set_vibration(_device: number, _left: number, _right: number): void {}
+  gamepad_get_device_count(): number { throw new Error("gamepad_get_device_count: not yet implemented"); }
+  gamepad_axis_value(_device: number, _axis: number): number { throw new Error("gamepad_axis_value: not yet implemented"); }
+  gamepad_button_check_pressed(_device: number, _button: number): boolean { throw new Error("gamepad_button_check_pressed: not yet implemented"); }
+  gamepad_button_check_released(_device: number, _button: number): boolean { throw new Error("gamepad_button_check_released: not yet implemented"); }
+  gamepad_button_check(_device: number, _button: number): boolean { throw new Error("gamepad_button_check: not yet implemented"); }
+  gamepad_is_connected(_device: number): boolean { throw new Error("gamepad_is_connected: not yet implemented"); }
+  gamepad_set_vibration(_device: number, _left: number, _right: number): void { throw new Error("gamepad_set_vibration: not yet implemented"); }
 
   // ---- Display ----
   display_get_width(): number { return window.innerWidth; }
@@ -1204,47 +1204,47 @@ export class GameRuntime {
   draw_circle_color(_x: number, _y: number, _r: number, _col1: number, _col2: number, _outline: boolean): void {
     throw new Error("draw_circle_color: implement in graphics layer");
   }
-  draw_path(_path: number, _x: number, _y: number, _absolute: boolean): void {}
+  draw_path(_path: number, _x: number, _y: number, _absolute: boolean): void { throw new Error("draw_path: not yet implemented"); }
 
   // ---- More buffer functions ----
   buffer_get_size(_buffer: number): number {
     throw new Error("buffer_get_size: implement in platform layer");
   }
-  buffer_exists(_buffer: number): boolean { return false; }
+  buffer_exists(_buffer: number): boolean { throw new Error("buffer_exists: not yet implemented"); }
 
   // ---- Layer extras ----
-  layer_get_x(_layer: any): number { return 0; }
-  layer_get_y(_layer: any): number { return 0; }
-  layer_depth(_layer: any, _depth?: number): number { return 0; }
-  layer_sequence_destroy(_seq: number): void {}
+  layer_get_x(_layer: any): number { throw new Error("layer_get_x: not yet implemented"); }
+  layer_get_y(_layer: any): number { throw new Error("layer_get_y: not yet implemented"); }
+  layer_depth(_layer: any, _depth?: number): number { throw new Error("layer_depth: not yet implemented"); }
+  layer_sequence_destroy(_seq: number): void { throw new Error("layer_sequence_destroy: not yet implemented"); }
 
   // ---- More collision ----
   collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_ellipse_list: requires collision system implementation"); }
 
   // ---- Instance change ----
-  instance_change(_classIndex: number, _performEvents: boolean): void {}
+  instance_change(_classIndex: number, _performEvents: boolean): void { throw new Error("instance_change: not yet implemented"); }
 
   // ---- More Steam ----
-  steam_initialised(): boolean { return false; }
-  steam_indicate_achievement_progress(_name: string, _cur: number, _max: number): void {}
-  steam_get_user_steam_id(): number { return 0; }
-  steam_get_persona_name(): string { return ""; }
-  steam_set_achievement(_name: string): void {}
-  steam_request_global_achievement_percentages(): void {}
-  steam_get_achievement(_name: string): boolean { return false; }
-  steam_store_stats(): void {}
-  steam_set_stat_int(_name: string, _val: number): void {}
-  steam_net_packet_get_sender_id(): number { return 0; }
-  steam_is_cloud_enabled_for_app(): boolean { return false; }
-  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { return 0; }
+  steam_initialised(): boolean { throw new Error("steam_initialised: not yet implemented"); }
+  steam_indicate_achievement_progress(_name: string, _cur: number, _max: number): void { throw new Error("steam_indicate_achievement_progress: not yet implemented"); }
+  steam_get_user_steam_id(): number { throw new Error("steam_get_user_steam_id: not yet implemented"); }
+  steam_get_persona_name(): string { throw new Error("steam_get_persona_name: not yet implemented"); }
+  steam_set_achievement(_name: string): void { throw new Error("steam_set_achievement: not yet implemented"); }
+  steam_request_global_achievement_percentages(): void { throw new Error("steam_request_global_achievement_percentages: not yet implemented"); }
+  steam_get_achievement(_name: string): boolean { throw new Error("steam_get_achievement: not yet implemented"); }
+  steam_store_stats(): void { throw new Error("steam_store_stats: not yet implemented"); }
+  steam_set_stat_int(_name: string, _val: number): void { throw new Error("steam_set_stat_int: not yet implemented"); }
+  steam_net_packet_get_sender_id(): number { throw new Error("steam_net_packet_get_sender_id: not yet implemented"); }
+  steam_is_cloud_enabled_for_app(): boolean { throw new Error("steam_is_cloud_enabled_for_app: not yet implemented"); }
+  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { throw new Error("steam_ugc_create_query_user: not yet implemented"); }
 
   // ---- Misc ----
   show_message_async(_str: string): void { console.log("GML show_message_async:", _str); }
   sprite_get_name(_spr: number): string { return `sprite_${_spr}`; }
   room_exists(_room: number): boolean { return _room >= 0 && _room < this._roomInstances.length; }
   string_byte_at(str: string, n: number): number { return str.charCodeAt(n - 1) || 0; }
-  video_seek_to(_time: number): void {}
-  video_get_position(): number { return 0; }
+  video_seek_to(_time: number): void { throw new Error("video_seek_to: not yet implemented"); }
+  video_get_position(): number { throw new Error("video_get_position: not yet implemented"); }
 
   // ---- GMS2.3+ self reference sentinel ----
   // @@This@@ is a pushref to the current instance; in our model it's always `self`.
@@ -1262,13 +1262,13 @@ export class GameRuntime {
   collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_circle_list: requires collision system implementation"); }
 
   // ---- More draw ----
-  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _outline: number | boolean = 0): void {}
-  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: number | boolean): void {}
+  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _outline: number | boolean = 0): void { throw new Error("draw_roundrect: not yet implemented"); }
+  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _col1: number, _col2: number, _outline: number | boolean): void { throw new Error("draw_roundrect_color: not yet implemented"); }
   draw_sprite_stretched(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number): void {
     throw new Error("draw_sprite_stretched: implement in graphics layer");
   }
-  draw_line_width(_x1: number, _y1: number, _x2: number, _y2: number, _w: number): void {}
-  draw_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _outline: boolean): void {}
+  draw_line_width(_x1: number, _y1: number, _x2: number, _y2: number, _w: number): void { throw new Error("draw_line_width: not yet implemented"); }
+  draw_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _outline: boolean): void { throw new Error("draw_ellipse: not yet implemented"); }
 
   // ---- More string ----
   string_width_ext(_str: string, _sep: number, _w: number): number { return (_str?.length ?? 0) * 8; }
@@ -1277,34 +1277,34 @@ export class GameRuntime {
   }
 
   // ---- More audio ----
-  audio_sound_set_track_position(_sound: number, _pos: number): void {}
-  audio_sound_get_track_position(_sound: number): number { return 0; }
+  audio_sound_set_track_position(_sound: number, _pos: number): void { throw new Error("audio_sound_set_track_position: not yet implemented"); }
+  audio_sound_get_track_position(_sound: number): number { throw new Error("audio_sound_get_track_position: not yet implemented"); }
 
   // ---- Clipboard ----
   clipboard_set_text(str: string): void { navigator.clipboard?.writeText(str); }
-  clipboard_get_text(): string { return ""; }
+  clipboard_get_text(): string { throw new Error("clipboard_get_text: not yet implemented"); }
 
   // ---- Window extras ----
   window_mouse_get_x(): number { return this.mouse_x(); }
   window_mouse_get_y(): number { return this.mouse_y(); }
-  window_mouse_set(_x: number, _y: number): void {}
-  window_get_x(): number { return 0; }
-  window_get_y(): number { return 0; }
-  window_set_size(_w: number, _h: number): void {}
-  window_set_position(_x: number, _y: number): void {}
+  window_mouse_set(_x: number, _y: number): void { throw new Error("window_mouse_set: not yet implemented"); }
+  window_get_x(): number { throw new Error("window_get_x: not yet implemented"); }
+  window_get_y(): number { throw new Error("window_get_y: not yet implemented"); }
+  window_set_size(_w: number, _h: number): void { throw new Error("window_set_size: not yet implemented"); }
+  window_set_position(_x: number, _y: number): void { throw new Error("window_set_position: not yet implemented"); }
 
   // ---- View helpers ----
-  view_set_visible(_view: number, _vis: boolean): void {}
-  view_set_camera(_view: number, _cam: number): void {}
+  view_set_visible(_view: number, _vis: boolean): void { throw new Error("view_set_visible: not yet implemented"); }
+  view_set_camera(_view: number, _cam: number): void { throw new Error("view_set_camera: not yet implemented"); }
 
   // ---- Display extras ----
-  display_set_gui_size(_w: number, _h: number): void {}
+  display_set_gui_size(_w: number, _h: number): void { throw new Error("display_set_gui_size: not yet implemented"); }
 
   // ---- Room extras ----
   room_get_name(room: number): string { return `room_${room}`; }
 
   // ---- Font extras ----
-  font_get_size(_font: number): number { return 16; }
+  font_get_size(_font: number): number { throw new Error("font_get_size: not yet implemented"); }
 
   // ---- JSON legacy names ----
   json_encode(val: any): string { return JSON.stringify(val) ?? "undefined"; }
@@ -1327,68 +1327,68 @@ export class GameRuntime {
   ds_priority_size(id: number): number { return this._dsMaps.get(id)?.size ?? 0; }
   ds_priority_empty(id: number): boolean { return (this._dsMaps.get(id)?.size ?? 0) === 0; }
   ds_priority_destroy(id: number): void { this._dsMaps.delete(id); }
-  ds_map_write(_map: number): string { return "{}"; }
+  ds_map_write(_map: number): string { throw new Error("ds_map_write: not yet implemented"); }
   ds_map_keys_to_array(map: number): any[] { return [...(this._dsMaps.get(map)?.keys() ?? [])]; }
   ds_map_replace(map: number, key: any, val: any): void { this._dsMaps.get(map)?.set(key, val); }
-  ds_map_secure_save(_map: number, _filename: string): void {}
+  ds_map_secure_save(_map: number, _filename: string): void { throw new Error("ds_map_secure_save: not yet implemented"); }
   ds_map_values_to_array(map: number): any[] { return [...(this._dsMaps.get(map)?.values() ?? [])]; }
-  ds_list_read(_list: number, _str: string): void {}
+  ds_list_read(_list: number, _str: string): void { throw new Error("ds_list_read: not yet implemented"); }
   ds_list_write(list: number): string { return JSON.stringify(this._dsLists.get(list) ?? []); }
-  ds_grid_write(_grid: number): string { return "{}"; }
+  ds_grid_write(_grid: number): string { throw new Error("ds_grid_write: not yet implemented"); }
 
   // ---- Instance extras ----
   method_get_self(func: any): any { return func?._self ?? null; }
 
   // ---- Sprite extras ----
-  sprite_duplicate(_spr: number): number { return -1; }
-  sprite_collision_mask(_spr: number, ..._args: any[]): void {}
+  sprite_duplicate(_spr: number): number { throw new Error("sprite_duplicate: not yet implemented"); }
+  sprite_collision_mask(_spr: number, ..._args: any[]): void { throw new Error("sprite_collision_mask: not yet implemented"); }
 
   // ---- Path ----
-  path_add(): number { return -1; }
-  path_end(): void {}
+  path_add(): number { throw new Error("path_add: not yet implemented"); }
+  path_end(): void { throw new Error("path_end: not yet implemented"); }
 
   // ---- Particle system extras ----
-  part_system_exists(_syst: number): boolean { return false; }
-  part_system_position(_syst: number, _x: number, _y: number): void {}
-  part_system_draw_order(_syst: number, _order: boolean): void {}
+  part_system_exists(_syst: number): boolean { throw new Error("part_system_exists: not yet implemented"); }
+  part_system_position(_syst: number, _x: number, _y: number): void { throw new Error("part_system_position: not yet implemented"); }
+  part_system_draw_order(_syst: number, _order: boolean): void { throw new Error("part_system_draw_order: not yet implemented"); }
 
   // ---- Layer extras ----
-  layer_exists(_layer: any): boolean { return false; }
+  layer_exists(_layer: any): boolean { throw new Error("layer_exists: not yet implemented"); }
   layer_vspeed(_layer: any, _speed?: number): any { if (_speed !== undefined) return; return 0; }
   layer_background_sprite(_bg: number, _spr?: number): any { if (_spr !== undefined) return; return -1; }
-  layer_background_index(_bg: number, _sprite: number): void {}
-  layer_background_get_index(_bg: number): number { return -1; }
+  layer_background_index(_bg: number, _sprite: number): void { throw new Error("layer_background_index: not yet implemented"); }
+  layer_background_get_index(_bg: number): number { throw new Error("layer_background_get_index: not yet implemented"); }
 
   // ---- GPU extras ----
-  gpu_set_texfilter(_enable: boolean): void {}
+  gpu_set_texfilter(_enable: boolean): void { throw new Error("gpu_set_texfilter: not yet implemented"); }
 
   // ---- Texture extras ----
-  texture_prefetch(_tex: number): void {}
-  texture_set_stage(_stage: number, _tex: number): void {}
-  texture_is_ready(_tex: number): boolean { return false; }
-  texture_get_texel_height(_tex: number): number { return 0; }
-  texture_get_texel_width(_tex: number): number { return 0; }
+  texture_prefetch(_tex: number): void { throw new Error("texture_prefetch: not yet implemented"); }
+  texture_set_stage(_stage: number, _tex: number): void { throw new Error("texture_set_stage: not yet implemented"); }
+  texture_is_ready(_tex: number): boolean { throw new Error("texture_is_ready: not yet implemented"); }
+  texture_get_texel_height(_tex: number): number { throw new Error("texture_get_texel_height: not yet implemented"); }
+  texture_get_texel_width(_tex: number): number { throw new Error("texture_get_texel_width: not yet implemented"); }
 
   // ---- Vertex buffer (stubs) ----
   vertex_create_buffer(): number { throw new Error("vertex_create_buffer: requires WebGL implementation"); }
-  vertex_delete_buffer(_buf: number): void {}
-  vertex_begin(_buf: number, _format: number): void {}
-  vertex_end(_buf: number): void {}
-  vertex_submit(_buf: number, _prim: number, _tex: number): void {}
-  vertex_format_begin(): void {}
-  vertex_format_end(): number { return -1; }
+  vertex_delete_buffer(_buf: number): void { throw new Error("vertex_delete_buffer: not yet implemented"); }
+  vertex_begin(_buf: number, _format: number): void { throw new Error("vertex_begin: not yet implemented"); }
+  vertex_end(_buf: number): void { throw new Error("vertex_end: not yet implemented"); }
+  vertex_submit(_buf: number, _prim: number, _tex: number): void { throw new Error("vertex_submit: not yet implemented"); }
+  vertex_format_begin(): void { throw new Error("vertex_format_begin: not yet implemented"); }
+  vertex_format_end(): number { throw new Error("vertex_format_end: not yet implemented"); }
 
   // ---- Video (stubs) ----
-  video_open(_path: string, ..._args: any[]): void {}
-  video_close(): void {}
-  video_draw(): void {}
-  video_get_status(): number { return 3; } // 3=stopped
-  video_get_duration(): number { return 0; }
-  video_set_volume(_vol: number): void {}
+  video_open(_path: string, ..._args: any[]): void { throw new Error("video_open: not yet implemented"); }
+  video_close(): void { throw new Error("video_close: not yet implemented"); }
+  video_draw(): void { throw new Error("video_draw: not yet implemented"); }
+  video_get_status(): number { throw new Error("video_get_status: not yet implemented"); }
+  video_get_duration(): number { throw new Error("video_get_duration: not yet implemented"); }
+  video_set_volume(_vol: number): void { throw new Error("video_set_volume: not yet implemented"); }
 
   // ---- Mouse wheel ----
-  mouse_wheel_up(): boolean { return false; }
-  mouse_wheel_down(): boolean { return false; }
+  mouse_wheel_up(): boolean { throw new Error("mouse_wheel_up: not yet implemented"); }
+  mouse_wheel_down(): boolean { throw new Error("mouse_wheel_down: not yet implemented"); }
 
   // ---- Navigation mesh ----
   mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { throw new Error("mp_grid_path: requires pathfinding implementation"); }
@@ -1402,13 +1402,13 @@ export class GameRuntime {
   }
 
   // ---- Camera extras ----
-  camera_create_view(_x: number, _y: number, _w: number, _h: number, ..._args: any[]): number { return 0; }
+  camera_create_view(_x: number, _y: number, _w: number, _h: number, ..._args: any[]): number { throw new Error("camera_create_view: not yet implemented"); }
 
   // ---- GC ----
-  gc_collect(): void {}
+  gc_collect(): void { throw new Error("gc_collect: not yet implemented"); }
 
   // ---- Screen save ----
-  screen_save(_filename: string): void {}
+  screen_save(_filename: string): void { throw new Error("screen_save: not yet implemented"); }
 
   // ---- Async dialogs ----
   get_integer_async(_message: string, _default: number): number { return _default; }
@@ -1423,95 +1423,95 @@ export class GameRuntime {
   }
 
   // ---- More Steam ----
-  steam_utils_enable_callbacks(_enable?: boolean): void {}
-  steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void {}
-  steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void {}
-  steam_ugc_start_item_update(_appId: number, _fileId: number): number { return 0; }
-  steam_ugc_set_item_description(_handle: number, _desc: string): void {}
-  steam_net_packet_get_data(_buf: number): void {}
-  steam_net_packet_receive(): boolean { return false; }
-  steam_net_packet_send(_steamid: number, _buf: number, _size?: number, _type?: number): void {}
-  steam_music_play(): void {}
-  steam_music_is_enabled(): boolean { return false; }
-  steam_music_get_status(): number { return 0; }
-  steam_lobby_list_request(): void {}
-  steam_lobby_list_get_lobby_id(_index: number): number { return 0; }
-  steam_lobby_list_get_count(): number { return 0; }
-  steam_get_most_achieved_achievement_info(_info?: any[]): boolean { return false; }
-  steam_get_local_file_change_count(): number { return 0; }
-  steam_available_languages(): string { return "english"; }
-  steam_inventory_get_all_items(_arr?: any): number { return -1; }
-  steam_get_quota_total(): number { return 0; }
-  steam_get_global_stat_history_real(_name: string, _days?: number): number { return 0; }
-  steam_file_read(_path: string): string { return ""; }
-  steam_set_rich_presence(_key: string, _val: string): void {}
-  steam_user_get_auth_session_ticket(_arr?: any): number { return 0; }
+  steam_utils_enable_callbacks(_enable?: boolean): void { throw new Error("steam_utils_enable_callbacks: not yet implemented"); }
+  steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void { throw new Error("steam_upload_score_buffer_ext: not yet implemented"); }
+  steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void { throw new Error("steam_upload_score_ext: not yet implemented"); }
+  steam_ugc_start_item_update(_appId: number, _fileId: number): number { throw new Error("steam_ugc_start_item_update: not yet implemented"); }
+  steam_ugc_set_item_description(_handle: number, _desc: string): void { throw new Error("steam_ugc_set_item_description: not yet implemented"); }
+  steam_net_packet_get_data(_buf: number): void { throw new Error("steam_net_packet_get_data: not yet implemented"); }
+  steam_net_packet_receive(): boolean { throw new Error("steam_net_packet_receive: not yet implemented"); }
+  steam_net_packet_send(_steamid: number, _buf: number, _size?: number, _type?: number): void { throw new Error("steam_net_packet_send: not yet implemented"); }
+  steam_music_play(): void { throw new Error("steam_music_play: not yet implemented"); }
+  steam_music_is_enabled(): boolean { throw new Error("steam_music_is_enabled: not yet implemented"); }
+  steam_music_get_status(): number { throw new Error("steam_music_get_status: not yet implemented"); }
+  steam_lobby_list_request(): void { throw new Error("steam_lobby_list_request: not yet implemented"); }
+  steam_lobby_list_get_lobby_id(_index: number): number { throw new Error("steam_lobby_list_get_lobby_id: not yet implemented"); }
+  steam_lobby_list_get_count(): number { throw new Error("steam_lobby_list_get_count: not yet implemented"); }
+  steam_get_most_achieved_achievement_info(_info?: any[]): boolean { throw new Error("steam_get_most_achieved_achievement_info: not yet implemented"); }
+  steam_get_local_file_change_count(): number { throw new Error("steam_get_local_file_change_count: not yet implemented"); }
+  steam_available_languages(): string { throw new Error("steam_available_languages: not yet implemented"); }
+  steam_inventory_get_all_items(_arr?: any): number { throw new Error("steam_inventory_get_all_items: not yet implemented"); }
+  steam_get_quota_total(): number { throw new Error("steam_get_quota_total: not yet implemented"); }
+  steam_get_global_stat_history_real(_name: string, _days?: number): number { throw new Error("steam_get_global_stat_history_real: not yet implemented"); }
+  steam_file_read(_path: string): string { throw new Error("steam_file_read: not yet implemented"); }
+  steam_set_rich_presence(_key: string, _val: string): void { throw new Error("steam_set_rich_presence: not yet implemented"); }
+  steam_user_get_auth_session_ticket(_arr?: any): number { throw new Error("steam_user_get_auth_session_ticket: not yet implemented"); }
 
   // ---- PS5 stubs ----
-  ps5_gamepad_set_vibration_mode(_port: number, _mode: number): void {}
-  ps5_gamepad_set_trigger_effect_vibration(_port: number, _trigger: number, _start: number, _end: number, _str: number): void {}
+  ps5_gamepad_set_vibration_mode(_port: number, _mode: number): void { throw new Error("ps5_gamepad_set_vibration_mode: not yet implemented"); }
+  ps5_gamepad_set_trigger_effect_vibration(_port: number, _trigger: number, _start: number, _end: number, _str: number): void { throw new Error("ps5_gamepad_set_trigger_effect_vibration: not yet implemented"); }
 
   // ---- pass (no-op — used in some GML contexts) ----
-  pass(): void {}
+  pass(): void { throw new Error("pass: not yet implemented"); }
 
   // ---- More Steam (third batch) ----
-  steam_update(): void {}
-  steam_ugc_set_item_tags(_handle: number, _tags: string[]): void {}
-  steam_ugc_set_item_content(_handle: number, _path: string): void {}
-  steam_ugc_send_query(_handle: number): void {}
-  steam_ugc_request_item_details(_id: number, _maxAge: number): void {}
-  steam_ugc_num_subscribed_items(): number { return 0; }
-  steam_ugc_create_item(_appId: number, _type: number): void {}
-  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId?: number, _consumerAppId?: number, _page?: number): number { return 0; }
-  steam_ugc_delete_item(_id: number): void {}
-  steam_ugc_unsubscribe_item(_id: number): void {}
-  steam_ugc_set_item_preview(_handle: number, _path: string): void {}
-  steam_ugc_set_item_title(_handle: number, _title: string): void {}
-  steam_ugc_set_item_visibility(_handle: number, _vis: number): void {}
-  steam_stats_ready(): boolean { return false; }
-  steam_send_screenshot(_path?: string, _w?: number, _h?: number): void {}
-  steam_request_global_stats(_days: number): void {}
-  steam_reset_all_stats_achievements(_also_achievements?: boolean): void {}
-  steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void {}
-  steam_set_stat_float(_name: string, _val: number): void {}
-  steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void {}
-  steam_shutdown(): void {}
-  steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void {}
-  steam_lobby_send_chat_message_buffer(_buf: number, _size?: number, _lobby?: number): boolean { return false; }
-  steam_lobby_is_owner(_lobby?: number): boolean { return false; }
-  steam_lobby_create(_type: number, _max_members: number): void {}
-  steam_lobby_activate_invite_overlay(_lobby?: number): void {}
-  steam_lobby_list_get_data(_index: number, _key: string): string { return ""; }
-  steam_lobby_list_join(_lobby: number): void {}
-  steam_is_user_logged_on(): boolean { return false; }
-  steam_is_screenshot_requested(): boolean { return false; }
-  steam_is_overlay_enabled(): boolean { return false; }
-  steam_get_quota_free(): number { return 0; }
-  steam_get_number_of_current_players(): void {}
-  steam_get_app_ownership_ticket_data(_appId: number): string { return ""; }
-  steam_file_read_buffer(_path: string, _buf?: number): boolean { return false; }
-  steam_file_persisted(_path: string): boolean { return false; }
-  steam_download_scores_around_user(_board: string, _range: number, _range2?: number): void {}
-  steam_download_scores(_board: string, _start: number, _end: number): void {}
-  steam_download_friends_scores(_board: string): void {}
-  steam_music_pause(): void {}
-  steam_music_play_next(): void {}
-  steam_music_play_previous(): void {}
-  steam_music_set_volume(_vol: number): void {}
-  steam_music_is_playing(): boolean { return false; }
-  steam_user_cancel_auth_ticket(_ticket: number): void {}
-  steam_user_installed_dlc(_appId: number): boolean { return false; }
-  steam_user_owns_dlc(_appId: number): boolean { return false; }
-  steam_user_request_encrypted_app_ticket(_extra: any): void {}
+  steam_update(): void { throw new Error("steam_update: not yet implemented"); }
+  steam_ugc_set_item_tags(_handle: number, _tags: string[]): void { throw new Error("steam_ugc_set_item_tags: not yet implemented"); }
+  steam_ugc_set_item_content(_handle: number, _path: string): void { throw new Error("steam_ugc_set_item_content: not yet implemented"); }
+  steam_ugc_send_query(_handle: number): void { throw new Error("steam_ugc_send_query: not yet implemented"); }
+  steam_ugc_request_item_details(_id: number, _maxAge: number): void { throw new Error("steam_ugc_request_item_details: not yet implemented"); }
+  steam_ugc_num_subscribed_items(): number { throw new Error("steam_ugc_num_subscribed_items: not yet implemented"); }
+  steam_ugc_create_item(_appId: number, _type: number): void { throw new Error("steam_ugc_create_item: not yet implemented"); }
+  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId?: number, _consumerAppId?: number, _page?: number): number { throw new Error("steam_ugc_create_query_all: not yet implemented"); }
+  steam_ugc_delete_item(_id: number): void { throw new Error("steam_ugc_delete_item: not yet implemented"); }
+  steam_ugc_unsubscribe_item(_id: number): void { throw new Error("steam_ugc_unsubscribe_item: not yet implemented"); }
+  steam_ugc_set_item_preview(_handle: number, _path: string): void { throw new Error("steam_ugc_set_item_preview: not yet implemented"); }
+  steam_ugc_set_item_title(_handle: number, _title: string): void { throw new Error("steam_ugc_set_item_title: not yet implemented"); }
+  steam_ugc_set_item_visibility(_handle: number, _vis: number): void { throw new Error("steam_ugc_set_item_visibility: not yet implemented"); }
+  steam_stats_ready(): boolean { throw new Error("steam_stats_ready: not yet implemented"); }
+  steam_send_screenshot(_path?: string, _w?: number, _h?: number): void { throw new Error("steam_send_screenshot: not yet implemented"); }
+  steam_request_global_stats(_days: number): void { throw new Error("steam_request_global_stats: not yet implemented"); }
+  steam_reset_all_stats_achievements(_also_achievements?: boolean): void { throw new Error("steam_reset_all_stats_achievements: not yet implemented"); }
+  steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void { throw new Error("steam_set_stat_avg_rate: not yet implemented"); }
+  steam_set_stat_float(_name: string, _val: number): void { throw new Error("steam_set_stat_float: not yet implemented"); }
+  steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void { throw new Error("steam_show_floating_gamepad_text_input: not yet implemented"); }
+  steam_shutdown(): void { throw new Error("steam_shutdown: not yet implemented"); }
+  steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void { throw new Error("steam_lobby_set_owner_id: not yet implemented"); }
+  steam_lobby_send_chat_message_buffer(_buf: number, _size?: number, _lobby?: number): boolean { throw new Error("steam_lobby_send_chat_message_buffer: not yet implemented"); }
+  steam_lobby_is_owner(_lobby?: number): boolean { throw new Error("steam_lobby_is_owner: not yet implemented"); }
+  steam_lobby_create(_type: number, _max_members: number): void { throw new Error("steam_lobby_create: not yet implemented"); }
+  steam_lobby_activate_invite_overlay(_lobby?: number): void { throw new Error("steam_lobby_activate_invite_overlay: not yet implemented"); }
+  steam_lobby_list_get_data(_index: number, _key: string): string { throw new Error("steam_lobby_list_get_data: not yet implemented"); }
+  steam_lobby_list_join(_lobby: number): void { throw new Error("steam_lobby_list_join: not yet implemented"); }
+  steam_is_user_logged_on(): boolean { throw new Error("steam_is_user_logged_on: not yet implemented"); }
+  steam_is_screenshot_requested(): boolean { throw new Error("steam_is_screenshot_requested: not yet implemented"); }
+  steam_is_overlay_enabled(): boolean { throw new Error("steam_is_overlay_enabled: not yet implemented"); }
+  steam_get_quota_free(): number { throw new Error("steam_get_quota_free: not yet implemented"); }
+  steam_get_number_of_current_players(): void { throw new Error("steam_get_number_of_current_players: not yet implemented"); }
+  steam_get_app_ownership_ticket_data(_appId: number): string { throw new Error("steam_get_app_ownership_ticket_data: not yet implemented"); }
+  steam_file_read_buffer(_path: string, _buf?: number): boolean { throw new Error("steam_file_read_buffer: not yet implemented"); }
+  steam_file_persisted(_path: string): boolean { throw new Error("steam_file_persisted: not yet implemented"); }
+  steam_download_scores_around_user(_board: string, _range: number, _range2?: number): void { throw new Error("steam_download_scores_around_user: not yet implemented"); }
+  steam_download_scores(_board: string, _start: number, _end: number): void { throw new Error("steam_download_scores: not yet implemented"); }
+  steam_download_friends_scores(_board: string): void { throw new Error("steam_download_friends_scores: not yet implemented"); }
+  steam_music_pause(): void { throw new Error("steam_music_pause: not yet implemented"); }
+  steam_music_play_next(): void { throw new Error("steam_music_play_next: not yet implemented"); }
+  steam_music_play_previous(): void { throw new Error("steam_music_play_previous: not yet implemented"); }
+  steam_music_set_volume(_vol: number): void { throw new Error("steam_music_set_volume: not yet implemented"); }
+  steam_music_is_playing(): boolean { throw new Error("steam_music_is_playing: not yet implemented"); }
+  steam_user_cancel_auth_ticket(_ticket: number): void { throw new Error("steam_user_cancel_auth_ticket: not yet implemented"); }
+  steam_user_installed_dlc(_appId: number): boolean { throw new Error("steam_user_installed_dlc: not yet implemented"); }
+  steam_user_owns_dlc(_appId: number): boolean { throw new Error("steam_user_owns_dlc: not yet implemented"); }
+  steam_user_request_encrypted_app_ticket(_extra: any): void { throw new Error("steam_user_request_encrypted_app_ticket: not yet implemented"); }
   steam_utils_get_server_real_time(): number { return Math.floor(Date.now() / 1000); }
-  steam_utils_is_steam_running_on_steam_deck(): boolean { return false; }
+  steam_utils_is_steam_running_on_steam_deck(): boolean { throw new Error("steam_utils_is_steam_running_on_steam_deck: not yet implemented"); }
 
   // ---- More sprite/font ----
-  sprite_save(_spr: number, _sub: number, _fname: string): void {}
-  sprite_add(_path: string, _frames: number, _removebg: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { return -1; }
-  sprite_get_uvs(_spr: number, _sub: number): number[] { return [0, 0, 1, 1, 0, 0, 1, 1]; }
-  sprite_prefetch(_spr: number): void {}
-  sprite_set_speed(_spr: number, _speed: number, _type: number): void {}
+  sprite_save(_spr: number, _sub: number, _fname: string): void { throw new Error("sprite_save: not yet implemented"); }
+  sprite_add(_path: string, _frames: number, _removebg: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { throw new Error("sprite_add: not yet implemented"); }
+  sprite_get_uvs(_spr: number, _sub: number): number[] { throw new Error("sprite_get_uvs: not yet implemented"); }
+  sprite_prefetch(_spr: number): void { throw new Error("sprite_prefetch: not yet implemented"); }
+  sprite_set_speed(_spr: number, _speed: number, _type: number): void { throw new Error("sprite_set_speed: not yet implemented"); }
 
   // ---- ord / chr extras ----
   ord(char: string): number { return char.charCodeAt(0) || 0; }
@@ -1535,8 +1535,8 @@ export class GameRuntime {
   game_get_speed(_type: number): number { return this.room_speed; }
 
   // ---- Layer extras ----
-  layer_get_depth(_layer: any): number { return 0; }
-  layer_set_visible(_layer: any, _visible: boolean): void {}
+  layer_get_depth(_layer: any): number { throw new Error("layer_get_depth: not yet implemented"); }
+  layer_set_visible(_layer: any, _visible: boolean): void { throw new Error("layer_set_visible: not yet implemented"); }
   layer_x(_layer: any, _x?: number): any { if (_x !== undefined) return; return 0; }
   layer_y(_layer: any, _y?: number): any { if (_y !== undefined) return; return 0; }
 
@@ -1563,19 +1563,19 @@ export class GameRuntime {
   }
 
   // ---- Room extras ----
-  room_instance_clear(_room: number): void {}
+  room_instance_clear(_room: number): void { throw new Error("room_instance_clear: not yet implemented"); }
 
   // ---- GPU extras ----
-  gpu_set_blendmode_ext_sepalpha(_src: number, _dest: number, _srcA: number, _destA: number): void {}
+  gpu_set_blendmode_ext_sepalpha(_src: number, _dest: number, _srcA: number, _destA: number): void { throw new Error("gpu_set_blendmode_ext_sepalpha: not yet implemented"); }
 
   // ---- Gamepad extras ----
-  gamepad_get_description(_device: number): string { return ""; }
-  gamepad_is_supported(): boolean { return false; }
-  gamepad_set_axis_deadzone(_device: number, _deadzone: number): void {}
-  gamepad_set_color(_device: number, _col: number): void {}
+  gamepad_get_description(_device: number): string { throw new Error("gamepad_get_description: not yet implemented"); }
+  gamepad_is_supported(): boolean { throw new Error("gamepad_is_supported: not yet implemented"); }
+  gamepad_set_axis_deadzone(_device: number, _deadzone: number): void { throw new Error("gamepad_set_axis_deadzone: not yet implemented"); }
+  gamepad_set_color(_device: number, _col: number): void { throw new Error("gamepad_set_color: not yet implemented"); }
 
   // ---- GC extras ----
-  gc_enable(_enable: boolean): void {}
+  gc_enable(_enable: boolean): void { throw new Error("gc_enable: not yet implemented"); }
 
   // ---- MP grid (pathfinding) ----
   mp_grid_create(_left: number, _top: number, _hcells: number, _vcells: number, _cellw: number, _cellh: number): number { throw new Error("mp_grid_create: requires pathfinding implementation"); }
@@ -1583,13 +1583,13 @@ export class GameRuntime {
   mp_grid_add_instances(_id: number, _classIndex: number, _prec: boolean): void { throw new Error("mp_grid_add_instances: requires pathfinding implementation"); }
   mp_grid_clear_all(_id: number): void { throw new Error("mp_grid_clear_all: requires pathfinding implementation"); }
   mp_grid_clear_rectangle(_id: number, _x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("mp_grid_clear_rectangle: requires pathfinding implementation"); }
-  mp_grid_draw(_id: number): void {}
+  mp_grid_draw(_id: number): void { throw new Error("mp_grid_draw: not yet implemented"); }
 
   // ---- Particle extras ----
-  part_emitter_stream(_syst: number, _emit: number, _type: number, _num: number): void {}
-  part_particles_clear(_syst: number): void {}
-  part_system_automatic_update(_syst: number, _on: boolean): void {}
-  part_system_drawit(_syst: number): void {}
+  part_emitter_stream(_syst: number, _emit: number, _type: number, _num: number): void { throw new Error("part_emitter_stream: not yet implemented"); }
+  part_particles_clear(_syst: number): void { throw new Error("part_particles_clear: not yet implemented"); }
+  part_system_automatic_update(_syst: number, _on: boolean): void { throw new Error("part_system_automatic_update: not yet implemented"); }
+  part_system_drawit(_syst: number): void { throw new Error("part_system_drawit: not yet implemented"); }
 
   // ---- Path extras ----
   path_get_length(_path: number): number { throw new Error("path_get_length: requires path system implementation"); }
@@ -1597,52 +1597,52 @@ export class GameRuntime {
 
   // ---- Debug ----
   show_debug_log(_str: string): void { console.debug("GML debug:", _str); }
-  show_debug_overlay(_enable: boolean): void {}
+  show_debug_overlay(_enable: boolean): void { throw new Error("show_debug_overlay: not yet implemented"); }
 
   // ---- More async ----
   get_string_async(_message: string, _default: string): string { return _default; }
 
   // ---- Video extras ----
-  video_get_format(): string { return ""; }
+  video_get_format(): string { throw new Error("video_get_format: not yet implemented"); }
 
   // ---- PSN stubs ----
-  psn_init_trophy(_pad_index?: number): void {}
-  psn_unlock_trophy(_id: number, _slot: number = 0): void {}
-  psn_get_trophy_unlock_state(_id: number): number { return 0; }
-  psn_tick(): void {}
-  psn_tick_error_dialog(): void {}
-  psn_np_commerce_dialog_tick(): void {}
-  psn_save_data_backup(_slot?: any, _id?: any): void {}
-  psn_communication_restriction_status(_pad_index?: number): number { return 0; }
+  psn_init_trophy(_pad_index?: number): void { throw new Error("psn_init_trophy: not yet implemented"); }
+  psn_unlock_trophy(_id: number, _slot: number = 0): void { throw new Error("psn_unlock_trophy: not yet implemented"); }
+  psn_get_trophy_unlock_state(_id: number): number { throw new Error("psn_get_trophy_unlock_state: not yet implemented"); }
+  psn_tick(): void { throw new Error("psn_tick: not yet implemented"); }
+  psn_tick_error_dialog(): void { throw new Error("psn_tick_error_dialog: not yet implemented"); }
+  psn_np_commerce_dialog_tick(): void { throw new Error("psn_np_commerce_dialog_tick: not yet implemented"); }
+  psn_save_data_backup(_slot?: any, _id?: any): void { throw new Error("psn_save_data_backup: not yet implemented"); }
+  psn_communication_restriction_status(_pad_index?: number): number { throw new Error("psn_communication_restriction_status: not yet implemented"); }
 
   // ---- More Steam ----
-  steam_activate_overlay_browser(_url: string): void {}
-  steam_clear_achievement(_name: string): void {}
-  steam_file_delete(_path: string): void {}
-  steam_file_get_list(): string[] { return []; }
-  steam_file_share(_path: string): void {}
-  steam_file_size(_path: string): number { return 0; }
-  steam_file_write_buffer(_path: string, _buf: number, _size?: number): boolean { return false; }
-  steam_file_write_file(_path: string, _srcpath: string): boolean { return false; }
-  steam_get_achievement_progress_limits_int(_name: string): [number, number] { return [0, 0]; }
-  steam_get_global_stat_real(_name: string): number { return 0; }
-  steam_get_local_file_change(_index: number): string { return ""; }
-  steam_input_activate_action_set(_handle: number, _setHandle: number): void {}
-  steam_input_get_action_origin_from_xbox_origin(_handle: number, _origin: number): number { return 0; }
-  steam_input_get_analog_action_handle(_name: string): number { return 0; }
-  steam_input_get_connected_controllers(): number[] { return []; }
-  steam_input_get_digital_action_data(_controller: number, _action: number): boolean { return false; }
-  steam_input_get_digital_action_origins(_controller: number, _action_set: number, _action: number): number[] { return []; }
-  steam_input_get_glyph_png_for_action_origin(_origin: number, _style: number, _flags: number): string { return ""; }
-  steam_input_init(_explicit: boolean): void {}
-  steam_inventory_trigger_item_drop(_id: number): void {}
-  steam_is_subscribed(): boolean { return false; }
-  steam_lobby_leave(_lobby?: number): void {}
+  steam_activate_overlay_browser(_url: string): void { throw new Error("steam_activate_overlay_browser: not yet implemented"); }
+  steam_clear_achievement(_name: string): void { throw new Error("steam_clear_achievement: not yet implemented"); }
+  steam_file_delete(_path: string): void { throw new Error("steam_file_delete: not yet implemented"); }
+  steam_file_get_list(): string[] { throw new Error("steam_file_get_list: not yet implemented"); }
+  steam_file_share(_path: string): void { throw new Error("steam_file_share: not yet implemented"); }
+  steam_file_size(_path: string): number { throw new Error("steam_file_size: not yet implemented"); }
+  steam_file_write_buffer(_path: string, _buf: number, _size?: number): boolean { throw new Error("steam_file_write_buffer: not yet implemented"); }
+  steam_file_write_file(_path: string, _srcpath: string): boolean { throw new Error("steam_file_write_file: not yet implemented"); }
+  steam_get_achievement_progress_limits_int(_name: string): [number, number] { throw new Error("steam_get_achievement_progress_limits_int: not yet implemented"); }
+  steam_get_global_stat_real(_name: string): number { throw new Error("steam_get_global_stat_real: not yet implemented"); }
+  steam_get_local_file_change(_index: number): string { throw new Error("steam_get_local_file_change: not yet implemented"); }
+  steam_input_activate_action_set(_handle: number, _setHandle: number): void { throw new Error("steam_input_activate_action_set: not yet implemented"); }
+  steam_input_get_action_origin_from_xbox_origin(_handle: number, _origin: number): number { throw new Error("steam_input_get_action_origin_from_xbox_origin: not yet implemented"); }
+  steam_input_get_analog_action_handle(_name: string): number { throw new Error("steam_input_get_analog_action_handle: not yet implemented"); }
+  steam_input_get_connected_controllers(): number[] { throw new Error("steam_input_get_connected_controllers: not yet implemented"); }
+  steam_input_get_digital_action_data(_controller: number, _action: number): boolean { throw new Error("steam_input_get_digital_action_data: not yet implemented"); }
+  steam_input_get_digital_action_origins(_controller: number, _action_set: number, _action: number): number[] { throw new Error("steam_input_get_digital_action_origins: not yet implemented"); }
+  steam_input_get_glyph_png_for_action_origin(_origin: number, _style: number, _flags: number): string { throw new Error("steam_input_get_glyph_png_for_action_origin: not yet implemented"); }
+  steam_input_init(_explicit: boolean): void { throw new Error("steam_input_init: not yet implemented"); }
+  steam_inventory_trigger_item_drop(_id: number): void { throw new Error("steam_inventory_trigger_item_drop: not yet implemented"); }
+  steam_is_subscribed(): boolean { throw new Error("steam_is_subscribed: not yet implemented"); }
+  steam_lobby_leave(_lobby?: number): void { throw new Error("steam_lobby_leave: not yet implemented"); }
 
   // ---- Instance position/collision with DS list ----
 
-  instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; }
-  instance_position_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; }
+  instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { throw new Error("instance_place_list: not yet implemented"); }
+  instance_position_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { throw new Error("instance_position_list: not yet implemented"); }
 
   instance_destroy(instance: GMLObject): void {
     this._instanceDestroy(instance);
