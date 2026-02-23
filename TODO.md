@@ -428,9 +428,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 4153 as of 2026-02-24
+### 7. Dead Estate remaining TS errors — 4151 as of 2026-02-24
 
-Progress: 12350 → 4153 (66% reduction). Error breakdown by category:
+Progress: 12350 → 4151 (66% reduction). Error breakdown by category:
 
 | Code | Count | Root cause |
 |------|-------|------------|
@@ -498,7 +498,7 @@ Fixed this session (2026-02-24):
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 4153 TS errors (2026-02-24) |
+| Dead Estate | `data.win` 192MB | ⚠️ 4151 TS errors (2026-02-24) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
