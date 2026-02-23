@@ -60,7 +60,12 @@ impl Frontend for GameMakerFrontend {
         let variables = build_variable_table(&dw, vari)?;
 
         // Build linked-list reference maps for correct name resolution.
-        let func_ref_map = build_func_ref_map(func, dw.data());
+        // In GMS2.x (BC >= 17), FUNC first_address points to the Call operand
+        // (4 bytes into the instruction), while earlier formats and VARI always
+        // use instruction-word addressing. build_func_ref_map normalises to
+        // instruction-word addresses so lookups match bytecode_offset + inst.offset.
+        let bc_version = dw.bytecode_version().unwrap_or(datawin::BytecodeVersion(15));
+        let func_ref_map = build_func_ref_map(func, dw.data(), bc_version);
         let vari_ref_map = build_vari_ref_map(vari, dw.data());
 
         // Build code_locals lookup: code entry name → CodeLocals.
@@ -458,13 +463,20 @@ fn build_function_names(
 
 /// Walk FUNC linked lists to build: absolute_instruction_address → func_entry_index.
 ///
-/// `first_address` points to the Call instruction word; the function_id operand
-/// is at `first_address + 4`. The operand's lower 27 bits encode a relative
-/// offset to the next occurrence: `next_addr = addr + offset`.
+/// BC < 17: `first_address` points to the Call instruction word; the function_id
+/// operand is at `first_address + 4`. The operand's lower 27 bits encode a
+/// relative byte offset to the next instruction word occurrence.
+///
+/// BC >= 17 (GMS2.x): `first_address` points to the operand (4 bytes into the
+/// instruction). The operand's lower 27 bits encode the byte offset to the next
+/// operand occurrence. We normalise to instruction-word address so keys match
+/// the `bytecode_offset + inst.offset` values computed during translation.
 fn build_func_ref_map(
     func: &datawin::chunks::func::Func,
     data: &[u8],
+    bc_version: datawin::BytecodeVersion,
 ) -> HashMap<usize, usize> {
+    let gms2 = bc_version.func_first_address_is_operand();
     let mut map = HashMap::new();
     for (i, entry) in func.functions.iter().enumerate() {
         if entry.first_address < 0 || entry.occurrences == 0 {
@@ -472,16 +484,18 @@ fn build_func_ref_map(
         }
         let mut addr = entry.first_address as usize;
         for _ in 0..entry.occurrences {
-            map.insert(addr, i);
-            // The operand (next-pointer) is at addr + 4.
-            let operand_addr = addr + 4;
+            // Store the instruction-word address as the key.
+            let inst_addr = if gms2 { addr.saturating_sub(4) } else { addr };
+            map.insert(inst_addr, i);
+            // Read next-pointer from the operand bytes.
+            let operand_addr = if gms2 { addr } else { addr + 4 };
             if operand_addr + 4 > data.len() {
                 break;
             }
             let raw = u32::from_le_bytes(
                 data[operand_addr..operand_addr + 4].try_into().unwrap(),
             );
-            // Lower 27 bits = additive offset to next occurrence.
+            // Lower 27 bits = additive byte offset to next occurrence's addr.
             let offset = (raw & 0x07FF_FFFF) as usize;
             if offset == 0 {
                 break;

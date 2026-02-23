@@ -35,6 +35,16 @@ impl BytecodeVersion {
     pub fn has_lang_glob(self) -> bool {
         self.0 >= 16
     }
+
+    /// Whether FUNC/VARI `first_address` points to the operand word (4 bytes
+    /// into the instruction) rather than the instruction word itself.
+    ///
+    /// GMS2.x (BC 17+) changed the FUNC chunk so that `first_address` addresses
+    /// the Call operand rather than the instruction word. Earlier formats
+    /// (BC 15/16) use instruction-word addressing.
+    pub fn func_first_address_is_operand(self) -> bool {
+        self.0 >= 17
+    }
 }
 
 impl std::fmt::Display for BytecodeVersion {
