@@ -246,12 +246,14 @@ generic unknown-call spam.
 - [ ] **Submit to kaitai_struct_formats** — PR to `kaitai-io/kaitai_struct_formats`
   under `game/game_maker_data.ksy`. This is the "never RE it again" step — the spec
   is only findable by the community once it's in the format gallery.
+  *Low priority — gated on polish (full chunk coverage, fixture-validated, clean doc strings).*
 
-- [ ] **gml_bytecode.ksy** — Separate Kaitai spec for GML instruction encoding.
-  Would cover: opcode layout (v14 vs v15+ numbering), operand formats (Double/
+- [x] **gml_bytecode.ksy** — Separate Kaitai spec for GML instruction encoding.
+  Covers: opcode layout (v14 vs v15+ numbering), operand formats (Double/
   Int32/Int64/String/Variable/Int16), Break signal encoding (GMS2.3+ extended
-  signals including pushref/chknullish/isstaticok), Dup type-size semantics.
-  Companion to game_maker_data.ksy to fully cover what needs to be known.
+  signals including pushref/chknullish/isstaticok), Dup type-size semantics,
+  variable_ref bit layout, instance_type enum, branch offset encoding.
+  Lives at `crates/formats/datawin/gml_bytecode.ksy`.
 
 - [ ] **datawin fixture tests** — Snapshot/round-trip tests using real data.win
   samples (synthetic minimal fixtures or from public-domain games). The .ksy
