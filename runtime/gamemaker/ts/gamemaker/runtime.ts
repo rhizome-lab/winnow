@@ -293,6 +293,52 @@ export class GameRuntime {
   mouse_x!: () => number;
   mouse_y!: () => number;
 
+  // Math API (from createMathAPI)
+  random!: (max: number) => number;
+  randomize!: () => void;
+  random_range!: (min: number, max: number) => number;
+  irandom!: (max: number) => number;
+  irandom_range!: (min: number, max: number) => number;
+  choose!: (...args: any[]) => any;
+
+  // Draw API (from createDrawAPI)
+  draw_set_color!: (color: number) => void;
+  draw_set_font!: (font: number) => void;
+  draw_set_halign!: (halign: number) => void;
+  draw_set_valign!: (valign: number) => void;
+  draw_set_alpha!: (alpha: number) => void;
+  draw_get_alpha!: () => number;
+  draw_sprite!: (spriteIndex: number, imageIndex: number, x: number, y: number) => void;
+  draw_sprite_ext!: (spriteIndex: number, imageIndex: number, x: number, y: number, xscale: number, yscale: number, rot: number, color: number, alpha: number) => void;
+  draw_self!: () => void;
+  draw_rectangle!: (x1: number, y1: number, x2: number, y2: number, outline: boolean) => void;
+  draw_text!: (x: number, y: number, text: string) => void;
+  draw_text_color!: (x: number, y: number, text: string, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
+  draw_text_transformed!: (x: number, y: number, text: string, xscale: number, yscale: number, angle: number) => void;
+  draw_text_ext!: (x: number, y: number, text: string, sep: number, w: number) => void;
+  draw_text_ext_color!: (x: number, y: number, text: string, sep: number, w: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
+  draw_text_ext_transformed!: (x: number, y: number, text: string, sep: number, w: number, xscale: number, yscale: number, angle: number) => void;
+  draw_text_transformed_color!: (x: number, y: number, text: string, xscale: number, yscale: number, angle: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
+  draw_text_ext_transformed_color!: (x: number, y: number, text: string, sep: number, w: number, xscale: number, yscale: number, angle: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
+  sprite_get_width!: (spriteIndex: number) => number;
+  sprite_get_height!: (spriteIndex: number) => number;
+  string_height_ext!: (text: string, sep: number, w: number) => number;
+
+  // Input API (from createInputAPI)
+  mouse_check_button!: (button: number) => boolean;
+  mouse_check_button_pressed!: (button: number) => boolean;
+  mouse_check_button_released!: (button: number) => boolean;
+
+  // Storage API (from createStorageAPI)
+  ini_open!: (path: string) => void;
+  ini_close!: () => string;
+  ini_write_real!: (section: string, key: string, value: number) => void;
+
+  // Global API (from createGlobalAPI)
+  variable_global_exists!: (key: string) => boolean;
+  variable_global_get!: (key: string) => any;
+  variable_global_set!: (key: string, value: any) => void;
+
   constructor() {
     Object.assign(this, createDrawAPI(this));
     Object.assign(this, createInputAPI(this));
