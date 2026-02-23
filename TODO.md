@@ -428,22 +428,22 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 4634 as of 2026-02-24
+### 7. Dead Estate remaining TS errors — 4153 as of 2026-02-24
 
-Progress: 12350 → 4634 (62% reduction). Error breakdown by category:
+Progress: 12350 → 4153 (66% reduction). Error breakdown by category:
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 2027 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
-| TS2339 | 888 | Property doesn't exist — field access on insufficiently typed struct/object |
-| TS7053 | 520 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
-| TS2554 | 512 | Wrong argument count — calls to GML *runtime* functions with wrong argc (game author errors or wrong runtime signatures) |
-| TS2322 | 311 | Type not assignable |
+| TS2345 | 2047 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
+| TS2339 | 887 | Property doesn't exist — field access on insufficiently typed struct/object |
+| TS7053 | 518 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
+| TS2322 | 310 | Type not assignable |
 | TS7027 | 207 | Unreachable code — code after `return` (game author style) |
+| TS2554 | 7 | Wrong argument count — remaining are game-author errors or decompiler arg-count mismatches |
 | TS2367 | 54 | Comparison always false — type mismatch in `===` (game author errors) |
 | TS2365 | 39 | Operator not applicable — bitwise/arithmetic on wrong type |
 | TS2362 | 33 | Left side of `**`/arithmetic must be number |
-| TS2304 | 17 | Cannot find name — undeclared `vNNN` identifiers (known linearizer bug: single-store alloc with 2+ loads takes Assign path, no `let` emitted) |
+| TS2304 | 17 | Cannot find name — undeclared `vNNN` identifiers (known linearizer bug) |
 | TS18050 | 13 | Value of type `void` is not callable |
 | TS2363 | 6 | Right side of `**` must be number |
 | TS2416 | 4 | Property not assignable to same in base type |
@@ -460,24 +460,24 @@ Fixed this session (2026-02-24):
 - TS2552 (150→1): Added ~50 missing runtime stubs + registered in runtime.json
 - TS2366 (114→0): Added `ends_with_terminal()` + trailing `return 0 as any;` in ast_printer.rs
 - TS2769 (417→0): Reclassified as TS2345 after adding type signatures to runtime.json
+- TS2554 (512→7): Variadic scripts get rest param; game-script shadowing fix; ~80 signature corrections
 
 **Highest-leverage next targets:**
 
-- [ ] **TS7053 (520): struct field access on number-typed vars** — `v['fieldName']` where `v` is
+- [ ] **TS7053 (518): struct field access on number-typed vars** — `v['fieldName']` where `v` is
   typed as `number` rather than `any`. Root cause: instance variables that hold object references
   (e.g. created by `instance_create_depth`) are typed as `number` (the raw instance ID) rather
   than as the class type. Fix requires GML instance ID type propagation (see Type System section).
   This was the original "102k error" regression from `7c4dc61` — it had briefly been worse but
   type inference improvements have since reduced it.
 
-- [ ] **TS2554 (501): GML runtime function wrong argument counts** — These are calls to GameMaker
-  stdlib functions where the call site passes more args than the declared signature. Many are
-  game-author-correct GML calls where our runtime signature is wrong (too few params).
-  Audit `runtime/gamemaker/runtime.ts` signatures against GML docs and expand where needed.
-  Known cases: `showMessage(msg, a, b, ...)` called with extra args (GM's `show_message` takes 1);
-  `_instanceof(val, type)` called with 1 arg; `steam_*` functions called with extra args.
+- [ ] **TS2554 (7): Remaining runtime signature mismatches** — 7 remaining. All are either
+  game-author errors (`gamepad_set_axis_deadzone` called with 2 args, `draw_roundrect_color` called
+  with 7 args) or decompiler arg-count mismatches (functions that read fewer args than callers pass;
+  e.g. `getScreenType`, `loadSetting`, `getPiecesWidth`/`getPiecesHeight`/`drawTextPieces`). The
+  decompiler issue requires a new emit to fix (arg count determined by reads in function body).
 
-- [ ] **TS2339 (895) + TS2345 (1594): type inference gaps** — Most are consequences of
+- [ ] **TS2339 (887) + TS2345 (2047): type inference gaps** — Most are consequences of
   missing instance type propagation (fields typed as `any` or wrong struct type).
   The GML instance ID type propagation item (Type System section) is the root fix.
 
@@ -498,7 +498,7 @@ Fixed this session (2026-02-24):
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 5093 TS errors (2026-02-23) |
+| Dead Estate | `data.win` 192MB | ⚠️ 4153 TS errors (2026-02-24) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |

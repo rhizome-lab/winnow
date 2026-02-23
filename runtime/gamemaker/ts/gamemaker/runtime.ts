@@ -477,7 +477,7 @@ export class GameRuntime {
     if (s) { s.origin.x = xoff; s.origin.y = yoff; }
   }
   sprite_get_texture(spr: number, sub: number): number { return this.sprites[spr]?.textures[sub] ?? -1; }
-  sprite_add_from_surface(_srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { return -1; }
+  sprite_add_from_surface(_index: number, _srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean): void {}
   sprite_get_bbox_left(spr: number): number { return this.sprites[spr]?.bbox?.left ?? 0; }
   sprite_get_bbox_right(spr: number): number { return this.sprites[spr]?.bbox?.right ?? 0; }
   sprite_get_bbox_top(spr: number): number { return this.sprites[spr]?.bbox?.top ?? 0; }
@@ -486,9 +486,7 @@ export class GameRuntime {
 
   // ---- Alarm API ----
 
-  alarm_set(inst: any, alarm: number, steps: number): void {
-    if (inst && typeof inst === 'object') inst.alarm[alarm] = steps;
-  }
+  alarm_set(_alarm: number, _steps: number): void {}
   alarm_get(inst: any, alarm: number): number {
     return inst?.alarm?.[alarm] ?? -1;
   }
@@ -507,7 +505,7 @@ export class GameRuntime {
 
   asset_get_index(_name: string): number { return -1; }
   asset_get_tags(_asset: number, _type: number = -1): string[] { return []; }
-  asset_has_tags(_asset: number, _tags: string | string[]): boolean { return false; }
+  asset_has_tags(_asset: number, _tags: string | string[], _not?: boolean | number): boolean { return false; }
 
   // ---- Array API (GMS2 style) ----
 
@@ -526,13 +524,13 @@ export class GameRuntime {
   array_get(arr: any[], index: number): any { return arr[index]; }
   array_set(arr: any[], index: number, val: any): void { arr[index] = val; }
   array_sort(arr: any[], ascending: boolean): void { arr.sort((a, b) => ascending ? a - b : b - a); }
-  array_shuffle(arr: any[]): void {
+  array_shuffle(arr: any[], _start?: number, _count?: number): void {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [arr[i], arr[j]] = [arr[j], arr[i]];
     }
   }
-  array_shuffle_ext(arr: any[]): void { this.array_shuffle(arr); }
+  array_shuffle_ext(arr: any[], _start?: number, _count?: number): void { this.array_shuffle(arr, _start, _count); }
 
   // ---- Type-check functions ----
 
@@ -919,7 +917,7 @@ export class GameRuntime {
   show_error(str: string, _abort: boolean): void { console.error("GML show_error:", str); }
   event_user(_n: number): void {}
   sprite_create_from_surface(_srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { return -1; }
-  vertex_normal(_x: number, _y: number, _z: number): void {}
+  vertex_normal(_vbuf: number, _x: number, _y: number, _z: number): void {}
 
   // ---- ds_exists ----
   ds_exists(id: number, type: number): boolean {
@@ -966,21 +964,21 @@ export class GameRuntime {
   steam_ugc_get_subscribed_items(_arr: any): number { return 0; }
   steam_lobby_get_lobby_id(): number { return 0; }
   steam_lobby_join_id(_id: number): void {}
-  steam_lobby_set_data(_lobby: number, _key: string, _val: string): void {}
-  steam_lobby_get_data(_lobby: number, _key: string): string { return ""; }
+  steam_lobby_set_data(_key: string, _val: string, _lobby?: number): void {}
+  steam_lobby_get_data(_key: string, _lobby?: number): string { return ""; }
   steam_activate_overlay_store(_app: number): void {}
   steam_input_get_digital_action_handle(_name: string): number { return 0; }
   steam_is_cloud_enabled_for_account(): boolean { return false; }
-  steam_inventory_result_get_items(_result: number, _arr: any[]): number { return 0; }
-  steam_lobby_get_member_id(_lobby: number, _index: number): number { return 0; }
+  steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { return []; }
+  steam_lobby_get_member_id(_index: number, _lobby?: number): number { return 0; }
   steam_input_get_action_set_handle(_name: string): number { return 0; }
   steam_get_stat_float(_name: string): number { return 0; }
   steam_get_global_stat_int(_name: string): number { return 0; }
   steam_get_user_account_id(): number { return 0; }
   steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { return false; }
   steam_input_enable_device_callbacks(): void {}
-  steam_lobby_get_chat_message_text(_lobby: number, _index: number): string { return ""; }
-  steam_lobby_get_owner_id(_lobby: number): number { return 0; }
+  steam_lobby_get_chat_message_text(_index: number, _lobby?: number): string { return ""; }
+  steam_lobby_get_owner_id(_lobby?: number): number { return 0; }
   steam_request_friend_rich_presence(_steamid: number): void {}
   steam_ugc_get_item_update_info(_handle: number, _arr: any): boolean { return false; }
   steam_ugc_submit_item_update(_handle: number, _note: string): void {}
@@ -989,7 +987,7 @@ export class GameRuntime {
   collision_point(_x: number, _y: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_point: requires collision system implementation"); }
   collision_circle(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_circle: requires collision system implementation"); }
   collision_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_ellipse: requires collision system implementation"); }
-  collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_line_list: requires collision system implementation"); }
+  collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: number | boolean = 0): number { throw new Error("collision_line_list: requires collision system implementation"); }
   collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_rectangle_list: requires collision system implementation"); }
   distance_to_point(_x: number, _y: number): number {
     throw new Error("distance_to_point: implement using instance spatial data");
@@ -1085,7 +1083,7 @@ export class GameRuntime {
   }
 
   // ---- Tags / misc ----
-  tag_get_assets(_tag: string, _kind: number): any[] { return []; }
+  tag_get_assets(_tag: string, _kind?: number): any[] { return []; }
   url_open_ext(url: string, _target: string): void { window.open(url, "_blank"); }
 
   // ---- View extras ----
@@ -1104,17 +1102,17 @@ export class GameRuntime {
   steam_activate_overlay(_type: string): void {}
   steam_activate_overlay_user(_type: string, _steamid: number): void {}
   steam_get_app_id(): number { return 0; }
-  steam_get_user_persona_name_sync(): string { return ""; }
+  steam_get_user_persona_name_sync(_steamid?: number): string { return ""; }
   steam_get_stat_int(_name: string): number { return 0; }
-  steam_get_global_stat_history_int(_name: string, _days: number): number { return 0; }
+  steam_get_global_stat_history_int(_name: string, _days?: number): number { return 0; }
   steam_is_overlay_activated(): boolean { return false; }
   steam_image_get_size(_image: number): [number, number] { return [0, 0]; }
-  steam_lobby_get_member_count(_lobby: number): number { return 0; }
+  steam_lobby_get_member_count(_lobby?: number): number { return 0; }
   steam_lobby_list_add_string_filter(_key: string, _val: string, _type: number): void {}
-  steam_lobby_get_chat_message_data(_lobby: number, _msg: number, _buf: number): number { return 0; }
+  steam_lobby_get_chat_message_data(_msg: number, _buf: number, _lobby?: number): number { return 0; }
   steam_ugc_subscribe_item(_id: number): void {}
   steam_input_run_frame(): void {}
-  steam_file_write(_path: string, _data: string): boolean { return false; }
+  steam_file_write(_path: string, _data: string, _length?: number): boolean { return false; }
   steam_file_exists(_path: string): boolean { return false; }
   psn_post_uds_event(_evtype: number, ..._args: any[]): void {}
 
@@ -1238,7 +1236,7 @@ export class GameRuntime {
   steam_set_stat_int(_name: string, _val: number): void {}
   steam_net_packet_get_sender_id(): number { return 0; }
   steam_is_cloud_enabled_for_app(): boolean { return false; }
-  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id: number, _consumer_app_id: number, _page: number): number { return 0; }
+  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { return 0; }
 
   // ---- Misc ----
   show_message_async(_str: string): void { console.log("GML show_message_async:", _str); }
@@ -1356,8 +1354,8 @@ export class GameRuntime {
 
   // ---- Layer extras ----
   layer_exists(_layer: any): boolean { return false; }
-  layer_vspeed(_layer: any): number { return 0; }
-  layer_background_sprite(_bg: number): number { return -1; }
+  layer_vspeed(_layer: any, _speed?: number): any { if (_speed !== undefined) return; return 0; }
+  layer_background_sprite(_bg: number, _spr?: number): any { if (_spr !== undefined) return; return -1; }
   layer_background_index(_bg: number, _sprite: number): void {}
   layer_background_get_index(_bg: number): number { return -1; }
 
@@ -1425,29 +1423,29 @@ export class GameRuntime {
   }
 
   // ---- More Steam ----
-  steam_utils_enable_callbacks(_enable: boolean): void {}
+  steam_utils_enable_callbacks(_enable?: boolean): void {}
   steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void {}
   steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void {}
   steam_ugc_start_item_update(_appId: number, _fileId: number): number { return 0; }
   steam_ugc_set_item_description(_handle: number, _desc: string): void {}
   steam_net_packet_get_data(_buf: number): void {}
   steam_net_packet_receive(): boolean { return false; }
-  steam_net_packet_send(_steamid: number, _buf: number, _size: number, _type: number): void {}
+  steam_net_packet_send(_steamid: number, _buf: number, _size?: number, _type?: number): void {}
   steam_music_play(): void {}
   steam_music_is_enabled(): boolean { return false; }
   steam_music_get_status(): number { return 0; }
   steam_lobby_list_request(): void {}
   steam_lobby_list_get_lobby_id(_index: number): number { return 0; }
   steam_lobby_list_get_count(): number { return 0; }
-  steam_get_most_achieved_achievement_info(_info: any[]): boolean { return false; }
+  steam_get_most_achieved_achievement_info(_info?: any[]): boolean { return false; }
   steam_get_local_file_change_count(): number { return 0; }
   steam_available_languages(): string { return "english"; }
-  steam_inventory_get_all_items(_arr: any): boolean { return false; }
+  steam_inventory_get_all_items(_arr?: any): number { return -1; }
   steam_get_quota_total(): number { return 0; }
-  steam_get_global_stat_history_real(_name: string, _days: number): number { return 0; }
+  steam_get_global_stat_history_real(_name: string, _days?: number): number { return 0; }
   steam_file_read(_path: string): string { return ""; }
   steam_set_rich_presence(_key: string, _val: string): void {}
-  steam_user_get_auth_session_ticket(_arr: any): number { return 0; }
+  steam_user_get_auth_session_ticket(_arr?: any): number { return 0; }
 
   // ---- PS5 stubs ----
   ps5_gamepad_set_vibration_mode(_port: number, _mode: number): void {}
@@ -1464,25 +1462,25 @@ export class GameRuntime {
   steam_ugc_request_item_details(_id: number, _maxAge: number): void {}
   steam_ugc_num_subscribed_items(): number { return 0; }
   steam_ugc_create_item(_appId: number, _type: number): void {}
-  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId: number, _consumerAppId: number, _page: number): number { return 0; }
+  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId?: number, _consumerAppId?: number, _page?: number): number { return 0; }
   steam_ugc_delete_item(_id: number): void {}
   steam_ugc_unsubscribe_item(_id: number): void {}
   steam_ugc_set_item_preview(_handle: number, _path: string): void {}
   steam_ugc_set_item_title(_handle: number, _title: string): void {}
   steam_ugc_set_item_visibility(_handle: number, _vis: number): void {}
   steam_stats_ready(): boolean { return false; }
-  steam_send_screenshot(): void {}
+  steam_send_screenshot(_path?: string, _w?: number, _h?: number): void {}
   steam_request_global_stats(_days: number): void {}
-  steam_reset_all_stats_achievements(_also_achievements: boolean): void {}
+  steam_reset_all_stats_achievements(_also_achievements?: boolean): void {}
   steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void {}
   steam_set_stat_float(_name: string, _val: number): void {}
   steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void {}
   steam_shutdown(): void {}
-  steam_lobby_set_owner_id(_lobby: number, _steamid: number): void {}
-  steam_lobby_send_chat_message_buffer(_lobby: number, _buf: number, _size: number): boolean { return false; }
-  steam_lobby_is_owner(_lobby: number): boolean { return false; }
+  steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void {}
+  steam_lobby_send_chat_message_buffer(_buf: number, _size?: number, _lobby?: number): boolean { return false; }
+  steam_lobby_is_owner(_lobby?: number): boolean { return false; }
   steam_lobby_create(_type: number, _max_members: number): void {}
-  steam_lobby_activate_invite_overlay(_lobby: number): void {}
+  steam_lobby_activate_invite_overlay(_lobby?: number): void {}
   steam_lobby_list_get_data(_index: number, _key: string): string { return ""; }
   steam_lobby_list_join(_lobby: number): void {}
   steam_is_user_logged_on(): boolean { return false; }
@@ -1491,9 +1489,9 @@ export class GameRuntime {
   steam_get_quota_free(): number { return 0; }
   steam_get_number_of_current_players(): void {}
   steam_get_app_ownership_ticket_data(_appId: number): string { return ""; }
-  steam_file_read_buffer(_path: string, _buf: number): boolean { return false; }
+  steam_file_read_buffer(_path: string, _buf?: number): boolean { return false; }
   steam_file_persisted(_path: string): boolean { return false; }
-  steam_download_scores_around_user(_board: string, _range: number): void {}
+  steam_download_scores_around_user(_board: string, _range: number, _range2?: number): void {}
   steam_download_scores(_board: string, _start: number, _end: number): void {}
   steam_download_friends_scores(_board: string): void {}
   steam_music_pause(): void {}
@@ -1539,8 +1537,8 @@ export class GameRuntime {
   // ---- Layer extras ----
   layer_get_depth(_layer: any): number { return 0; }
   layer_set_visible(_layer: any, _visible: boolean): void {}
-  layer_x(_layer: any): number { return 0; }
-  layer_y(_layer: any): number { return 0; }
+  layer_x(_layer: any, _x?: number): any { if (_x !== undefined) return; return 0; }
+  layer_y(_layer: any, _y?: number): any { if (_y !== undefined) return; return 0; }
 
   // ---- More instance ----
   instance_deactivate_all(_notme: boolean): void { throw new Error("instance_deactivate_all: requires instance activation system"); }
@@ -1608,14 +1606,14 @@ export class GameRuntime {
   video_get_format(): string { return ""; }
 
   // ---- PSN stubs ----
-  psn_init_trophy(): void {}
+  psn_init_trophy(_pad_index?: number): void {}
   psn_unlock_trophy(_id: number, _slot: number = 0): void {}
   psn_get_trophy_unlock_state(_id: number): number { return 0; }
   psn_tick(): void {}
   psn_tick_error_dialog(): void {}
   psn_np_commerce_dialog_tick(): void {}
-  psn_save_data_backup(): void {}
-  psn_communication_restriction_status(): number { return 0; }
+  psn_save_data_backup(_slot?: any, _id?: any): void {}
+  psn_communication_restriction_status(_pad_index?: number): number { return 0; }
 
   // ---- More Steam ----
   steam_activate_overlay_browser(_url: string): void {}
@@ -1624,7 +1622,7 @@ export class GameRuntime {
   steam_file_get_list(): string[] { return []; }
   steam_file_share(_path: string): void {}
   steam_file_size(_path: string): number { return 0; }
-  steam_file_write_buffer(_path: string, _buf: number, _size: number): boolean { return false; }
+  steam_file_write_buffer(_path: string, _buf: number, _size?: number): boolean { return false; }
   steam_file_write_file(_path: string, _srcpath: string): boolean { return false; }
   steam_get_achievement_progress_limits_int(_name: string): [number, number] { return [0, 0]; }
   steam_get_global_stat_real(_name: string): number { return 0; }
@@ -1635,11 +1633,11 @@ export class GameRuntime {
   steam_input_get_connected_controllers(): number[] { return []; }
   steam_input_get_digital_action_data(_controller: number, _action: number): boolean { return false; }
   steam_input_get_digital_action_origins(_controller: number, _action_set: number, _action: number): number[] { return []; }
-  steam_input_get_glyph_png_for_action_origin(_controller: number, _origin: number, _style: number, _flags: number): string { return ""; }
+  steam_input_get_glyph_png_for_action_origin(_origin: number, _style: number, _flags: number): string { return ""; }
   steam_input_init(_explicit: boolean): void {}
   steam_inventory_trigger_item_drop(_id: number): void {}
   steam_is_subscribed(): boolean { return false; }
-  steam_lobby_leave(_lobby: number): void {}
+  steam_lobby_leave(_lobby?: number): void {}
 
   // ---- Instance position/collision with DS list ----
 

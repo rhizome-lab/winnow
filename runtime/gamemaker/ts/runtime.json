@@ -1617,16 +1617,15 @@
     "sprite_add_from_surface": {
       "params": [
         "int",
+        "int",
         "number",
         "number",
         "number",
         "number",
         "boolean",
-        "boolean",
-        "number",
-        "number"
+        "boolean"
       ],
-      "returns": "int"
+      "returns": "void"
     },
     "surface_resize": {
       "params": [
@@ -1836,14 +1835,12 @@
     },
     "steam_inventory_result_get_items": {
       "params": [
-        "int",
-        "dynamic"
+        "int"
       ],
-      "returns": "int"
+      "returns": "*"
     },
     "steam_lobby_get_member_id": {
       "params": [
-        "int",
         "int"
       ],
       "returns": "int"
@@ -1882,15 +1879,11 @@
     },
     "steam_lobby_get_chat_message_text": {
       "params": [
-        "int",
         "int"
       ],
       "returns": "string"
     },
     "steam_lobby_get_owner_id": {
-      "params": [
-        "int"
-      ],
       "returns": "int"
     },
     "steam_request_friend_rich_presence": {

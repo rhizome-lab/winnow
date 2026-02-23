@@ -8,7 +8,8 @@ pub trait EntityRef: Copy + Eq + std::hash::Hash + std::fmt::Debug {
 
 /// Define a typed entity reference (a newtype over `u32`).
 ///
-/// ```ignore
+/// ```
+/// use reincarnate_core::define_entity;
 /// define_entity!(FuncId);
 /// ```
 #[macro_export]
