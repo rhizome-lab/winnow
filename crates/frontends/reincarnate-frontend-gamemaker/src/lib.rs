@@ -455,7 +455,10 @@ fn build_function_names(
 ) -> Result<HashMap<u32, String>, CoreError> {
     let mut names = HashMap::new();
     for (idx, entry) in func.functions.iter().enumerate() {
-        let name = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("func_{idx}"));
+        let raw = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("func_{idx}"));
+        // Strip the gml_Script_/gml_GlobalScript_ prefix so resolved names
+        // match the exported identifiers and the script_names lookup set.
+        let name = strip_script_prefix(&raw).to_string();
         names.insert(idx as u32, name);
     }
     Ok(names)
