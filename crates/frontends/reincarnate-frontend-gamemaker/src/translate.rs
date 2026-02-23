@@ -88,9 +88,18 @@ pub fn translate_code_entry(
     // Pass 1 & 2: Create IR blocks, excluding with-body offsets.
     // Old-style scripts may use argumentN without declaring parameters —
     // scan for implicit argument references to determine true arg count.
-    let implicit_args = scan_implicit_args(&instructions, ctx);
-    let effective_arg_count = ctx.arg_count.max(implicit_args);
-    let sig = build_signature_with_args(ctx, effective_arg_count);
+    let scan = scan_implicit_args(&instructions, ctx);
+    let effective_arg_count = ctx.arg_count.max(scan.count);
+    let mut sig = build_signature_with_args(ctx, effective_arg_count);
+    // Scripts that read `argument_count` or use `argument[dynamic_idx]` are truly
+    // variadic — they accept any number of arguments at the call site.  Emit a
+    // rest parameter `...args: any[]` so TypeScript call sites are not flagged for
+    // passing extra arguments.
+    if scan.uses_dynamic_args {
+        sig.params.push(Type::Array(Box::new(Type::Dynamic)));
+        sig.defaults.push(None);
+        sig.has_rest_param = true;
+    }
     let mut fb = FunctionBuilder::new(func_name, sig, Visibility::Public);
 
     // Name parameters.
@@ -115,12 +124,27 @@ pub fn translate_code_entry(
         fb.name_value(fb.param(param_idx), name);
         param_idx += 1;
     }
+    // If this is a variadic script, record the rest param ValueId in a special
+    // locals entry so the translation loop can reference it when it encounters
+    // `argument_count` reads or dynamic `argument[N]` accesses.
+    let rest_param_id = if scan.uses_dynamic_args {
+        let id = fb.param(param_idx);
+        fb.name_value(id, "args".to_string());
+        Some(id)
+    } else {
+        None
+    };
 
     let (block_map, block_params, block_entry_depths) =
         setup_blocks(&mut fb, &instructions, &with_ranges, 0);
 
     // Allocate locals.
     let mut locals = allocate_locals(&mut fb, ctx);
+    // Stash the rest param (if any) in locals under the reserved key "_args" so
+    // inner translation helpers can look it up without adding extra parameters.
+    if let Some(rest_id) = rest_param_id {
+        locals.insert("_args".to_string(), rest_id);
+    }
 
     // Pass 3: Translate instructions.
     fb.switch_to_block(fb.entry_block());
@@ -563,13 +587,29 @@ fn parse_argument_index(name: &str) -> Option<usize> {
     name.strip_prefix("argument").and_then(|s| s.parse::<usize>().ok())
 }
 
+/// Result of scanning for implicit argument references in a GML script.
+struct ImplicitArgScan {
+    /// Number of implicit arguments detected via `argumentN` or `argument[K]` with
+    /// a constant index (max index + 1), or 0 if none found.
+    count: u16,
+    /// True when the script uses dynamic argument access: reads `argument_count`
+    /// (to determine how many args were passed at runtime) or reads `argument[N]`
+    /// with a non-constant index. Scripts with dynamic argument access must be
+    /// emitted with a rest parameter (`...args: any[]`) so TypeScript call sites
+    /// can pass any number of arguments without TS2554 errors.
+    uses_dynamic_args: bool,
+}
+
 /// Scan instructions for implicit `argument0`..`argumentN` references
 /// (variables with Builtin/Own instance type whose name matches `argumentN`)
 /// and `argument[N]` references (Stacktop instance type with name "argument"
 /// preceded by a constant integer push).
-/// Returns the number of implicit arguments (max index + 1), or 0 if none found.
-fn scan_implicit_args(instructions: &[Instruction], ctx: &TranslateCtx) -> u16 {
+///
+/// Also detects dynamic argument access patterns (`argument_count` reads or
+/// `argument[N]` with a non-constant index) which require a rest parameter.
+fn scan_implicit_args(instructions: &[Instruction], ctx: &TranslateCtx) -> ImplicitArgScan {
     let mut max_idx: Option<usize> = None;
+    let mut uses_dynamic_args = false;
     for (i, inst) in instructions.iter().enumerate() {
         if let Operand::Variable { var_ref, instance } = &inst.operand {
             let it = InstanceType::from_i16(*instance);
@@ -577,14 +617,20 @@ fn scan_implicit_args(instructions: &[Instruction], ctx: &TranslateCtx) -> u16 {
                 let name = resolve_variable_name(inst, ctx);
                 if let Some(idx) = parse_argument_index(&name) {
                     max_idx = Some(max_idx.map_or(idx, |m: usize| m.max(idx)));
+                } else if name == "argument_count" {
+                    // Script reads how many arguments were passed — must be variadic.
+                    uses_dynamic_args = true;
                 }
             } else if matches!(it, Some(InstanceType::Stacktop)) {
                 let name = resolve_variable_name(inst, ctx);
                 if name == "argument" {
-                    // argument[N] pattern (GMS2): preceding instruction pushes the index.
                     if let Some(idx) = preceding_const_int(instructions, i) {
+                        // argument[N] pattern (GMS2): preceding instruction pushes the index.
                         let idx = idx as usize;
                         max_idx = Some(max_idx.map_or(idx, |m: usize| m.max(idx)));
+                    } else {
+                        // Dynamic index — script accesses argument[variable].
+                        uses_dynamic_args = true;
                     }
                 }
             } else if is_2d_array_access(var_ref, *instance) {
@@ -596,12 +642,18 @@ fn scan_implicit_args(instructions: &[Instruction], ctx: &TranslateCtx) -> u16 {
                     if let Some(idx) = preceding_const_int(instructions, i) {
                         let idx = idx as usize;
                         max_idx = Some(max_idx.map_or(idx, |m: usize| m.max(idx)));
+                    } else {
+                        // Dynamic index — script accesses argument[variable].
+                        uses_dynamic_args = true;
                     }
                 }
             }
         }
     }
-    max_idx.map_or(0, |m| (m + 1) as u16)
+    ImplicitArgScan {
+        count: max_idx.map_or(0, |m| (m + 1) as u16),
+        uses_dynamic_args,
+    }
 }
 
 /// Extract a constant integer from the instruction preceding `idx`, if any.
@@ -2101,15 +2153,21 @@ fn translate_push_variable(
                     stack.push(param);
                 }
             } else {
-                // Dynamic index — fall back to getField
-                let name_val = fb.const_string(&var_name);
-                let val = fb.system_call(
-                    "GameMaker.Instance",
-                    "getField",
-                    &[dim1, name_val],
-                    Type::Dynamic,
-                );
-                stack.push(val);
+                // Dynamic index — if the function has a rest param, index into it:
+                // `argument[expr]` → `args[expr]`.  Otherwise fall back to getField.
+                if let Some(&rest_id) = locals.get("_args") {
+                    let val = fb.get_index(rest_id, dim1, Type::Dynamic);
+                    stack.push(val);
+                } else {
+                    let name_val = fb.const_string(&var_name);
+                    let val = fb.system_call(
+                        "GameMaker.Instance",
+                        "getField",
+                        &[dim1, name_val],
+                        Type::Dynamic,
+                    );
+                    stack.push(val);
+                }
             }
         } else if ctx.has_self {
             // ref_type==0 with instance >= 0: the instance field is the VARI
@@ -2191,6 +2249,29 @@ fn translate_push_variable(
                     let param = fb.param(param_offset + arg_idx);
                     stack.push(param);
                 }
+            } else if var_name == "argument_count" {
+                // `argument_count` is a GML built-in that returns the number of
+                // arguments passed to the current script call.  When the function
+                // was emitted with a rest parameter (stored as "_args" in locals),
+                // translate this as `args.length`.  Otherwise fall through to the
+                // normal self/global field lookup (best-effort fallback).
+                if let Some(&rest_id) = locals.get("_args") {
+                    let val = fb.get_field(rest_id, "length", Type::Dynamic);
+                    stack.push(val);
+                } else if ctx.has_self {
+                    let self_param = fb.param(0);
+                    let val = fb.get_field(self_param, &var_name, Type::Dynamic);
+                    stack.push(val);
+                } else {
+                    let name_val = fb.const_string(&var_name);
+                    let val = fb.system_call(
+                        "GameMaker.Global",
+                        "get",
+                        &[name_val],
+                        Type::Dynamic,
+                    );
+                    stack.push(val);
+                }
             } else if ctx.has_self {
                 let self_param = fb.param(0);
                 let val = fb.get_field(self_param, &var_name, Type::Dynamic);
@@ -2265,6 +2346,10 @@ fn translate_push_variable(
                         + if ctx.has_other { 1 } else { 0 };
                     let param = fb.param(param_offset + *idx as usize);
                     stack.push(param);
+                } else if let Some(&rest_id) = locals.get("_args") {
+                    // Dynamic index with rest param — `argument[expr]` → `args[expr]`.
+                    let val = fb.get_index(rest_id, target, Type::Dynamic);
+                    stack.push(val);
                 } else {
                     // Dynamic index — fall back to getField
                     let name_val = fb.const_string(&var_name);

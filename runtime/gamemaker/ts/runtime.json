@@ -1,23 +1,63 @@
 {
   "system_modules": {
-    "GameMaker.Global": { "path": "gamemaker/global" },
-    "GameMaker.Instance": { "path": "gamemaker/instance" }
+    "GameMaker.Global": {
+      "path": "gamemaker/global"
+    },
+    "GameMaker.Instance": {
+      "path": "gamemaker/instance"
+    }
   },
   "scaffold": {
     "imports": [
-      { "names": ["createGameRuntime"], "path": "gamemaker/runtime" }
+      {
+        "names": [
+          "createGameRuntime"
+        ],
+        "path": "gamemaker/runtime"
+      }
     ],
     "data_imports": [
-      { "names": ["rooms", "Rooms"], "path": "data/rooms" },
-      { "names": ["sprites"], "path": "data/sprites" },
-      { "names": ["textures"], "path": "data/textures" },
-      { "names": ["fonts"], "path": "data/fonts" },
-      { "names": ["Classes"], "path": "data/objects" }
+      {
+        "names": [
+          "rooms",
+          "Rooms"
+        ],
+        "path": "data/rooms"
+      },
+      {
+        "names": [
+          "sprites"
+        ],
+        "path": "data/sprites"
+      },
+      {
+        "names": [
+          "textures"
+        ],
+        "path": "data/textures"
+      },
+      {
+        "names": [
+          "fonts"
+        ],
+        "path": "data/fonts"
+      },
+      {
+        "names": [
+          "Classes"
+        ],
+        "path": "data/objects"
+      }
     ],
     "entry": "createGameRuntime().start({ rooms, sprites, textures, fonts, classes: [{classes}], Classes, initialRoom: Rooms.Init, roomCreationCode: [{roomCreationCode}] });"
   },
   "class_preamble": {
-    "names": ["GMLObject", "Colors", "HAligns", "VAligns"],
+    "names": [
+      "GMLObject",
+      "Colors",
+      "HAligns",
+      "VAligns"
+    ],
     "path": "gamemaker/runtime"
   },
   "type_definitions": {
@@ -69,338 +109,2028 @@
         "yprevious": "number"
       },
       "methods": {
-        "create": { "params": [], "returns": "void" },
-        "destroy": { "params": [], "returns": "void" },
-        "draw": { "params": [], "returns": "void" },
-        "mouseenter": { "params": [], "returns": "void" },
-        "mouseleave": { "params": [], "returns": "void" },
-        "roomstart": { "params": [], "returns": "void" },
-        "roomend": { "params": [], "returns": "void" },
-        "beginstep": { "params": [], "returns": "void" },
-        "step": { "params": [], "returns": "void" },
-        "endstep": { "params": [], "returns": "void" },
-        "drawgui": { "params": [], "returns": "void" }
+        "create": {
+          "params": [],
+          "returns": "void"
+        },
+        "destroy": {
+          "params": [],
+          "returns": "void"
+        },
+        "draw": {
+          "params": [],
+          "returns": "void"
+        },
+        "mouseenter": {
+          "params": [],
+          "returns": "void"
+        },
+        "mouseleave": {
+          "params": [],
+          "returns": "void"
+        },
+        "roomstart": {
+          "params": [],
+          "returns": "void"
+        },
+        "roomend": {
+          "params": [],
+          "returns": "void"
+        },
+        "beginstep": {
+          "params": [],
+          "returns": "void"
+        },
+        "step": {
+          "params": [],
+          "returns": "void"
+        },
+        "endstep": {
+          "params": [],
+          "returns": "void"
+        },
+        "drawgui": {
+          "params": [],
+          "returns": "void"
+        }
       }
     }
   },
   "function_signatures": {
-    "floor": { "params": ["number"], "returns": "number" },
-    "ceil": { "params": ["number"], "returns": "number" },
-    "round": { "params": ["number"], "returns": "number" },
-    "abs": { "params": ["number"], "returns": "number" },
-    "sign": { "params": ["number"], "returns": "number" },
-    "min": { "params": ["number", "number"], "returns": "number" },
-    "max": { "params": ["number", "number"], "returns": "number" },
-    "clamp": { "params": ["number", "number", "number"], "returns": "number" },
-    "sqrt": { "params": ["number"], "returns": "number" },
-    "power": { "params": ["number", "number"], "returns": "number" },
-    "sin": { "params": ["number"], "returns": "number" },
-    "cos": { "params": ["number"], "returns": "number" },
-    "tan": { "params": ["number"], "returns": "number" },
-    "arctan2": { "params": ["number", "number"], "returns": "number" },
-    "degtorad": { "params": ["number"], "returns": "number" },
-    "radtodeg": { "params": ["number"], "returns": "number" },
-    "log2": { "params": ["number"], "returns": "number" },
-    "log10": { "params": ["number"], "returns": "number" },
-    "ln": { "params": ["number"], "returns": "number" },
-    "exp": { "params": ["number"], "returns": "number" },
-    "sqr": { "params": ["number"], "returns": "number" },
-    "point_distance": { "params": ["number", "number", "number", "number"], "returns": "number" },
-    "point_direction": { "params": ["number", "number", "number", "number"], "returns": "number" },
-    "lengthdir_x": { "params": ["number", "number"], "returns": "number" },
-    "lengthdir_y": { "params": ["number", "number"], "returns": "number" },
-    "lerp": { "params": ["number", "number", "number"], "returns": "number" },
-    "random": { "params": ["number"], "returns": "number" },
-    "random_range": { "params": ["number", "number"], "returns": "number" },
-    "irandom": { "params": ["number"], "returns": "int" },
-    "irandom_range": { "params": ["number", "number"], "returns": "int" },
-    "choose": { "returns": "*" },
-    "string": { "params": ["*"], "returns": "string" },
-    "string_length": { "params": ["string"], "returns": "int" },
-    "string_height_ext": { "params": ["string", "number", "number"], "returns": "number" },
-    "string_width_ext": { "params": ["string", "number", "number"], "returns": "number" },
-    "string_height": { "params": ["string"], "returns": "number" },
-    "string_width": { "params": ["string"], "returns": "number" },
-    "string_pos": { "params": ["string", "string"], "returns": "int" },
-    "string_copy": { "params": ["string", "int", "int"], "returns": "string" },
-    "string_delete": { "params": ["string", "int", "int"], "returns": "string" },
-    "string_char_at": { "params": ["string", "int"], "returns": "string" },
-    "string_upper": { "params": ["string"], "returns": "string" },
-    "string_lower": { "params": ["string"], "returns": "string" },
-    "string_count": { "params": ["string", "string"], "returns": "int" },
-    "string_replace": { "params": ["string", "string", "string"], "returns": "string" },
-    "string_replace_all": { "params": ["string", "string", "string"], "returns": "string" },
-    "real": { "params": ["*"], "returns": "number" },
-    "chr": { "params": ["int"], "returns": "string" },
-    "ord": { "params": ["string"], "returns": "int" },
-    "draw_text": { "params": ["number", "number", "string"], "returns": "void" },
-    "draw_text_ext": { "params": ["number", "number", "string", "number", "number"], "returns": "void" },
-    "draw_text_colour": { "params": ["number", "number", "string", "int", "int", "int", "int", "number"], "returns": "void" },
-    "draw_text_ext_colour": { "params": ["number", "number", "string", "number", "number", "int", "int", "int", "int", "number"], "returns": "void" },
-    "draw_text_transformed": { "params": ["number", "number", "string", "number", "number", "number"], "returns": "void" },
-    "draw_set_color": { "params": ["int"], "returns": "void" },
-    "draw_set_colour": { "params": ["int"], "returns": "void" },
-    "draw_set_font": { "params": ["int"], "returns": "void" },
-    "draw_set_halign": { "params": ["int"], "returns": "void" },
-    "draw_set_valign": { "params": ["int"], "returns": "void" },
-    "draw_set_alpha": { "params": ["number"], "returns": "void" },
-    "draw_sprite": { "params": ["int", "number", "number", "number"], "returns": "void" },
-    "draw_sprite_ext": { "params": ["int", "number", "number", "number", "number", "number", "number", "int", "number"], "returns": "void" },
-    "draw_rectangle": { "params": ["number", "number", "number", "number", "boolean"], "returns": "void" },
-    "draw_rectangle_colour": { "params": ["number", "number", "number", "number", "int", "int", "int", "int", "boolean"], "returns": "void" },
-    "draw_roundrect": { "params": ["number", "number", "number", "number", "boolean"], "returns": "void" },
-    "draw_circle": { "params": ["number", "number", "number", "boolean"], "returns": "void" },
-    "draw_line": { "params": ["number", "number", "number", "number"], "returns": "void" },
-    "draw_line_width": { "params": ["number", "number", "number", "number", "number"], "returns": "void" },
-    "draw_self": { "returns": "void" },
-    "draw_surface": { "params": ["int", "number", "number"], "returns": "void" },
-    "draw_surface_ext": { "params": ["int", "number", "number", "number", "number", "number", "int", "number"], "returns": "void" },
-    "make_color_rgb": { "params": ["int", "int", "int"], "returns": "int" },
-    "make_colour_rgb": { "params": ["int", "int", "int"], "returns": "int" },
-    "color_get_red": { "params": ["int"], "returns": "int" },
-    "color_get_green": { "params": ["int"], "returns": "int" },
-    "color_get_blue": { "params": ["int"], "returns": "int" },
-    "merge_color": { "params": ["int", "int", "number"], "returns": "int" },
-    "merge_colour": { "params": ["int", "int", "number"], "returns": "int" },
-    "instance_create": { "params": ["number", "number", "int"], "returns": "int" },
-    "instance_exists": { "params": ["*"], "returns": "boolean" },
-    "instance_number": { "params": ["int"], "returns": "int" },
-    "instance_destroy": { "returns": "void" },
-    "instance_change": { "params": ["int", "boolean"], "returns": "void" },
-    "instance_find": { "params": ["int", "int"], "returns": "int" },
-    "instance_nearest": { "params": ["number", "number", "int"], "returns": "int" },
-    "instance_furthest": { "params": ["number", "number", "int"], "returns": "int" },
-    "place_meeting": { "params": ["number", "number", "int"], "returns": "boolean" },
-    "place_free": { "params": ["number", "number"], "returns": "boolean" },
-    "place_empty": { "params": ["number", "number"], "returns": "boolean" },
-    "collision_point": { "params": ["number", "number", "int", "boolean", "boolean"], "returns": "int" },
-    "collision_rectangle": { "params": ["number", "number", "number", "number", "int", "boolean", "boolean"], "returns": "int" },
-    "collision_line": { "params": ["number", "number", "number", "number", "int", "boolean", "boolean"], "returns": "int" },
-    "collision_circle": { "params": ["number", "number", "number", "int", "boolean", "boolean"], "returns": "int" },
-    "room_goto": { "params": ["int"], "returns": "void" },
-    "room_goto_next": { "returns": "void" },
-    "room_goto_previous": { "returns": "void" },
-    "room_restart": { "returns": "void" },
-    "game_restart": { "returns": "void" },
-    "game_end": { "returns": "void" },
-    "ds_list_create": { "returns": "int" },
-    "ds_list_destroy": { "params": ["int"], "returns": "void" },
-    "ds_list_add": { "params": ["int", "*"], "returns": "void" },
-    "ds_list_size": { "params": ["int"], "returns": "int" },
-    "ds_list_find_value": { "params": ["int", "int"], "returns": "*" },
-    "ds_list_delete": { "params": ["int", "int"], "returns": "void" },
-    "ds_list_clear": { "params": ["int"], "returns": "void" },
-    "ds_map_create": { "returns": "int" },
-    "ds_map_destroy": { "params": ["int"], "returns": "void" },
-    "ds_map_add": { "params": ["int", "*", "*"], "returns": "void" },
-    "ds_map_find_value": { "params": ["int", "*"], "returns": "*" },
-    "ds_map_exists": { "params": ["int", "*"], "returns": "boolean" },
-    "ds_map_replace": { "params": ["int", "*", "*"], "returns": "void" },
-    "ds_map_delete": { "params": ["int", "*"], "returns": "void" },
-    "ds_map_size": { "params": ["int"], "returns": "int" },
-    "ds_grid_create": { "params": ["int", "int"], "returns": "int" },
-    "ds_grid_destroy": { "params": ["int"], "returns": "void" },
-    "ds_grid_set": { "params": ["int", "int", "int", "*"], "returns": "void" },
-    "ds_grid_get": { "params": ["int", "int", "int"], "returns": "*" },
-    "ds_grid_width": { "params": ["int"], "returns": "int" },
-    "ds_grid_height": { "params": ["int"], "returns": "int" },
-    "ini_open": { "params": ["string"], "returns": "void" },
-    "ini_close": { "returns": "void" },
-    "ini_read_string": { "params": ["string", "string", "string"], "returns": "string" },
-    "ini_read_real": { "params": ["string", "string", "number"], "returns": "number" },
-    "ini_write_string": { "params": ["string", "string", "string"], "returns": "void" },
-    "ini_write_real": { "params": ["string", "string", "number"], "returns": "void" },
-    "show_debug_message": { "params": ["*"], "returns": "void" },
-    "show_message": { "params": ["string"], "returns": "void" },
-    "variable_global_set": { "params": ["string", "*"], "returns": "void" },
-    "variable_global_get": { "params": ["string"], "returns": "*" },
-    "mouse_check_button": { "params": ["int"], "returns": "boolean" },
-    "mouse_check_button_pressed": { "params": ["int"], "returns": "boolean" },
-    "mouse_check_button_released": { "params": ["int"], "returns": "boolean" },
-    "keyboard_check": { "params": ["int"], "returns": "boolean" },
-    "keyboard_check_pressed": { "params": ["int"], "returns": "boolean" },
-    "keyboard_check_released": { "params": ["int"], "returns": "boolean" },
-    "keyboard_check_direct": { "params": ["int"], "returns": "boolean" },
-    "sprite_get_width": { "params": ["int"], "returns": "number" },
-    "sprite_get_height": { "params": ["int"], "returns": "number" },
-    "sprite_get_number": { "params": ["int"], "returns": "int" },
-    "sprite_get_xoffset": { "params": ["int"], "returns": "number" },
-    "sprite_get_yoffset": { "params": ["int"], "returns": "number" },
-    "sprite_get_bbox_left": { "params": ["int"], "returns": "number" },
-    "sprite_get_bbox_right": { "params": ["int"], "returns": "number" },
-    "sprite_get_bbox_top": { "params": ["int"], "returns": "number" },
-    "sprite_get_bbox_bottom": { "params": ["int"], "returns": "number" },
-    "font_get_size": { "params": ["int"], "returns": "number" },
-    "audio_play_sound": { "params": ["int", "number", "boolean"], "returns": "int" },
-    "audio_stop_sound": { "params": ["int"], "returns": "void" },
-    "audio_is_playing": { "params": ["int"], "returns": "boolean" },
-    "audio_sound_gain": { "params": ["int", "number", "number"], "returns": "void" },
-    "surface_create": { "params": ["number", "number"], "returns": "int" },
-    "surface_free": { "params": ["int"], "returns": "void" },
-    "surface_exists": { "params": ["int"], "returns": "boolean" },
-    "surface_set_target": { "params": ["int"], "returns": "void" },
-    "surface_reset_target": { "returns": "void" },
-    "surface_get_width": { "params": ["int"], "returns": "number" },
-    "surface_get_height": { "params": ["int"], "returns": "number" },
-    "array_length_1d": { "params": ["*"], "returns": "int" },
-    "array_length_2d": { "params": ["*", "int"], "returns": "int" },
-    "array_create": { "params": ["int"], "returns": "*" },
-    "is_string": { "params": ["*"], "returns": "boolean" },
-    "is_real": { "params": ["*"], "returns": "boolean" },
-    "is_undefined": { "params": ["*"], "returns": "boolean" },
-    "is_array": { "params": ["*"], "returns": "boolean" },
-    "script_execute": { "returns": "*" },
-    "alarm_set": { "params": ["int", "number"], "returns": "void" },
-    "alarm_get": { "params": ["int"], "returns": "number" },
-    "motion_set": { "params": ["number", "number"], "returns": "void" },
-    "move_towards_point": { "params": ["number", "number", "number"], "returns": "void" },
-    "move_wrap": { "params": ["boolean", "boolean", "number"], "returns": "void" },
-    "distance_to_object": { "params": ["int"], "returns": "number" },
-    "distance_to_point": { "params": ["number", "number"], "returns": "number" },
-    "event_perform": { "params": ["int", "int"], "returns": "void" },
-    "event_user": { "params": ["int"], "returns": "void" },
-    "event_inherited": { "returns": "void" },
-    "randomize": { "returns": "void" },
-    "random_set_seed": { "params": ["number"], "returns": "void" },
-    "frac": { "params": ["number"], "returns": "number" },
-    "mean": { "returns": "number" },
-    "median": { "returns": "number" },
-    "dsin": { "params": ["number"], "returns": "number" },
-    "dcos": { "params": ["number"], "returns": "number" },
-    "dtan": { "params": ["number"], "returns": "number" },
-    "darcsin": { "params": ["number"], "returns": "number" },
-    "darccos": { "params": ["number"], "returns": "number" },
-    "darctan": { "params": ["number"], "returns": "number" },
-    "darctan2": { "params": ["number", "number"], "returns": "number" },
-    "logn": { "params": ["number", "number"], "returns": "number" },
-    "int64": { "params": ["number"], "returns": "int" },
-    "string_insert": { "params": ["string", "string", "int"], "returns": "string" },
-    "ini_open_from_string": { "params": ["string"], "returns": "void" },
-    "ini_section_exists": { "params": ["string"], "returns": "boolean" },
-    "ini_key_exists": { "params": ["string", "string"], "returns": "boolean" },
-    "ini_section_delete": { "params": ["string"], "returns": "void" },
-    "ini_key_delete": { "params": ["string", "string"], "returns": "void" },
-    "draw_text_color": { "params": ["number", "number", "string", "int"], "returns": "void" },
-    "draw_text_ext_color": { "params": ["number", "number", "string", "number", "number", "int"], "returns": "void" },
-    "draw_text_ext_transformed": { "params": ["number", "number", "string", "number", "number", "number", "number", "number"], "returns": "void" },
-    "draw_text_transformed_color": { "params": ["number", "number", "string", "number", "number", "number", "int"], "returns": "void" },
-    "draw_text_ext_transformed_color": { "params": ["number", "number", "string", "number", "number", "number", "number", "number", "int"], "returns": "void" },
-    "draw_set_ext": { "params": ["number", "number"], "returns": "void" },
-    "draw_get_alpha": { "returns": "number" },
-    "draw_get_colour": { "returns": "int" },
-    "draw_get_color": { "returns": "int" },
-    "draw_get_halign": { "returns": "int" },
-    "draw_get_valign": { "returns": "int" },
-    "draw_ellipse_color": { "params": ["number", "number", "number", "number", "int", "int", "boolean"], "returns": "void" },
-    "draw_sprite_part": { "params": ["int", "int", "number", "number", "number", "number", "number", "number"], "returns": "void" },
-    "draw_primitive_begin": { "params": ["int"], "returns": "void" },
-    "sprite_set_offset": { "params": ["int", "number", "number"], "returns": "void" },
-    "sprite_get_texture": { "params": ["int", "int"], "returns": "int" },
-    "sprite_add_from_surface": { "params": ["int", "number", "number", "number", "number", "boolean", "boolean", "number", "number"], "returns": "int" },
-    "surface_resize": { "params": ["int", "number", "number"], "returns": "void" },
-    "surface_get_target": { "returns": "int" },
-    "shader_set_uniform_f_array": { "params": ["int", "dynamic"], "returns": "void" },
-    "instance_activate_object": { "params": ["int"], "returns": "void" },
-    "instance_deactivate_object": { "params": ["int"], "returns": "void" },
-    "instance_deactivate_layer": { "params": ["dynamic"], "returns": "void" },
-    "instance_deactivate_region": { "params": ["number", "number", "number", "number", "boolean", "boolean"], "returns": "void" },
-    "layer_background_index": { "params": ["int", "int"], "returns": "void" },
-    "layer_background_get_index": { "params": ["int"], "returns": "int" },
-    "part_type_shape": { "params": ["int", "int"], "returns": "void" },
-    "part_type_death": { "params": ["int", "int", "number"], "returns": "void" },
-    "part_type_color_hsv": { "params": ["int", "number", "number", "number", "number", "number", "number"], "returns": "void" },
-    "part_type_clear": { "params": ["int"], "returns": "void" },
-    "part_type_size_x": { "params": ["int", "number", "number", "number", "number"], "returns": "void" },
-    "part_type_size_y": { "params": ["int", "number", "number", "number", "number"], "returns": "void" },
-    "ds_map_replace": { "params": ["int", "dynamic", "dynamic"], "returns": "void" },
-    "ds_map_secure_save": { "params": ["int", "string"], "returns": "void" },
-    "ds_map_values_to_array": { "params": ["int"], "returns": "dynamic" },
-    "ds_list_read": { "params": ["int", "string"], "returns": "void" },
-    "ds_list_write": { "params": ["int"], "returns": "string" },
-    "ds_grid_write": { "params": ["int"], "returns": "string" },
-    "variable_instance_get": { "params": ["dynamic", "string"], "returns": "dynamic" },
-    "variable_instance_exists": { "params": ["dynamic", "string"], "returns": "boolean" },
-    "audio_sound_get_pitch": { "params": ["int"], "returns": "number" },
-    "buffer_load": { "params": ["string", "int", "int", "int"], "returns": "int" },
-    "buffer_async_group_begin": { "params": ["string"], "returns": "void" },
-    "buffer_async_group_end": { "returns": "int" },
-    "gamepad_is_connected": { "params": ["int"], "returns": "boolean" },
-    "gamepad_set_vibration": { "params": ["int", "number", "number"], "returns": "void" },
-    "color_get_hue": { "params": ["int"], "returns": "number" },
-    "steam_is_cloud_enabled_for_account": { "returns": "boolean" },
-    "steam_inventory_result_get_items": { "params": ["int", "dynamic"], "returns": "int" },
-    "steam_lobby_get_member_id": { "params": ["int", "int"], "returns": "int" },
-    "steam_input_get_action_set_handle": { "params": ["string"], "returns": "int" },
-    "steam_get_stat_float": { "params": ["string"], "returns": "number" },
-    "steam_get_global_stat_int": { "params": ["string"], "returns": "int" },
-    "steam_get_user_account_id": { "returns": "int" },
-    "steam_image_get_rgba": { "params": ["int", "int", "int"], "returns": "boolean" },
-    "steam_input_enable_device_callbacks": { "returns": "void" },
-    "steam_lobby_get_chat_message_text": { "params": ["int", "int"], "returns": "string" },
-    "steam_lobby_get_owner_id": { "params": ["int"], "returns": "int" },
-    "steam_request_friend_rich_presence": { "params": ["int"], "returns": "void" },
-    "steam_ugc_get_item_update_info": { "params": ["int", "dynamic"], "returns": "boolean" },
-    "steam_ugc_submit_item_update": { "params": ["int", "string"], "returns": "void" },
-    "variable_global_exists": { "params": ["string"], "returns": "boolean" },
-    "mouse_x": { "returns": "number" },
-    "mouse_y": { "returns": "number" }
+    "floor": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "ceil": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "round": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "abs": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sign": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "min": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "max": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "clamp": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sqrt": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "power": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sin": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "cos": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "tan": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "arctan2": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "degtorad": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "radtodeg": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "log2": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "log10": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "ln": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "exp": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sqr": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "point_distance": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "point_direction": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "lengthdir_x": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "lengthdir_y": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "lerp": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "random": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "random_range": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "irandom": {
+      "params": [
+        "number"
+      ],
+      "returns": "int"
+    },
+    "irandom_range": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "int"
+    },
+    "choose": {
+      "returns": "*"
+    },
+    "string": {
+      "params": [
+        "*"
+      ],
+      "returns": "string"
+    },
+    "string_length": {
+      "params": [
+        "string"
+      ],
+      "returns": "int"
+    },
+    "string_height_ext": {
+      "params": [
+        "string",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "string_width_ext": {
+      "params": [
+        "string",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "string_height": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "string_width": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "string_pos": {
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "int"
+    },
+    "string_copy": {
+      "params": [
+        "string",
+        "int",
+        "int"
+      ],
+      "returns": "string"
+    },
+    "string_delete": {
+      "params": [
+        "string",
+        "int",
+        "int"
+      ],
+      "returns": "string"
+    },
+    "string_char_at": {
+      "params": [
+        "string",
+        "int"
+      ],
+      "returns": "string"
+    },
+    "string_upper": {
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    "string_lower": {
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    "string_count": {
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "int"
+    },
+    "string_replace": {
+      "params": [
+        "string",
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    },
+    "string_replace_all": {
+      "params": [
+        "string",
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    },
+    "real": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "chr": {
+      "params": [
+        "int"
+      ],
+      "returns": "string"
+    },
+    "ord": {
+      "params": [
+        "string"
+      ],
+      "returns": "int"
+    },
+    "draw_text": {
+      "params": [
+        "number",
+        "number",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "draw_text_ext": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_text_colour": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "int",
+        "int",
+        "int",
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_text_ext_colour": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "int",
+        "int",
+        "int",
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_text_transformed": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_set_color": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_colour": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_font": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_halign": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_valign": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_alpha": {
+      "params": [
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_sprite": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_sprite_ext": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_rectangle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "draw_rectangle_colour": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "int",
+        "int",
+        "int",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "draw_roundrect": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "draw_circle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "draw_line": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_line_width": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_self": {
+      "returns": "void"
+    },
+    "draw_surface": {
+      "params": [
+        "int",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_surface_ext": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "make_color_rgb": {
+      "params": [
+        "int",
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "make_colour_rgb": {
+      "params": [
+        "int",
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "color_get_red": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "color_get_green": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "color_get_blue": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "merge_color": {
+      "params": [
+        "int",
+        "int",
+        "number"
+      ],
+      "returns": "int"
+    },
+    "merge_colour": {
+      "params": [
+        "int",
+        "int",
+        "number"
+      ],
+      "returns": "int"
+    },
+    "instance_create": {
+      "params": [
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "instance_exists": {
+      "params": [
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "instance_number": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "instance_destroy": {
+      "returns": "void"
+    },
+    "instance_change": {
+      "params": [
+        "int",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "instance_find": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "instance_nearest": {
+      "params": [
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "instance_furthest": {
+      "params": [
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "place_meeting": {
+      "params": [
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "place_free": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "boolean"
+    },
+    "place_empty": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "boolean"
+    },
+    "collision_point": {
+      "params": [
+        "number",
+        "number",
+        "int",
+        "boolean",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "collision_rectangle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "boolean",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "collision_line": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "boolean",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "collision_circle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "int",
+        "boolean",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "room_goto": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "room_goto_next": {
+      "returns": "void"
+    },
+    "room_goto_previous": {
+      "returns": "void"
+    },
+    "room_restart": {
+      "returns": "void"
+    },
+    "game_restart": {
+      "returns": "void"
+    },
+    "game_end": {
+      "returns": "void"
+    },
+    "ds_list_create": {
+      "returns": "int"
+    },
+    "ds_list_destroy": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "ds_list_add": {
+      "params": [
+        "int",
+        "*"
+      ],
+      "returns": "void"
+    },
+    "ds_list_size": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "ds_list_find_value": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "*"
+    },
+    "ds_list_delete": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "ds_list_clear": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "ds_map_create": {
+      "returns": "int"
+    },
+    "ds_map_destroy": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "ds_map_add": {
+      "params": [
+        "int",
+        "*",
+        "*"
+      ],
+      "returns": "void"
+    },
+    "ds_map_find_value": {
+      "params": [
+        "int",
+        "*"
+      ],
+      "returns": "*"
+    },
+    "ds_map_exists": {
+      "params": [
+        "int",
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "ds_map_replace": {
+      "params": [
+        "int",
+        "dynamic",
+        "dynamic"
+      ],
+      "returns": "void"
+    },
+    "ds_map_delete": {
+      "params": [
+        "int",
+        "*"
+      ],
+      "returns": "void"
+    },
+    "ds_map_size": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "ds_grid_create": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "ds_grid_destroy": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "ds_grid_set": {
+      "params": [
+        "int",
+        "int",
+        "int",
+        "*"
+      ],
+      "returns": "void"
+    },
+    "ds_grid_get": {
+      "params": [
+        "int",
+        "int",
+        "int"
+      ],
+      "returns": "*"
+    },
+    "ds_grid_width": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "ds_grid_height": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "ini_open": {
+      "params": [
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ini_close": {
+      "returns": "void"
+    },
+    "ini_read_string": {
+      "params": [
+        "string",
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    },
+    "ini_read_real": {
+      "params": [
+        "string",
+        "string",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "ini_write_string": {
+      "params": [
+        "string",
+        "string",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ini_write_real": {
+      "params": [
+        "string",
+        "string",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "show_debug_message": {
+      "params": [
+        "*"
+      ],
+      "returns": "void"
+    },
+    "show_message": {
+      "params": [
+        "string"
+      ],
+      "returns": "void"
+    },
+    "variable_global_set": {
+      "params": [
+        "string",
+        "*"
+      ],
+      "returns": "void"
+    },
+    "variable_global_get": {
+      "params": [
+        "string"
+      ],
+      "returns": "*"
+    },
+    "mouse_check_button": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "mouse_check_button_pressed": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "mouse_check_button_released": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "keyboard_check": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "keyboard_check_pressed": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "keyboard_check_released": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "keyboard_check_direct": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "sprite_get_width": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_height": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_number": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "sprite_get_xoffset": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_yoffset": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_bbox_left": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_bbox_right": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_bbox_top": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_bbox_bottom": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "font_get_size": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "audio_play_sound": {
+      "params": [
+        "int",
+        "number",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "audio_stop_sound": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "audio_is_playing": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "audio_sound_gain": {
+      "params": [
+        "int",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "surface_create": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "param_names": [
+        "w",
+        "h",
+        "format"
+      ],
+      "defaults": [
+        null,
+        null,
+        0
+      ],
+      "returns": "int"
+    },
+    "surface_free": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "surface_exists": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "surface_set_target": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "surface_reset_target": {
+      "returns": "void"
+    },
+    "surface_get_width": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "surface_get_height": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "array_length_1d": {
+      "params": [
+        "*"
+      ],
+      "returns": "int"
+    },
+    "array_length_2d": {
+      "params": [
+        "*",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "array_create": {
+      "params": [
+        "int"
+      ],
+      "returns": "*"
+    },
+    "is_string": {
+      "params": [
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "is_real": {
+      "params": [
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "is_undefined": {
+      "params": [
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "is_array": {
+      "params": [
+        "*"
+      ],
+      "returns": "boolean"
+    },
+    "script_execute": {
+      "returns": "*"
+    },
+    "alarm_set": {
+      "params": [
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "alarm_get": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "motion_set": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "move_towards_point": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "move_wrap": {
+      "params": [
+        "boolean",
+        "boolean",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "distance_to_object": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "distance_to_point": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "event_perform": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "event_user": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "event_inherited": {
+      "returns": "void"
+    },
+    "randomize": {
+      "returns": "void"
+    },
+    "random_set_seed": {
+      "params": [
+        "number"
+      ],
+      "returns": "void"
+    },
+    "frac": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "mean": {
+      "returns": "number"
+    },
+    "median": {
+      "returns": "number"
+    },
+    "dsin": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "dcos": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "dtan": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "darcsin": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "darccos": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "darctan": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "darctan2": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "logn": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "int64": {
+      "params": [
+        "number"
+      ],
+      "returns": "int"
+    },
+    "string_insert": {
+      "params": [
+        "string",
+        "string",
+        "int"
+      ],
+      "returns": "string"
+    },
+    "ini_open_from_string": {
+      "params": [
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ini_section_exists": {
+      "params": [
+        "string"
+      ],
+      "returns": "boolean"
+    },
+    "ini_key_exists": {
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "boolean"
+    },
+    "ini_section_delete": {
+      "params": [
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ini_key_delete": {
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "draw_text_color": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_text_ext_color": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_text_ext_transformed": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_text_transformed_color": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_text_ext_transformed_color": {
+      "params": [
+        "number",
+        "number",
+        "string",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "draw_set_ext": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_get_alpha": {
+      "returns": "number"
+    },
+    "draw_get_colour": {
+      "returns": "int"
+    },
+    "draw_get_color": {
+      "returns": "int"
+    },
+    "draw_get_halign": {
+      "returns": "int"
+    },
+    "draw_get_valign": {
+      "returns": "int"
+    },
+    "draw_ellipse_color": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "int",
+        "int",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "draw_sprite_part": {
+      "params": [
+        "int",
+        "int",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "draw_primitive_begin": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "sprite_set_offset": {
+      "params": [
+        "int",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "sprite_get_texture": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "sprite_add_from_surface": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number",
+        "boolean",
+        "boolean",
+        "number",
+        "number"
+      ],
+      "returns": "int"
+    },
+    "surface_resize": {
+      "params": [
+        "int",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "surface_get_target": {
+      "returns": "int"
+    },
+    "shader_set_uniform_f_array": {
+      "params": [
+        "int",
+        "dynamic"
+      ],
+      "returns": "void"
+    },
+    "instance_activate_object": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "instance_deactivate_object": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "instance_deactivate_layer": {
+      "params": [
+        "dynamic"
+      ],
+      "returns": "void"
+    },
+    "instance_deactivate_region": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "boolean",
+        "boolean"
+      ],
+      "returns": "void"
+    },
+    "layer_background_index": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "layer_background_get_index": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "part_type_shape": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "part_type_death": {
+      "params": [
+        "int",
+        "int",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "part_type_color_hsv": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "part_type_clear": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "part_type_size_x": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "part_type_size_y": {
+      "params": [
+        "int",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "ds_map_secure_save": {
+      "params": [
+        "int",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ds_map_values_to_array": {
+      "params": [
+        "int"
+      ],
+      "returns": "dynamic"
+    },
+    "ds_list_read": {
+      "params": [
+        "int",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "ds_list_write": {
+      "params": [
+        "int"
+      ],
+      "returns": "string"
+    },
+    "ds_grid_write": {
+      "params": [
+        "int"
+      ],
+      "returns": "string"
+    },
+    "variable_instance_get": {
+      "params": [
+        "dynamic",
+        "string"
+      ],
+      "returns": "dynamic"
+    },
+    "variable_instance_exists": {
+      "params": [
+        "dynamic",
+        "string"
+      ],
+      "returns": "boolean"
+    },
+    "audio_sound_get_pitch": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "buffer_load": {
+      "params": [
+        "string",
+        "int",
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "buffer_async_group_begin": {
+      "params": [
+        "string"
+      ],
+      "returns": "void"
+    },
+    "buffer_async_group_end": {
+      "returns": "int"
+    },
+    "gamepad_is_connected": {
+      "params": [
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "gamepad_set_vibration": {
+      "params": [
+        "int",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    },
+    "color_get_hue": {
+      "params": [
+        "int"
+      ],
+      "returns": "number"
+    },
+    "steam_is_cloud_enabled_for_account": {
+      "returns": "boolean"
+    },
+    "steam_inventory_result_get_items": {
+      "params": [
+        "int",
+        "dynamic"
+      ],
+      "returns": "int"
+    },
+    "steam_lobby_get_member_id": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "int"
+    },
+    "steam_input_get_action_set_handle": {
+      "params": [
+        "string"
+      ],
+      "returns": "int"
+    },
+    "steam_get_stat_float": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "steam_get_global_stat_int": {
+      "params": [
+        "string"
+      ],
+      "returns": "int"
+    },
+    "steam_get_user_account_id": {
+      "returns": "int"
+    },
+    "steam_image_get_rgba": {
+      "params": [
+        "int",
+        "int",
+        "int"
+      ],
+      "returns": "boolean"
+    },
+    "steam_input_enable_device_callbacks": {
+      "returns": "void"
+    },
+    "steam_lobby_get_chat_message_text": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "string"
+    },
+    "steam_lobby_get_owner_id": {
+      "params": [
+        "int"
+      ],
+      "returns": "int"
+    },
+    "steam_request_friend_rich_presence": {
+      "params": [
+        "int"
+      ],
+      "returns": "void"
+    },
+    "steam_ugc_get_item_update_info": {
+      "params": [
+        "int",
+        "dynamic"
+      ],
+      "returns": "boolean"
+    },
+    "steam_ugc_submit_item_update": {
+      "params": [
+        "int",
+        "string"
+      ],
+      "returns": "void"
+    },
+    "variable_global_exists": {
+      "params": [
+        "string"
+      ],
+      "returns": "boolean"
+    },
+    "mouse_x": {
+      "returns": "number"
+    },
+    "mouse_y": {
+      "returns": "number"
+    },
+    "collision_ellipse_list": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "*",
+        "boolean",
+        "boolean",
+        "int",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "collision_rectangle_list": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "*",
+        "boolean",
+        "boolean",
+        "int",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "layer_background_get_id": {
+      "params": [
+        "*"
+      ],
+      "returns": "int"
+    },
+    "collision_circle_list": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "*",
+        "boolean",
+        "boolean",
+        "int",
+        "boolean"
+      ],
+      "returns": "int"
+    },
+    "asset_get_tags": {
+      "params": [
+        "*",
+        "int"
+      ],
+      "returns": "*"
+    },
+    "layer_depth": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "psn_unlock_trophy": {
+      "params": [
+        "int",
+        "int"
+      ],
+      "returns": "void"
+    },
+    "vertex_position": {
+      "params": [
+        "*",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "void"
+    }
   },
   "function_modules": [
     {
       "names": [
-        "floor", "ceil", "round", "abs", "sign", "min", "max", "clamp", "sqrt",
-        "power", "sin", "cos", "tan", "arctan2", "ln", "log2", "log10", "exp",
-        "sqr", "frac", "mean", "median", "lerp", "point_distance", "point_direction",
-        "degtorad", "radtodeg", "lengthdir_x", "lengthdir_y",
-        "dsin", "dcos", "dtan", "darcsin", "darccos", "darctan", "darctan2",
-        "logn", "int64",
-        "int", "uint", "real", "string"
+        "floor",
+        "ceil",
+        "round",
+        "abs",
+        "sign",
+        "min",
+        "max",
+        "clamp",
+        "sqrt",
+        "power",
+        "sin",
+        "cos",
+        "tan",
+        "arctan2",
+        "ln",
+        "log2",
+        "log10",
+        "exp",
+        "sqr",
+        "frac",
+        "mean",
+        "median",
+        "lerp",
+        "point_distance",
+        "point_direction",
+        "degtorad",
+        "radtodeg",
+        "lengthdir_x",
+        "lengthdir_y",
+        "dsin",
+        "dcos",
+        "dtan",
+        "darcsin",
+        "darccos",
+        "darctan",
+        "darctan2",
+        "logn",
+        "int64",
+        "int",
+        "uint",
+        "real",
+        "string"
       ],
       "path": "gamemaker/math"
     },
     {
       "names": [
-        "random", "random_range", "irandom", "irandom_range", "choose",
-        "randomize", "random_set_seed"
+        "random",
+        "random_range",
+        "irandom",
+        "irandom_range",
+        "choose",
+        "randomize",
+        "random_set_seed"
       ],
       "path": "gamemaker/math",
       "stateful": true
     },
     {
       "names": [
-        "string_length", "string_copy", "string_insert", "string_replace_all",
-        "string_lower", "string_upper", "string_char_at", "string_pos",
-        "string_delete", "string_count"
+        "string_length",
+        "string_copy",
+        "string_insert",
+        "string_replace_all",
+        "string_lower",
+        "string_upper",
+        "string_char_at",
+        "string_pos",
+        "string_delete",
+        "string_count"
       ],
       "path": "gamemaker/string"
     },
     {
       "names": [
-        "draw_set_color", "draw_set_font", "draw_set_halign", "draw_set_valign",
-        "draw_set_alpha", "draw_get_alpha", "draw_get_colour",
-        "draw_sprite", "draw_sprite_ext", "draw_self",
-        "sprite_get_width", "sprite_get_height",
-        "draw_text", "draw_text_ext", "draw_text_color", "draw_text_transformed",
-        "draw_text_ext_color", "draw_text_ext_transformed",
-        "draw_text_transformed_color", "draw_text_ext_transformed_color",
-        "draw_rectangle", "draw_set_ext", "string_height_ext"
+        "draw_set_color",
+        "draw_set_font",
+        "draw_set_halign",
+        "draw_set_valign",
+        "draw_set_alpha",
+        "draw_get_alpha",
+        "draw_get_colour",
+        "draw_sprite",
+        "draw_sprite_ext",
+        "draw_self",
+        "sprite_get_width",
+        "sprite_get_height",
+        "draw_text",
+        "draw_text_ext",
+        "draw_text_color",
+        "draw_text_transformed",
+        "draw_text_ext_color",
+        "draw_text_ext_transformed",
+        "draw_text_transformed_color",
+        "draw_text_ext_transformed_color",
+        "draw_rectangle",
+        "draw_set_ext",
+        "string_height_ext"
       ],
       "path": "gamemaker/draw",
       "stateful": true
     },
     {
       "names": [
-        "color_get_red", "color_get_green", "color_get_blue",
-        "make_color_rgb", "merge_color", "color_get_hue"
+        "color_get_red",
+        "color_get_green",
+        "color_get_blue",
+        "make_color_rgb",
+        "merge_color",
+        "color_get_hue"
       ],
       "path": "gamemaker/color"
     },
     {
       "names": [
-        "ini_open", "ini_close", "ini_read_string", "ini_read_real",
-        "ini_write_string", "ini_write_real",
-        "ini_section_exists", "ini_key_exists",
-        "ini_section_delete", "ini_key_delete",
+        "ini_open",
+        "ini_close",
+        "ini_read_string",
+        "ini_read_real",
+        "ini_write_string",
+        "ini_write_real",
+        "ini_section_exists",
+        "ini_key_exists",
+        "ini_section_delete",
+        "ini_key_delete",
         "ini_open_from_string"
       ],
       "path": "gamemaker/storage",
@@ -408,313 +2138,697 @@
     },
     {
       "names": [
-        "mouse_check_button", "mouse_check_button_pressed",
-        "mouse_check_button_released", "mouse_x", "mouse_y",
-        "keyboard_check", "keyboard_check_pressed", "keyboard_check_released"
+        "mouse_check_button",
+        "mouse_check_button_pressed",
+        "mouse_check_button_released",
+        "mouse_x",
+        "mouse_y",
+        "keyboard_check",
+        "keyboard_check_pressed",
+        "keyboard_check_released"
       ],
       "path": "gamemaker/input",
       "stateful": true
     },
     {
       "names": [
-        "instance_create", "instance_create_depth", "instance_create_layer",
-        "instance_destroy", "instance_exists", "instance_number",
-        "instance_nearest", "instance_place_list", "instance_position_list",
-        "object_is_ancestor", "layer_get_id",
-        "room_goto", "room_goto_next", "room_goto_previous",
-        "room_restart", "game_restart",
-        "sprite_get_xoffset", "sprite_get_yoffset", "sprite_get_number",
-        "sprite_get_speed", "sprite_get_bbox_left", "sprite_get_bbox_right",
-        "sprite_get_bbox_top", "sprite_get_bbox_bottom", "sprite_exists",
-        "alarm_set", "alarm_get",
-        "angle_difference", "approach",
-        "asset_get_index", "asset_get_tags", "asset_has_tags",
-        "array_create", "array_copy", "array_equals", "array_concat",
-        "array_delete", "array_insert", "array_get", "array_set",
-        "array_sort", "array_shuffle", "array_shuffle_ext",
-        "is_array", "is_string", "is_real", "is_undefined",
-        "is_nan", "is_infinity", "is_numeric",
-        "surface_exists", "surface_create", "surface_free",
-        "surface_set_target", "surface_reset_target",
-        "draw_surface", "draw_surface_ext", "draw_surface_part",
-        "surface_get_width", "surface_get_height", "surface_getpixel",
-        "shader_is_compiled", "shader_set", "shader_reset",
-        "shader_get_uniform", "shader_set_uniform_f", "shader_set_uniform_i",
+        "instance_create",
+        "instance_create_depth",
+        "instance_create_layer",
+        "instance_destroy",
+        "instance_exists",
+        "instance_number",
+        "instance_nearest",
+        "instance_place_list",
+        "instance_position_list",
+        "object_is_ancestor",
+        "layer_get_id",
+        "room_goto",
+        "room_goto_next",
+        "room_goto_previous",
+        "room_restart",
+        "game_restart",
+        "sprite_get_xoffset",
+        "sprite_get_yoffset",
+        "sprite_get_number",
+        "sprite_get_speed",
+        "sprite_get_bbox_left",
+        "sprite_get_bbox_right",
+        "sprite_get_bbox_top",
+        "sprite_get_bbox_bottom",
+        "sprite_exists",
+        "alarm_set",
+        "alarm_get",
+        "angle_difference",
+        "approach",
+        "asset_get_index",
+        "asset_get_tags",
+        "asset_has_tags",
+        "array_create",
+        "array_copy",
+        "array_equals",
+        "array_concat",
+        "array_delete",
+        "array_insert",
+        "array_get",
+        "array_set",
+        "array_sort",
+        "array_shuffle",
+        "array_shuffle_ext",
+        "is_array",
+        "is_string",
+        "is_real",
+        "is_undefined",
+        "is_nan",
+        "is_infinity",
+        "is_numeric",
+        "surface_exists",
+        "surface_create",
+        "surface_free",
+        "surface_set_target",
+        "surface_reset_target",
+        "draw_surface",
+        "draw_surface_ext",
+        "draw_surface_part",
+        "surface_get_width",
+        "surface_get_height",
+        "surface_getpixel",
+        "shader_is_compiled",
+        "shader_set",
+        "shader_reset",
+        "shader_get_uniform",
+        "shader_set_uniform_f",
+        "shader_set_uniform_i",
         "shader_get_sampler_index",
-        "gpu_set_colorwriteenable", "gpu_get_colorwriteenable",
-        "gpu_set_fog", "gpu_set_blendmode", "gpu_set_blendmode_ext",
-        "gpu_set_alphatestenable", "gpu_set_alphatestref",
-        "gpu_set_ztestenable", "gpu_set_zwriteenable", "gpu_set_cullmode",
-        "audio_play_sound", "audio_play_sound_at",
-        "audio_is_playing", "audio_stop_sound", "audio_stop_all",
-        "audio_pause_sound", "audio_resume_sound", "audio_resume_all",
-        "audio_exists", "audio_get_name",
-        "audio_sound_gain", "audio_sound_get_gain", "audio_sound_pitch",
-        "audio_master_gain", "audio_group_load",
-        "audio_group_stop_all", "audio_group_set_gain",
-        "part_system_create", "part_system_destroy",
-        "part_type_create", "part_type_destroy",
-        "part_type_life", "part_type_direction", "part_type_speed",
-        "part_type_sprite", "part_type_color1", "part_type_color2", "part_type_color3",
-        "part_type_alpha1", "part_type_alpha2", "part_type_alpha3",
-        "part_type_scale", "part_type_size", "part_type_orientation",
-        "part_particles_create", "part_particles_create_color",
-        "part_emitter_create", "part_emitter_destroy",
-        "part_emitter_region", "part_emitter_burst",
-        "ds_list_create", "ds_list_destroy", "ds_list_add",
-        "ds_list_size", "ds_list_find_value", "ds_list_set",
-        "ds_list_delete", "ds_list_clear", "ds_list_exists",
-        "ds_list_find_index", "ds_list_sort",
-        "ds_map_create", "ds_map_destroy", "ds_map_add", "ds_map_set",
-        "ds_map_find_value", "ds_map_exists", "ds_map_delete",
-        "ds_map_size", "ds_map_clear", "ds_map_is_map",
-        "ds_map_find_first", "ds_map_find_next",
-        "ds_grid_create", "ds_grid_destroy",
-        "ds_grid_get", "ds_grid_set",
-        "ds_grid_width", "ds_grid_height", "ds_grid_clear", "ds_grid_add",
-        "ds_stack_create", "ds_stack_destroy",
-        "ds_stack_push", "ds_stack_pop", "ds_stack_top",
-        "ds_stack_size", "ds_stack_empty",
-        "ds_queue_create", "ds_queue_destroy",
-        "ds_queue_enqueue", "ds_queue_dequeue", "ds_queue_head",
-        "ds_queue_size", "ds_queue_empty",
-        "steam_current_game_language", "steam_inventory_result_destroy",
-        "steam_ugc_get_item_install_info", "steam_ugc_get_subscribed_items",
-        "steam_lobby_get_lobby_id", "steam_lobby_join_id",
-        "steam_lobby_set_data", "steam_lobby_get_data",
+        "gpu_set_colorwriteenable",
+        "gpu_get_colorwriteenable",
+        "gpu_set_fog",
+        "gpu_set_blendmode",
+        "gpu_set_blendmode_ext",
+        "gpu_set_alphatestenable",
+        "gpu_set_alphatestref",
+        "gpu_set_ztestenable",
+        "gpu_set_zwriteenable",
+        "gpu_set_cullmode",
+        "audio_play_sound",
+        "audio_play_sound_at",
+        "audio_is_playing",
+        "audio_stop_sound",
+        "audio_stop_all",
+        "audio_pause_sound",
+        "audio_resume_sound",
+        "audio_resume_all",
+        "audio_exists",
+        "audio_get_name",
+        "audio_sound_gain",
+        "audio_sound_get_gain",
+        "audio_sound_pitch",
+        "audio_master_gain",
+        "audio_group_load",
+        "audio_group_stop_all",
+        "audio_group_set_gain",
+        "part_system_create",
+        "part_system_destroy",
+        "part_type_create",
+        "part_type_destroy",
+        "part_type_life",
+        "part_type_direction",
+        "part_type_speed",
+        "part_type_sprite",
+        "part_type_color1",
+        "part_type_color2",
+        "part_type_color3",
+        "part_type_alpha1",
+        "part_type_alpha2",
+        "part_type_alpha3",
+        "part_type_scale",
+        "part_type_size",
+        "part_type_orientation",
+        "part_particles_create",
+        "part_particles_create_color",
+        "part_emitter_create",
+        "part_emitter_destroy",
+        "part_emitter_region",
+        "part_emitter_burst",
+        "ds_list_create",
+        "ds_list_destroy",
+        "ds_list_add",
+        "ds_list_size",
+        "ds_list_find_value",
+        "ds_list_set",
+        "ds_list_delete",
+        "ds_list_clear",
+        "ds_list_exists",
+        "ds_list_find_index",
+        "ds_list_sort",
+        "ds_map_create",
+        "ds_map_destroy",
+        "ds_map_add",
+        "ds_map_set",
+        "ds_map_find_value",
+        "ds_map_exists",
+        "ds_map_delete",
+        "ds_map_size",
+        "ds_map_clear",
+        "ds_map_is_map",
+        "ds_map_find_first",
+        "ds_map_find_next",
+        "ds_grid_create",
+        "ds_grid_destroy",
+        "ds_grid_get",
+        "ds_grid_set",
+        "ds_grid_width",
+        "ds_grid_height",
+        "ds_grid_clear",
+        "ds_grid_add",
+        "ds_stack_create",
+        "ds_stack_destroy",
+        "ds_stack_push",
+        "ds_stack_pop",
+        "ds_stack_top",
+        "ds_stack_size",
+        "ds_stack_empty",
+        "ds_queue_create",
+        "ds_queue_destroy",
+        "ds_queue_enqueue",
+        "ds_queue_dequeue",
+        "ds_queue_head",
+        "ds_queue_size",
+        "ds_queue_empty",
+        "steam_current_game_language",
+        "steam_inventory_result_destroy",
+        "steam_ugc_get_item_install_info",
+        "steam_ugc_get_subscribed_items",
+        "steam_lobby_get_lobby_id",
+        "steam_lobby_join_id",
+        "steam_lobby_set_data",
+        "steam_lobby_get_data",
         "steam_activate_overlay_store",
         "steam_input_get_digital_action_handle",
-        "__SetStatic__", "__CopyStatic__",
-        "__NullObject__", "__NewGMLArray__", "__NewGMLObject__", "__throw__",
+        "__SetStatic__",
+        "__CopyStatic__",
+        "__NullObject__",
+        "__NewGMLArray__",
+        "__NewGMLObject__",
+        "__throw__",
         "method",
-        "variable_struct_exists", "variable_struct_set", "variable_struct_get",
-        "variable_struct_remove", "variable_struct_names_count", "variable_struct_get_names",
+        "variable_struct_exists",
+        "variable_struct_set",
+        "variable_struct_get",
+        "variable_struct_remove",
+        "variable_struct_names_count",
+        "variable_struct_get_names",
         "variable_instance_set",
         "is_instanceof",
-        "point_in_rectangle", "distance_to_object", "position_meeting",
-        "collision_line", "collision_rectangle", "place_meeting",
-        "instance_place", "instance_find",
-        "object_get_name", "object_exists", "object_get_sprite",
+        "point_in_rectangle",
+        "distance_to_object",
+        "position_meeting",
+        "collision_line",
+        "collision_rectangle",
+        "place_meeting",
+        "instance_place",
+        "instance_find",
+        "object_get_name",
+        "object_exists",
+        "object_get_sprite",
         "make_color_hsv",
-        "string_width", "string_height", "string_format", "string_repeat",
-        "font_get_name", "font_exists",
-        "camera_get_view_x", "camera_get_view_y", "camera_set_view_pos",
-        "camera_get_view_width", "camera_get_view_height",
-        "layer_background_get_id", "layer_background_get_sprite", "layer_background_set_sprite",
+        "string_width",
+        "string_height",
+        "string_format",
+        "string_repeat",
+        "font_get_name",
+        "font_exists",
+        "camera_get_view_x",
+        "camera_get_view_y",
+        "camera_set_view_pos",
+        "camera_get_view_width",
+        "camera_get_view_height",
+        "layer_background_get_id",
+        "layer_background_get_sprite",
+        "layer_background_set_sprite",
         "layer_background_visible",
-        "layer_sequence_create", "layer_sequence_is_finished",
-        "window_get_width", "window_get_height", "window_get_fullscreen",
-        "draw_clear", "draw_clear_alpha", "draw_sprite_stretched_ext",
-        "draw_circle", "draw_vertex", "draw_primitive_end",
-        "draw_rectangle_color", "draw_sprite_tiled_ext",
-        "draw_vertex_texture", "vertex_position", "vertex_colour",
+        "layer_sequence_create",
+        "layer_sequence_is_finished",
+        "window_get_width",
+        "window_get_height",
+        "window_get_fullscreen",
+        "draw_clear",
+        "draw_clear_alpha",
+        "draw_sprite_stretched_ext",
+        "draw_circle",
+        "draw_vertex",
+        "draw_primitive_end",
+        "draw_rectangle_color",
+        "draw_sprite_tiled_ext",
+        "draw_vertex_texture",
+        "vertex_position",
+        "vertex_colour",
         "setOtherField",
         "getObjectName",
-        "part_system_automatic_draw", "part_type_exists", "part_type_gravity", "part_system_depth",
-        "show_error", "event_user", "event_perform",
-        "sprite_create_from_surface", "sprite_delete", "vertex_normal",
+        "part_system_automatic_draw",
+        "part_type_exists",
+        "part_type_gravity",
+        "part_system_depth",
+        "show_error",
+        "event_user",
+        "event_perform",
+        "sprite_create_from_surface",
+        "sprite_delete",
+        "vertex_normal",
         "ds_exists",
-        "buffer_create", "buffer_write", "buffer_read", "buffer_delete",
-        "buffer_seek", "buffer_async_group_option",
-        "file_text_write_string", "file_text_close", "file_exists",
+        "buffer_create",
+        "buffer_write",
+        "buffer_read",
+        "buffer_delete",
+        "buffer_seek",
+        "buffer_async_group_option",
+        "file_text_write_string",
+        "file_text_close",
+        "file_exists",
         "file_text_open_write",
-        "room_duplicate", "room_set_persistent",
+        "room_duplicate",
+        "room_set_persistent",
         "is_debug_overlay_open",
-        "path_exists", "path_delete",
+        "path_exists",
+        "path_delete",
         "surface_get_texture",
         "array_length",
-        "gamepad_get_device_count", "gamepad_axis_value",
-        "gamepad_button_check_pressed", "gamepad_button_check_released", "gamepad_button_check",
-        "display_get_width", "display_get_height",
-        "json_stringify", "json_parse",
-        "draw_surface_stretched", "draw_circle_color", "draw_path",
-        "buffer_get_size", "buffer_exists",
-        "layer_get_x", "layer_get_y", "layer_depth", "layer_sequence_destroy",
+        "gamepad_get_device_count",
+        "gamepad_axis_value",
+        "gamepad_button_check_pressed",
+        "gamepad_button_check_released",
+        "gamepad_button_check",
+        "display_get_width",
+        "display_get_height",
+        "json_stringify",
+        "json_parse",
+        "draw_surface_stretched",
+        "draw_circle_color",
+        "draw_path",
+        "buffer_get_size",
+        "buffer_exists",
+        "layer_get_x",
+        "layer_get_y",
+        "layer_depth",
+        "layer_sequence_destroy",
         "collision_ellipse_list",
         "instance_change",
-        "steam_activate_overlay", "steam_activate_overlay_user",
-        "steam_get_app_id", "steam_get_user_persona_name_sync",
-        "steam_get_stat_int", "steam_set_stat_int", "steam_get_global_stat_history_int",
-        "steam_is_overlay_activated", "steam_image_get_size",
-        "steam_lobby_get_member_count", "steam_lobby_list_add_string_filter",
+        "steam_activate_overlay",
+        "steam_activate_overlay_user",
+        "steam_get_app_id",
+        "steam_get_user_persona_name_sync",
+        "steam_get_stat_int",
+        "steam_set_stat_int",
+        "steam_get_global_stat_history_int",
+        "steam_is_overlay_activated",
+        "steam_image_get_size",
+        "steam_lobby_get_member_count",
+        "steam_lobby_list_add_string_filter",
         "steam_lobby_get_chat_message_data",
-        "steam_ugc_subscribe_item", "steam_ugc_create_query_user",
+        "steam_ugc_subscribe_item",
+        "steam_ugc_create_query_user",
         "steam_input_run_frame",
-        "steam_file_write", "steam_file_exists",
-        "steam_initialised", "steam_indicate_achievement_progress",
-        "steam_get_user_steam_id", "steam_get_persona_name",
-        "steam_set_achievement", "steam_get_achievement", "steam_store_stats",
+        "steam_file_write",
+        "steam_file_exists",
+        "steam_initialised",
+        "steam_indicate_achievement_progress",
+        "steam_get_user_steam_id",
+        "steam_get_persona_name",
+        "steam_set_achievement",
+        "steam_get_achievement",
+        "steam_store_stats",
         "steam_request_global_achievement_percentages",
-        "steam_net_packet_get_sender_id", "steam_is_cloud_enabled_for_app",
+        "steam_net_packet_get_sender_id",
+        "steam_is_cloud_enabled_for_app",
         "psn_post_uds_event",
-        "show_message_async", "sprite_get_name", "room_exists",
-        "string_byte_at", "video_seek_to", "video_get_position",
+        "show_message_async",
+        "sprite_get_name",
+        "room_exists",
+        "string_byte_at",
+        "video_seek_to",
+        "video_get_position",
         "__This__",
-        "rectangle_in_rectangle", "collision_circle_list",
-        "draw_roundrect", "draw_roundrect_color",
-        "draw_sprite_stretched", "draw_line_width", "draw_ellipse",
-        "string_width_ext", "string_replace",
-        "audio_sound_set_track_position", "audio_sound_get_track_position",
-        "clipboard_set_text", "clipboard_get_text",
-        "window_mouse_get_x", "window_mouse_get_y", "window_mouse_set",
-        "window_get_x", "window_get_y", "window_set_size", "window_set_position",
-        "view_set_visible", "view_set_camera",
+        "rectangle_in_rectangle",
+        "collision_circle_list",
+        "draw_roundrect",
+        "draw_roundrect_color",
+        "draw_sprite_stretched",
+        "draw_line_width",
+        "draw_ellipse",
+        "string_width_ext",
+        "string_replace",
+        "audio_sound_set_track_position",
+        "audio_sound_get_track_position",
+        "clipboard_set_text",
+        "clipboard_get_text",
+        "window_mouse_get_x",
+        "window_mouse_get_y",
+        "window_mouse_set",
+        "window_get_x",
+        "window_get_y",
+        "window_set_size",
+        "window_set_position",
+        "view_set_visible",
+        "view_set_camera",
         "display_set_gui_size",
         "room_get_name",
         "font_get_size",
-        "json_encode", "json_decode",
+        "json_encode",
+        "json_decode",
         "game_end",
-        "ds_priority_create", "ds_priority_find_max", "ds_priority_add",
-        "ds_priority_delete_value", "ds_priority_size", "ds_priority_empty", "ds_priority_destroy",
-        "ds_map_write", "ds_map_keys_to_array",
+        "ds_priority_create",
+        "ds_priority_find_max",
+        "ds_priority_add",
+        "ds_priority_delete_value",
+        "ds_priority_size",
+        "ds_priority_empty",
+        "ds_priority_destroy",
+        "ds_map_write",
+        "ds_map_keys_to_array",
         "method_get_self",
-        "sprite_duplicate", "sprite_collision_mask",
-        "path_add", "path_end",
-        "part_system_exists", "part_system_position", "part_system_draw_order",
-        "layer_exists", "layer_vspeed", "layer_background_sprite",
+        "sprite_duplicate",
+        "sprite_collision_mask",
+        "path_add",
+        "path_end",
+        "part_system_exists",
+        "part_system_position",
+        "part_system_draw_order",
+        "layer_exists",
+        "layer_vspeed",
+        "layer_background_sprite",
         "gpu_set_texfilter",
-        "texture_prefetch", "texture_set_stage", "texture_is_ready",
-        "texture_get_texel_height", "texture_get_texel_width",
-        "vertex_create_buffer", "vertex_delete_buffer",
-        "vertex_begin", "vertex_end", "vertex_submit",
-        "vertex_format_begin", "vertex_format_end",
-        "video_open", "video_close", "video_draw", "video_get_status",
-        "video_get_duration", "video_set_volume",
-        "mouse_wheel_up", "mouse_wheel_down",
+        "texture_prefetch",
+        "texture_set_stage",
+        "texture_is_ready",
+        "texture_get_texel_height",
+        "texture_get_texel_width",
+        "vertex_create_buffer",
+        "vertex_delete_buffer",
+        "vertex_begin",
+        "vertex_end",
+        "vertex_submit",
+        "vertex_format_begin",
+        "vertex_format_end",
+        "video_open",
+        "video_close",
+        "video_draw",
+        "video_get_status",
+        "video_get_duration",
+        "video_set_volume",
+        "mouse_wheel_up",
+        "mouse_wheel_down",
         "mp_grid_path",
-        "struct_exists", "struct_get_names",
+        "struct_exists",
+        "struct_get_names",
         "camera_create_view",
         "gc_collect",
         "screen_save",
-        "get_integer_async", "show_message", "chr",
+        "get_integer_async",
+        "show_message",
+        "chr",
         "buffer_peek",
-        "steam_utils_enable_callbacks", "steam_upload_score_buffer_ext", "steam_upload_score_ext",
-        "steam_ugc_start_item_update", "steam_ugc_set_item_description",
-        "steam_net_packet_get_data", "steam_net_packet_receive", "steam_net_packet_send",
-        "steam_music_play", "steam_music_is_enabled", "steam_music_get_status",
-        "steam_lobby_list_request", "steam_lobby_list_get_lobby_id", "steam_lobby_list_get_count",
-        "steam_get_most_achieved_achievement_info", "steam_get_local_file_change_count",
+        "steam_utils_enable_callbacks",
+        "steam_upload_score_buffer_ext",
+        "steam_upload_score_ext",
+        "steam_ugc_start_item_update",
+        "steam_ugc_set_item_description",
+        "steam_net_packet_get_data",
+        "steam_net_packet_receive",
+        "steam_net_packet_send",
+        "steam_music_play",
+        "steam_music_is_enabled",
+        "steam_music_get_status",
+        "steam_lobby_list_request",
+        "steam_lobby_list_get_lobby_id",
+        "steam_lobby_list_get_count",
+        "steam_get_most_achieved_achievement_info",
+        "steam_get_local_file_change_count",
         "steam_available_languages",
-        "steam_inventory_get_all_items", "steam_get_quota_total",
-        "steam_get_global_stat_history_real", "steam_file_read",
-        "steam_set_rich_presence", "steam_user_get_auth_session_ticket",
-        "ps5_gamepad_set_vibration_mode", "ps5_gamepad_set_trigger_effect_vibration",
+        "steam_inventory_get_all_items",
+        "steam_get_quota_total",
+        "steam_get_global_stat_history_real",
+        "steam_file_read",
+        "steam_set_rich_presence",
+        "steam_user_get_auth_session_ticket",
+        "ps5_gamepad_set_vibration_mode",
+        "ps5_gamepad_set_trigger_effect_vibration",
         "pass",
-        "collision_point", "collision_circle", "collision_ellipse",
-        "collision_line_list", "collision_rectangle_list", "distance_to_point",
-        "draw_line", "draw_line_color", "draw_point_color",
-        "draw_triangle", "draw_triangle_color", "draw_primitive_begin_texture",
-        "draw_set_circle_precision", "draw_sprite_part_ext", "draw_sprite_pos",
-        "draw_sprite_tiled", "draw_surface_stretched_ext", "draw_get_font",
-        "ds_grid_read", "ds_grid_value_exists", "ds_grid_value_x", "ds_grid_value_y",
-        "ds_list_copy", "ds_list_empty", "ds_list_replace",
-        "ds_map_read", "ds_map_secure_load",
-        "ds_priority_clear", "ds_priority_delete_max",
-        "file_text_open_read", "file_text_read_string",
-        "file_delete", "file_find_first", "file_find_next",
-        "directory_create", "directory_exists",
+        "collision_point",
+        "collision_circle",
+        "collision_ellipse",
+        "collision_line_list",
+        "collision_rectangle_list",
+        "distance_to_point",
+        "draw_line",
+        "draw_line_color",
+        "draw_point_color",
+        "draw_triangle",
+        "draw_triangle_color",
+        "draw_primitive_begin_texture",
+        "draw_set_circle_precision",
+        "draw_sprite_part_ext",
+        "draw_sprite_pos",
+        "draw_sprite_tiled",
+        "draw_surface_stretched_ext",
+        "draw_get_font",
+        "ds_grid_read",
+        "ds_grid_value_exists",
+        "ds_grid_value_x",
+        "ds_grid_value_y",
+        "ds_list_copy",
+        "ds_list_empty",
+        "ds_list_replace",
+        "ds_map_read",
+        "ds_map_secure_load",
+        "ds_priority_clear",
+        "ds_priority_delete_max",
+        "file_text_open_read",
+        "file_text_read_string",
+        "file_delete",
+        "file_find_first",
+        "file_find_next",
+        "directory_create",
+        "directory_exists",
         "audio_sound_length",
-        "buffer_base64_decode", "buffer_load_async", "buffer_save_async", "buffer_set_surface",
-        "display_get_gui_width", "display_get_gui_height", "display_reset",
+        "buffer_base64_decode",
+        "buffer_load_async",
+        "buffer_save_async",
+        "buffer_set_surface",
+        "display_get_gui_width",
+        "display_get_gui_height",
+        "display_reset",
         "font_add_sprite_ext",
-        "string_byte_length", "string_digits", "string_letters",
-        "struct_get", "struct_get_from_hash",
+        "string_byte_length",
+        "string_digits",
+        "string_letters",
+        "struct_get",
+        "struct_get_from_hash",
         "surface_copy",
-        "tag_get_assets", "url_open_ext",
-        "view_set_hport", "view_set_wport",
-        "window_set_caption", "window_set_cursor", "window_set_fullscreen",
-        "steam_update", "steam_ugc_set_item_tags", "steam_ugc_set_item_content",
-        "steam_ugc_send_query", "steam_ugc_request_item_details", "steam_ugc_num_subscribed_items",
-        "steam_ugc_create_item", "steam_ugc_create_query_all", "steam_ugc_delete_item",
-        "steam_ugc_unsubscribe_item", "steam_ugc_set_item_preview",
-        "steam_ugc_set_item_title", "steam_ugc_set_item_visibility",
-        "steam_stats_ready", "steam_send_screenshot", "steam_request_global_stats",
-        "steam_reset_all_stats_achievements", "steam_set_stat_avg_rate", "steam_set_stat_float",
-        "steam_show_floating_gamepad_text_input", "steam_shutdown",
-        "steam_lobby_set_owner_id", "steam_lobby_send_chat_message_buffer",
-        "steam_lobby_is_owner", "steam_lobby_create", "steam_lobby_activate_invite_overlay",
-        "steam_lobby_list_get_data", "steam_lobby_list_join",
-        "steam_is_user_logged_on", "steam_is_screenshot_requested", "steam_is_overlay_enabled",
-        "steam_get_quota_free", "steam_get_number_of_current_players",
+        "tag_get_assets",
+        "url_open_ext",
+        "view_set_hport",
+        "view_set_wport",
+        "window_set_caption",
+        "window_set_cursor",
+        "window_set_fullscreen",
+        "steam_update",
+        "steam_ugc_set_item_tags",
+        "steam_ugc_set_item_content",
+        "steam_ugc_send_query",
+        "steam_ugc_request_item_details",
+        "steam_ugc_num_subscribed_items",
+        "steam_ugc_create_item",
+        "steam_ugc_create_query_all",
+        "steam_ugc_delete_item",
+        "steam_ugc_unsubscribe_item",
+        "steam_ugc_set_item_preview",
+        "steam_ugc_set_item_title",
+        "steam_ugc_set_item_visibility",
+        "steam_stats_ready",
+        "steam_send_screenshot",
+        "steam_request_global_stats",
+        "steam_reset_all_stats_achievements",
+        "steam_set_stat_avg_rate",
+        "steam_set_stat_float",
+        "steam_show_floating_gamepad_text_input",
+        "steam_shutdown",
+        "steam_lobby_set_owner_id",
+        "steam_lobby_send_chat_message_buffer",
+        "steam_lobby_is_owner",
+        "steam_lobby_create",
+        "steam_lobby_activate_invite_overlay",
+        "steam_lobby_list_get_data",
+        "steam_lobby_list_join",
+        "steam_is_user_logged_on",
+        "steam_is_screenshot_requested",
+        "steam_is_overlay_enabled",
+        "steam_get_quota_free",
+        "steam_get_number_of_current_players",
         "steam_get_app_ownership_ticket_data",
-        "steam_file_read_buffer", "steam_file_persisted",
-        "steam_download_scores_around_user", "steam_download_scores", "steam_download_friends_scores",
-        "steam_music_pause", "steam_music_play_next", "steam_music_play_previous",
-        "steam_music_set_volume", "steam_music_is_playing",
-        "steam_user_cancel_auth_ticket", "steam_user_installed_dlc", "steam_user_owns_dlc",
+        "steam_file_read_buffer",
+        "steam_file_persisted",
+        "steam_download_scores_around_user",
+        "steam_download_scores",
+        "steam_download_friends_scores",
+        "steam_music_pause",
+        "steam_music_play_next",
+        "steam_music_play_previous",
+        "steam_music_set_volume",
+        "steam_music_is_playing",
+        "steam_user_cancel_auth_ticket",
+        "steam_user_installed_dlc",
+        "steam_user_owns_dlc",
         "steam_user_request_encrypted_app_ticket",
-        "steam_utils_get_server_real_time", "steam_utils_is_steam_running_on_steam_deck",
-        "sprite_save", "sprite_add", "sprite_get_uvs", "sprite_prefetch", "sprite_set_speed",
-        "ord", "is_struct", "is_method", "_instanceof",
+        "steam_utils_get_server_real_time",
+        "steam_utils_is_steam_running_on_steam_deck",
+        "sprite_save",
+        "sprite_add",
+        "sprite_get_uvs",
+        "sprite_prefetch",
+        "sprite_set_speed",
+        "ord",
+        "is_struct",
+        "is_method",
+        "_instanceof",
         "game_get_speed",
-        "layer_get_depth", "layer_set_visible", "layer_x", "layer_y",
-        "instance_deactivate_all", "instance_furthest", "instance_position",
+        "layer_get_depth",
+        "layer_set_visible",
+        "layer_x",
+        "layer_y",
+        "instance_deactivate_all",
+        "instance_furthest",
+        "instance_position",
         "object_get_parent",
-        "point_in_circle", "point_distance_3d",
+        "point_in_circle",
+        "point_distance_3d",
         "room_instance_clear",
         "gpu_set_blendmode_ext_sepalpha",
-        "gamepad_get_description", "gamepad_is_supported", "gamepad_set_axis_deadzone", "gamepad_set_color",
+        "gamepad_get_description",
+        "gamepad_is_supported",
+        "gamepad_set_axis_deadzone",
+        "gamepad_set_color",
         "gc_enable",
-        "mp_grid_create", "mp_grid_add_rectangle", "mp_grid_add_instances",
-        "mp_grid_clear_all", "mp_grid_clear_rectangle", "mp_grid_draw",
-        "part_emitter_stream", "part_particles_clear",
-        "part_system_automatic_update", "part_system_drawit",
-        "path_get_length", "path_start",
-        "show_debug_log", "show_debug_overlay",
+        "mp_grid_create",
+        "mp_grid_add_rectangle",
+        "mp_grid_add_instances",
+        "mp_grid_clear_all",
+        "mp_grid_clear_rectangle",
+        "mp_grid_draw",
+        "part_emitter_stream",
+        "part_particles_clear",
+        "part_system_automatic_update",
+        "part_system_drawit",
+        "path_get_length",
+        "path_start",
+        "show_debug_log",
+        "show_debug_overlay",
         "get_string_async",
         "video_get_format",
-        "psn_init_trophy", "psn_unlock_trophy", "psn_get_trophy_unlock_state",
-        "psn_tick", "psn_tick_error_dialog", "psn_np_commerce_dialog_tick",
-        "psn_save_data_backup", "psn_communication_restriction_status",
-        "steam_activate_overlay_browser", "steam_clear_achievement",
-        "steam_file_delete", "steam_file_get_list", "steam_file_share", "steam_file_size",
-        "steam_file_write_buffer", "steam_file_write_file",
-        "steam_get_achievement_progress_limits_int", "steam_get_global_stat_real",
+        "psn_init_trophy",
+        "psn_unlock_trophy",
+        "psn_get_trophy_unlock_state",
+        "psn_tick",
+        "psn_tick_error_dialog",
+        "psn_np_commerce_dialog_tick",
+        "psn_save_data_backup",
+        "psn_communication_restriction_status",
+        "steam_activate_overlay_browser",
+        "steam_clear_achievement",
+        "steam_file_delete",
+        "steam_file_get_list",
+        "steam_file_share",
+        "steam_file_size",
+        "steam_file_write_buffer",
+        "steam_file_write_file",
+        "steam_get_achievement_progress_limits_int",
+        "steam_get_global_stat_real",
         "steam_get_local_file_change",
-        "steam_input_activate_action_set", "steam_input_get_action_origin_from_xbox_origin",
-        "steam_input_get_analog_action_handle", "steam_input_get_connected_controllers",
-        "steam_input_get_digital_action_data", "steam_input_get_digital_action_origins",
-        "steam_input_get_glyph_png_for_action_origin", "steam_input_init",
-        "steam_inventory_trigger_item_drop", "steam_is_subscribed", "steam_lobby_leave",
-        "draw_get_color", "draw_get_halign", "draw_get_valign",
-        "draw_ellipse_color", "draw_sprite_part", "draw_primitive_begin",
-        "sprite_set_offset", "sprite_get_texture", "sprite_add_from_surface",
-        "surface_resize", "surface_get_target",
+        "steam_input_activate_action_set",
+        "steam_input_get_action_origin_from_xbox_origin",
+        "steam_input_get_analog_action_handle",
+        "steam_input_get_connected_controllers",
+        "steam_input_get_digital_action_data",
+        "steam_input_get_digital_action_origins",
+        "steam_input_get_glyph_png_for_action_origin",
+        "steam_input_init",
+        "steam_inventory_trigger_item_drop",
+        "steam_is_subscribed",
+        "steam_lobby_leave",
+        "draw_get_color",
+        "draw_get_halign",
+        "draw_get_valign",
+        "draw_ellipse_color",
+        "draw_sprite_part",
+        "draw_primitive_begin",
+        "sprite_set_offset",
+        "sprite_get_texture",
+        "sprite_add_from_surface",
+        "surface_resize",
+        "surface_get_target",
         "shader_set_uniform_f_array",
-        "instance_activate_object", "instance_deactivate_object",
-        "instance_deactivate_layer", "instance_deactivate_region",
-        "layer_background_index", "layer_background_get_index",
-        "part_type_shape", "part_type_death", "part_type_color_hsv",
-        "part_type_clear", "part_type_size_x", "part_type_size_y",
-        "ds_map_replace", "ds_map_secure_save", "ds_map_values_to_array",
-        "ds_list_read", "ds_list_write", "ds_grid_write",
-        "variable_instance_get", "variable_instance_exists",
+        "instance_activate_object",
+        "instance_deactivate_object",
+        "instance_deactivate_layer",
+        "instance_deactivate_region",
+        "layer_background_index",
+        "layer_background_get_index",
+        "part_type_shape",
+        "part_type_death",
+        "part_type_color_hsv",
+        "part_type_clear",
+        "part_type_size_x",
+        "part_type_size_y",
+        "ds_map_replace",
+        "ds_map_secure_save",
+        "ds_map_values_to_array",
+        "ds_list_read",
+        "ds_list_write",
+        "ds_grid_write",
+        "variable_instance_get",
+        "variable_instance_exists",
         "audio_sound_get_pitch",
-        "buffer_load", "buffer_async_group_begin", "buffer_async_group_end",
-        "gamepad_is_connected", "gamepad_set_vibration",
-        "steam_is_cloud_enabled_for_account", "steam_inventory_result_get_items",
-        "steam_lobby_get_member_id", "steam_input_get_action_set_handle",
-        "steam_get_stat_float", "steam_get_global_stat_int",
-        "steam_get_user_account_id", "steam_image_get_rgba",
-        "steam_input_enable_device_callbacks", "steam_lobby_get_chat_message_text",
-        "steam_lobby_get_owner_id", "steam_request_friend_rich_presence",
-        "steam_ugc_get_item_update_info", "steam_ugc_submit_item_update"
+        "buffer_load",
+        "buffer_async_group_begin",
+        "buffer_async_group_end",
+        "gamepad_is_connected",
+        "gamepad_set_vibration",
+        "steam_is_cloud_enabled_for_account",
+        "steam_inventory_result_get_items",
+        "steam_lobby_get_member_id",
+        "steam_input_get_action_set_handle",
+        "steam_get_stat_float",
+        "steam_get_global_stat_int",
+        "steam_get_user_account_id",
+        "steam_image_get_rgba",
+        "steam_input_enable_device_callbacks",
+        "steam_lobby_get_chat_message_text",
+        "steam_lobby_get_owner_id",
+        "steam_request_friend_rich_presence",
+        "steam_ugc_get_item_update_info",
+        "steam_ugc_submit_item_update"
       ],
       "path": "gamemaker/runtime",
       "stateful": true
     },
     {
       "names": [
-        "global", "other",
-        "variable_global_exists", "variable_global_get", "variable_global_set"
+        "global",
+        "other",
+        "variable_global_exists",
+        "variable_global_get",
+        "variable_global_set"
       ],
       "path": "gamemaker/global",
       "stateful": true
     },
     {
       "names": [
-        "getInstanceField", "setInstanceField", "setInstanceFieldIndex",
-        "getAllField", "setAllField", "withInstances"
+        "getInstanceField",
+        "setInstanceField",
+        "setInstanceFieldIndex",
+        "getAllField",
+        "setAllField",
+        "withInstances"
       ],
       "path": "gamemaker/instance",
       "stateful": true

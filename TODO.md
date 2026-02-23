@@ -428,30 +428,38 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 5093 as of 2026-02-23
+### 7. Dead Estate remaining TS errors — 4634 as of 2026-02-24
 
-Progress: 12350 → 5093 (59% reduction). Error breakdown by category:
+Progress: 12350 → 4634 (62% reduction). Error breakdown by category:
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 1594 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
-| TS2339 | 895 | Property doesn't exist — field access on insufficiently typed struct/object |
+| TS2345 | 2027 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
+| TS2339 | 888 | Property doesn't exist — field access on insufficiently typed struct/object |
 | TS7053 | 520 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
-| TS2554 | 501 | Wrong argument count — calls to GML *runtime* functions with wrong argc (game author errors or wrong runtime signatures) |
-| TS2769 | 417 | No overload matches — method call type mismatch |
-| TS2322 | 309 | Type not assignable |
-| TS2454 | 204 | Variable used before being assigned — hoisted var with no initializer reaches use before assignment |
-| TS7027 | 199 | Unreachable code — code after `return` (game author style) |
-| TS2552 | 150 | Cannot find name — missing GML runtime function stubs |
-| TS2366 | 114 | Function lacks ending return — structurizer emits paths without explicit return |
+| TS2554 | 512 | Wrong argument count — calls to GML *runtime* functions with wrong argc (game author errors or wrong runtime signatures) |
+| TS2322 | 311 | Type not assignable |
+| TS7027 | 207 | Unreachable code — code after `return` (game author style) |
 | TS2367 | 54 | Comparison always false — type mismatch in `===` (game author errors) |
 | TS2365 | 39 | Operator not applicable — bitwise/arithmetic on wrong type |
 | TS2362 | 33 | Left side of `**`/arithmetic must be number |
 | TS2304 | 17 | Cannot find name — undeclared `vNNN` identifiers (known linearizer bug: single-store alloc with 2+ loads takes Assign path, no `let` emitted) |
-| TS2393 | 14 | Duplicate function implementation — duplicate symbol in output |
 | TS18050 | 13 | Value of type `void` is not callable |
 | TS2363 | 6 | Right side of `**` must be number |
 | TS2416 | 4 | Property not assignable to same in base type |
+| TS2308 | 3 | Module not found |
+| TS2307 | 3 | Cannot find module |
+| TS2300 | 2 | Duplicate identifier |
+| TS2552 | 1 | Cannot find name `sarr` (with-body self-reference bug) |
+| TS18047 | 1 | Object is possibly null |
+| TS2740 | 1 | Type missing properties from interface |
+
+Fixed this session (2026-02-24):
+- TS2393 (14→0): Duplicate method blocks in runtime.ts removed
+- TS2454 (204→0): `let v!: T;` definite-assignment assertion in ast_printer.rs
+- TS2552 (150→1): Added ~50 missing runtime stubs + registered in runtime.json
+- TS2366 (114→0): Added `ends_with_terminal()` + trailing `return 0 as any;` in ast_printer.rs
+- TS2769 (417→0): Reclassified as TS2345 after adding type signatures to runtime.json
 
 **Highest-leverage next targets:**
 
@@ -473,14 +481,14 @@ Progress: 12350 → 5093 (59% reduction). Error breakdown by category:
   missing instance type propagation (fields typed as `any` or wrong struct type).
   The GML instance ID type propagation item (Type System section) is the root fix.
 
-- [ ] **TS2452 (204): used before assigned** — `VarDecl` without initializer + code path that
-  reaches use before store. Consider emitting `= undefined` for all hoisted `VarDecl`s that
-  have no `init` (the definite-assignment check is too strict for dynamic GML code).
+- [x] **TS2454 (204→0): used before assigned** — Fixed with `let v!: T;` definite-assignment assertion in ast_printer.rs.
 
-- [ ] **TS2552 (150): missing runtime stubs** — Check which names are undefined:
-  `draw_get_color`, `sprite_add_from_surface`, `buffer_load`, `instance_activate_object`,
-  `instance_deactivate_object`, `layer_*` (various), `timeline_*`, `audio_group_*`,
-  `vertex_format_*`, etc. Add stubs to `runtime/gamemaker/runtime.ts`.
+- [x] **TS2552 (150→1): missing runtime stubs** — Added ~50 stubs + registered in runtime.json.
+  Remaining 1: `sarr` self-reference bug in with-body translation (see below).
+
+- [ ] **TS2552 (1): `sarr` in with-body** — `sarr.length` on `_init.ts:6198` should be `self.sarr.length`.
+  Adjacent references correctly use `self.sarr[...]` — one reference dropped the `self.` prefix.
+  This is a with-body codegen bug; needs investigation in GML translator.
 
 ### New game inventory
 

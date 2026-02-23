@@ -942,6 +942,8 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let func_prefix = func_prefix.trim_end_matches('/');
         let mut stateful_names = BTreeSet::new();
         emit_function_imports_with_prefix(&calls, &mut out, func_prefix, runtime_config, &mut stateful_names);
+        // Game-defined scripts shadow runtime functions with the same name.
+        stateful_names.retain(|name| !free_func_names.contains(name.as_str()));
         emit_free_function_imports(&calls, &free_func_names, depth, &mut out);
         if let Some(preamble) = runtime_config.and_then(|c| c.class_preamble.as_ref()) {
             let prefix = "../".repeat(depth + 1);
@@ -994,6 +996,11 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let calls = collect_call_names_from_funcs(free_fn_iter(), engine);
         let mut free_stateful_names = BTreeSet::new();
         emit_function_imports_with_prefix(&calls, &mut out, "..", runtime_config, &mut free_stateful_names);
+        // Game-defined free functions shadow runtime functions with the same name.
+        // Remove any runtime stateful entry that the game overrides — inside each
+        // function body the `const { name } = _rt` destructuring would shadow the
+        // game's version and break call sites that pass `(_rt, self, ...)`.
+        free_stateful_names.retain(|name| !free_func_names.contains(name.as_str()));
         // If free functions use stateful runtime functions, import the runtime type
         // for the `_rt` parameter annotation.
         if !free_stateful_names.is_empty() {

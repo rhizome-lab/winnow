@@ -506,7 +506,7 @@ export class GameRuntime {
   }
 
   asset_get_index(_name: string): number { return -1; }
-  asset_get_tags(_asset: number): string[] { return []; }
+  asset_get_tags(_asset: number, _type: number = -1): string[] { return []; }
   asset_has_tags(_asset: number, _tags: string | string[]): boolean { return false; }
 
   // ---- Array API (GMS2 style) ----
@@ -547,7 +547,7 @@ export class GameRuntime {
   // ---- Surface API (unimplemented — requires WebGL offscreen rendering) ----
 
   surface_exists(_surf: number): boolean { throw new Error("surface_exists: surfaces require WebGL implementation"); }
-  surface_create(_w: number, _h: number): number { throw new Error("surface_create: surfaces require WebGL implementation"); }
+  surface_create(_w: number, _h: number, _format: number = 0): number { throw new Error("surface_create: surfaces require WebGL implementation"); }
   surface_free(_surf: number): void { throw new Error("surface_free: surfaces require WebGL implementation"); }
   surface_set_target(_surf: number): void { throw new Error("surface_set_target: surfaces require WebGL implementation"); }
   surface_reset_target(): void { throw new Error("surface_reset_target: surfaces require WebGL implementation"); }
@@ -832,7 +832,7 @@ export class GameRuntime {
   camera_get_view_height(_cam: number): number { return 600; }
 
   // ---- Layer API ----
-  layer_background_get_id(_layer: any, _name: string): number { return -1; }
+  layer_background_get_id(_layer: any): number { return -1; }
   layer_background_get_sprite(_id: number): number { return -1; }
   layer_background_set_sprite(_id: number, _spr: number): void {}
 
@@ -990,7 +990,7 @@ export class GameRuntime {
   collision_circle(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_circle: requires collision system implementation"); }
   collision_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_ellipse: requires collision system implementation"); }
   collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_line_list: requires collision system implementation"); }
-  collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_rectangle_list: requires collision system implementation"); }
+  collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_rectangle_list: requires collision system implementation"); }
   distance_to_point(_x: number, _y: number): number {
     throw new Error("distance_to_point: implement using instance spatial data");
   }
@@ -1053,7 +1053,7 @@ export class GameRuntime {
 
   // ---- Buffer extras ----
   buffer_base64_decode(_str: string): number { throw new Error("buffer_base64_decode: implement in platform layer"); }
-  buffer_load(_filename: string, _buf: number, _offset: number, _size: number): number { throw new Error("buffer_load: implement in platform layer"); }
+  buffer_load(_filename: string, _buf: number = -1, _offset: number = 0, _size: number = 0): number { throw new Error("buffer_load: implement in platform layer"); }
   buffer_load_async(_path: string, _buf: number, _offset: number, _size: number): number { throw new Error("buffer_load_async: implement in platform layer"); }
   buffer_save_async(_buf: number, _path: string, _offset: number, _size: number): number { throw new Error("buffer_save_async: implement in platform layer"); }
   buffer_set_surface(_buf: number, _surf: number, _offset: number): void {
@@ -1149,7 +1149,7 @@ export class GameRuntime {
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
   draw_vertex_texture(_x: number, _y: number, _xtex: number, _ytex: number): void {}
-  vertex_position(_vbuf: number, _x: number, _y: number, _z: number): void {}
+  vertex_position(_vbuf: number, _x: number, _y: number, _z: number = 0): void {}
   vertex_colour(_vbuf: number, _col: number, _alpha: number): void {}
   position_meeting(_x: number, _y: number, _classIndex: number): boolean {
     throw new Error("position_meeting: requires collision system implementation");
@@ -1217,11 +1217,11 @@ export class GameRuntime {
   // ---- Layer extras ----
   layer_get_x(_layer: any): number { return 0; }
   layer_get_y(_layer: any): number { return 0; }
-  layer_depth(_layer: any): number { return 0; }
+  layer_depth(_layer: any, _depth?: number): number { return 0; }
   layer_sequence_destroy(_seq: number): void {}
 
   // ---- More collision ----
-  collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_ellipse_list: requires collision system implementation"); }
+  collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_ellipse_list: requires collision system implementation"); }
 
   // ---- Instance change ----
   instance_change(_classIndex: number, _performEvents: boolean): void {}
@@ -1261,10 +1261,10 @@ export class GameRuntime {
     if (sx1 >= dx1 && sx2 <= dx2 && sy1 >= dy1 && sy2 <= dy2) return 2;
     return 1;
   }
-  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_circle_list: requires collision system implementation"); }
+  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_circle_list: requires collision system implementation"); }
 
   // ---- More draw ----
-  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number, _outline: boolean): void {}
+  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number = _xr, _outline: boolean = false): void {}
   draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number, _col1: number, _col2: number, _outline: boolean): void {}
   draw_sprite_stretched(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number): void {
     throw new Error("draw_sprite_stretched: implement in graphics layer");
@@ -1523,7 +1523,15 @@ export class GameRuntime {
     return val !== null && typeof val === "object" && !Array.isArray(val) && !(val instanceof Object.getPrototypeOf(Object).constructor);
   }
   is_method(val: any): boolean { return typeof val === "function"; }
-  _instanceof(val: any, constructor: any): boolean { return this.is_instanceof(val, constructor); }
+  _instanceof(val: any, constructor?: any): any {
+    if (constructor === undefined) {
+      // 1-arg form: returns the constructor name as a string (like `typeof` for structs).
+      if (val === null || val === undefined) return "undefined";
+      const ctor = Object.getPrototypeOf(val)?.constructor;
+      return ctor?.name ?? "struct";
+    }
+    return this.is_instanceof(val, constructor);
+  }
 
   // ---- Game speed ----
   game_get_speed(_type: number): number { return this.room_speed; }
@@ -1601,7 +1609,7 @@ export class GameRuntime {
 
   // ---- PSN stubs ----
   psn_init_trophy(): void {}
-  psn_unlock_trophy(_id: number): void {}
+  psn_unlock_trophy(_id: number, _slot: number = 0): void {}
   psn_get_trophy_unlock_state(_id: number): number { return 0; }
   psn_tick(): void {}
   psn_tick_error_dialog(): void {}
