@@ -123,8 +123,7 @@ types:
         String (0x6): 4 bytes (one u32 word)  — absolute file offset of a gm_string.
         Variable (0x5): 4 bytes (one u32 word) — variable_ref; val16 = instance (i16).
         Int16  (0xF): 0 bytes — value is inline in val16 (signed 16-bit).
-    doc: |
-      This type cannot be expressed directly in Kaitai as a conditional-length
+      NOTE: This type cannot be expressed directly in Kaitai as a conditional-length
       sequence without using `if` expressions. Implementations should branch on
       type1 from the parent instruction word:
         - Double/Int64: read 8 bytes
@@ -288,10 +287,9 @@ types:
 
 enums:
 
+  # opcode: GML VM opcode values (v15+ encoding, bytecode_version >= 15).
+  # For v14 games, translate at decode time using the opcode_v14 enum.
   opcode:
-    doc: |
-      GML VM opcode values (v15+ encoding, bytecode_version >= 15).
-      For v14 games, translate at decode time using the opcode_v14 enum.
     0x07: conv
     0x08: mul
     0x09: div
@@ -326,13 +324,12 @@ enums:
     0xD9: call
     0xFF: brk
 
+  # opcode_v14: GML VM opcode values for bytecode_version <= 14 (old encoding).
+  # Translate these to opcode (v15+) before further processing:
+  #   conv=0x03→0x07, mul=0x04→0x08, ..., cmp=0x11-0x16→0x15 (six separate ops).
+  # The v14 encoding also lacks PushLoc/PushGlb/PushBltn/PushI/CallV variants.
+  # v14 has no Call operand word; the function is implicit from the code entry.
   opcode_v14:
-    doc: |
-      GML VM opcode values for bytecode_version <= 14 (old encoding).
-      Translate these to opcode (v15+) before further processing:
-        conv=0x03→0x07, mul=0x04→0x08, ..., cmp=0x11-0x16→0x15 (six separate ops).
-      The v14 encoding also lacks PushLoc/PushGlb/PushBltn/PushI/CallV variants.
-      v14 has no Call operand word; the function is implicit from the code entry.
     0x03: conv
     0x04: mul
     0x05: div
@@ -367,11 +364,10 @@ enums:
     0xDA: call
     0xFF: brk
 
+  # data_type: 4-bit type field embedded in bits 19-16 (type1) and 23-20 (type2)
+  # of the instruction word. For branch instructions these bits are
+  # part of the 23-bit branch offset, not a type.
   data_type:
-    doc: |
-      4-bit type field embedded in bits 19-16 (type1) and 23-20 (type2)
-      of the instruction word. For branch instructions these bits are
-      part of the 23-bit branch offset, not a type.
     0x0: double
     0x1: float
     0x2: int32
@@ -381,10 +377,9 @@ enums:
     0x6: string
     0xF: int16
 
+  # comparison_kind: Comparison operator for Cmp instructions, encoded in bits 15-8
+  # of the instruction word (the high byte of val16).
   comparison_kind:
-    doc: |
-      Comparison operator for Cmp instructions, encoded in bits 15-8 of the
-      instruction word (the high byte of val16).
     1: less
     2: less_equal
     3: equal
@@ -392,11 +387,10 @@ enums:
     5: greater_equal
     6: greater
 
+  # instance_type: Signed 16-bit instance specifier, stored in val16 of Push/Pop Variable
+  # instructions. Negative values are magic constants; non-negative values
+  # are object asset indices (resolved at runtime to an actual instance).
   instance_type:
-    doc: |
-      Signed 16-bit instance specifier, stored in val16 of Push/Pop Variable
-      instructions. Negative values are magic constants; non-negative values
-      are object asset indices (resolved at runtime to an actual instance).
     -1:  own
     -2:  other
     -3:  all

@@ -832,7 +832,7 @@ types:
         type: f4
       - id: physics_pixels_to_meters
         type: f4
-        doc: Scale factor: how many pixels equal one physics meter.
+        doc: "Scale factor: how many pixels equal one physics meter."
 
   room_object_entry:
     doc: |

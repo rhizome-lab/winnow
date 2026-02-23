@@ -89,7 +89,8 @@ def check_chunks(gmd, expected_chunks):
         if i >= actual_count:
             break
         chunk = gmd.chunks[i]
-        check(f"chunks[{i}].magic", chunk.magic.decode("ascii"), exp["magic"])
+        magic = chunk.magic if isinstance(chunk.magic, str) else chunk.magic.decode("ascii")
+        check(f"chunks[{i}].magic", magic, exp["magic"])
         check(f"chunks[{i}].data_size", chunk.size, exp["data_size"])
 
 
@@ -98,14 +99,19 @@ def check_gen8(gen8_kaitai, exp_gen8):
     check("gen8.bytecode_version", gen8_kaitai.bytecode_version, exp_gen8["bytecode_version"])
     check("gen8.is_debug_disabled", bool(gen8_kaitai.is_debug_disabled), exp_gen8["is_debug_disabled"])
     check("gen8.game_id", gen8_kaitai.game_id, exp_gen8["game_id"])
-    check("gen8.major", gen8_kaitai.major, exp_gen8["major"])
-    check("gen8.minor", gen8_kaitai.minor, exp_gen8["minor"])
-    check("gen8.room_count", gen8_kaitai.room_count, exp_gen8["room_count"])
+    # ksy uses ide_version_major/minor; JSON uses major/minor
+    if "major" in exp_gen8:
+        check("gen8.ide_version_major", gen8_kaitai.ide_version_major, exp_gen8["major"])
+    if "minor" in exp_gen8:
+        check("gen8.ide_version_minor", gen8_kaitai.ide_version_minor, exp_gen8["minor"])
+    if "room_count" in exp_gen8:
+        check("gen8.room_count", gen8_kaitai.room_count, exp_gen8["room_count"])
 
 
 def check_strg(strg_kaitai, exp_strg):
     """Validate STRG string count."""
-    check("strg.count", len(strg_kaitai.strings), exp_strg["count"])
+    # strg_kaitai.strings is a pointer_list; count is stored in .strings.count
+    check("strg.count", strg_kaitai.strings.count, exp_strg["count"])
     # NOTE: string content resolution requires following the pointer to STRG char
     # data — this is listed in _kaitai_limitations.  The _strings field is
     # validated in Rust fixture tests instead.
@@ -113,23 +119,22 @@ def check_strg(strg_kaitai, exp_strg):
 
 
 def check_code(code_kaitai, exp_code):
-    """Validate CODE chunk entry count and per-entry structural fields."""
-    exp_entries = exp_code.get("entries", [])
-    check("code.count", len(code_kaitai.entries), exp_code["count"])
+    """Validate CODE chunk entry count.
 
-    for i, exp_entry in enumerate(exp_entries):
-        if i >= len(code_kaitai.entries):
-            break
-        e = code_kaitai.entries[i]
+    code_body.entries is a pointer_list (count + raw offsets).  The actual
+    code_entry_v14 / code_entry_v15 structs are accessed via absolute seek —
+    Kaitai stores only the count and raw offset array here, not parsed entries.
+    Per-entry fields (locals_count, args_count, instructions) are validated in
+    the Rust fixture tests instead.
+    """
+    check("code.count", code_kaitai.entries.count, exp_code["count"])
+    # Per-entry validation requires following pointer_list offsets (not Kaitai-native):
+    for i, exp_entry in enumerate(exp_code.get("entries", [])):
         prefix = f"code.entries[{i}]"
-
-        # v15 extended header fields:
-        if hasattr(e, "locals_count") and "locals_count" in exp_entry:
-            check(f"{prefix}.locals_count", e.locals_count, exp_entry["locals_count"])
-        if hasattr(e, "args_count") and "args_count" in exp_entry:
-            check(f"{prefix}.args_count", e.args_count, exp_entry["args_count"])
-
-        # Instruction-level details are behind the push_body Kaitai limitation:
+        if "locals_count" in exp_entry:
+            print(f"  {SKIP}  {prefix}.locals_count (pointer-based entry — Kaitai limitation)")
+        if "args_count" in exp_entry:
+            print(f"  {SKIP}  {prefix}.args_count (pointer-based entry — Kaitai limitation)")
         if "_instructions" in exp_entry:
             print(f"  {SKIP}  {prefix}._instructions (push_body size:0 — Kaitai limitation)")
 
@@ -147,15 +152,17 @@ def check_func(func_kaitai, exp_func):
 
 
 def check_scpt(scpt_kaitai, exp_scpt):
-    """Validate SCPT chunk entry count and code_id."""
-    check("scpt.count", len(scpt_kaitai.scripts), exp_scpt["count"])
+    """Validate SCPT chunk entry count.
+
+    scpt_body.scripts is a pointer_list; actual script entries are accessed via
+    absolute seek (same limitation as CODE entries).  We can only check count here.
+    """
+    check("scpt.count", scpt_kaitai.scripts.count, exp_scpt["count"])
     for i, exp_entry in enumerate(exp_scpt.get("entries", [])):
-        if i >= len(scpt_kaitai.scripts):
-            break
-        s = scpt_kaitai.scripts[i]
-        check(f"scpt.entries[{i}].code_id", s.code_id, exp_entry["code_id"])
-        # script name is a StringRef — requires external resolution
-        print(f"  {SKIP}  scpt.entries[{i}]._name (StringRef — Kaitai limitation)")
+        prefix = f"scpt.entries[{i}]"
+        if "code_id" in exp_entry:
+            print(f"  {SKIP}  {prefix}.code_id (pointer-based entry — Kaitai limitation)")
+        print(f"  {SKIP}  {prefix}._name (StringRef — Kaitai limitation)")
 
 
 # ── Per-fixture validation ────────────────────────────────────────────────────
@@ -194,7 +201,7 @@ def validate_fixture(fixture_name, gmd_mod, KaitaiStream, BytesIO):
         check_chunks(gmd, exp["chunks"])
 
     # Find specific chunks by magic
-    chunk_map = {c.magic.decode("ascii"): c for c in gmd.chunks}
+    chunk_map = {(c.magic if isinstance(c.magic, str) else c.magic.decode("ascii")): c for c in gmd.chunks}
 
     if "gen8" in exp and "GEN8" in chunk_map:
         check_gen8(chunk_map["GEN8"].body, exp["gen8"])
