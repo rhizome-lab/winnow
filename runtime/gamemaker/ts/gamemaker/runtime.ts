@@ -1123,6 +1123,208 @@ export class GameRuntime {
   video_seek_to(_time: number): void {}
   video_get_position(): number { return 0; }
 
+  // ---- GMS2.3+ self reference sentinel ----
+  // @@This@@ is a pushref to the current instance; in our model it's always `self`.
+  // This property is never actually called at runtime — it's a fallback for cases
+  // where the IR emits it as a global_ref value.
+  __This__: null = null;
+
+  // ---- More geometry / collision ----
+  rectangle_in_rectangle(sx1: number, sy1: number, sx2: number, sy2: number, dx1: number, dy1: number, dx2: number, dy2: number): number {
+    // Returns: 0=no overlap, 1=partial, 2=fully inside
+    if (sx2 < dx1 || sx1 > dx2 || sy2 < dy1 || sy1 > dy2) return 0;
+    if (sx1 >= dx1 && sx2 <= dx2 && sy1 >= dy1 && sy2 <= dy2) return 2;
+    return 1;
+  }
+  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { return 0; }
+
+  // ---- More draw ----
+  draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number, _outline: boolean): void {}
+  draw_roundrect_color(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number, _col1: number, _col2: number, _outline: boolean): void {}
+  draw_sprite_stretched(_spr: number, _sub: number, _x: number, _y: number, _w: number, _h: number): void {
+    throw new Error("draw_sprite_stretched: implement in graphics layer");
+  }
+  draw_line_width(_x1: number, _y1: number, _x2: number, _y2: number, _w: number): void {}
+  draw_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _outline: boolean): void {}
+
+  // ---- More string ----
+  string_width_ext(_str: string, _sep: number, _w: number): number { return (_str?.length ?? 0) * 8; }
+  string_replace(str: string, sub: string, rep: string): string {
+    return str.replace(sub, rep);
+  }
+
+  // ---- More audio ----
+  audio_sound_set_track_position(_sound: number, _pos: number): void {}
+  audio_sound_get_track_position(_sound: number): number { return 0; }
+
+  // ---- Clipboard ----
+  clipboard_set_text(str: string): void { navigator.clipboard?.writeText(str); }
+  clipboard_get_text(): string { return ""; }
+
+  // ---- Window extras ----
+  window_mouse_get_x(): number { return this.mouse_x(); }
+  window_mouse_get_y(): number { return this.mouse_y(); }
+  window_mouse_set(_x: number, _y: number): void {}
+  window_get_x(): number { return 0; }
+  window_get_y(): number { return 0; }
+  window_set_size(_w: number, _h: number): void {}
+  window_set_position(_x: number, _y: number): void {}
+
+  // ---- View helpers ----
+  view_set_visible(_view: number, _vis: boolean): void {}
+  view_set_camera(_view: number, _cam: number): void {}
+
+  // ---- Display extras ----
+  display_set_gui_size(_w: number, _h: number): void {}
+
+  // ---- Room extras ----
+  room_get_name(room: number): string { return `room_${room}`; }
+
+  // ---- Font extras ----
+  font_get_size(_font: number): number { return 16; }
+
+  // ---- JSON legacy names ----
+  json_encode(val: any): string { return JSON.stringify(val) ?? "undefined"; }
+  json_decode(str: string): any { try { return JSON.parse(str); } catch { return undefined; } }
+
+  // ---- Game lifecycle ----
+  game_end(): never { throw new Error("game_end"); }
+
+  // ---- DS extras ----
+  ds_priority_create(): number { const id = this._dsNextId++; this._dsMaps.set(id, new Map()); return id; }
+  ds_priority_find_max(id: number): any {
+    const m = this._dsMaps.get(id);
+    if (!m || m.size === 0) return undefined;
+    let best: any, bestPri = -Infinity;
+    for (const [k, v] of m) { if (v > bestPri) { bestPri = v; best = k; } }
+    return best;
+  }
+  ds_priority_add(id: number, val: any, pri: number): void { this._dsMaps.get(id)?.set(val, pri); }
+  ds_priority_delete_value(id: number, val: any): void { this._dsMaps.get(id)?.delete(val); }
+  ds_priority_size(id: number): number { return this._dsMaps.get(id)?.size ?? 0; }
+  ds_priority_empty(id: number): boolean { return (this._dsMaps.get(id)?.size ?? 0) === 0; }
+  ds_priority_destroy(id: number): void { this._dsMaps.delete(id); }
+  ds_map_write(_map: number): string { return "{}"; }
+  ds_map_keys_to_array(map: number): any[] { return [...(this._dsMaps.get(map)?.keys() ?? [])]; }
+
+  // ---- Instance extras ----
+  method_get_self(func: any): any { return func?._self ?? null; }
+
+  // ---- Sprite extras ----
+  sprite_duplicate(_spr: number): number { return -1; }
+  sprite_collision_mask(_spr: number, ..._args: any[]): void {}
+
+  // ---- Path ----
+  path_add(): number { return -1; }
+  path_end(): void {}
+  path_exists(_path: number): boolean { return false; }
+
+  // ---- Particle system extras ----
+  part_system_exists(_syst: number): boolean { return false; }
+  part_system_position(_syst: number, _x: number, _y: number): void {}
+  part_system_draw_order(_syst: number, _order: boolean): void {}
+
+  // ---- Layer extras ----
+  layer_exists(_layer: any): boolean { return false; }
+  layer_vspeed(_layer: any): number { return 0; }
+  layer_background_sprite(_bg: number): number { return -1; }
+
+  // ---- GPU extras ----
+  gpu_set_texfilter(_enable: boolean): void {}
+
+  // ---- Texture extras ----
+  texture_prefetch(_tex: number): void {}
+  texture_set_stage(_stage: number, _tex: number): void {}
+  texture_is_ready(_tex: number): boolean { return false; }
+  texture_get_texel_height(_tex: number): number { return 0; }
+  texture_get_texel_width(_tex: number): number { return 0; }
+
+  // ---- Vertex buffer (stubs) ----
+  vertex_create_buffer(): number { return -1; }
+  vertex_delete_buffer(_buf: number): void {}
+  vertex_begin(_buf: number, _format: number): void {}
+  vertex_end(_buf: number): void {}
+  vertex_submit(_buf: number, _prim: number, _tex: number): void {}
+  vertex_format_begin(): void {}
+  vertex_format_end(): number { return -1; }
+
+  // ---- Video (stubs) ----
+  video_open(_path: string, ..._args: any[]): void {}
+  video_close(): void {}
+  video_draw(): void {}
+  video_get_status(): number { return 3; } // 3=stopped
+  video_get_duration(): number { return 0; }
+  video_set_volume(_vol: number): void {}
+
+  // ---- Mouse wheel ----
+  mouse_wheel_up(): boolean { return false; }
+  mouse_wheel_down(): boolean { return false; }
+
+  // ---- Navigation mesh ----
+  mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { return false; }
+
+  // ---- struct alias ----
+  struct_exists(struct: any, name: string): boolean {
+    return struct != null && Object.prototype.hasOwnProperty.call(struct, name);
+  }
+  struct_get_names(struct: any): string[] {
+    return struct != null ? Object.keys(struct) : [];
+  }
+
+  // ---- Camera extras ----
+  camera_create_view(_x: number, _y: number, _w: number, _h: number, ..._args: any[]): number { return 0; }
+
+  // ---- GC ----
+  gc_collect(): void {}
+
+  // ---- Screen save ----
+  screen_save(_filename: string): void {}
+
+  // ---- Async dialogs ----
+  get_integer_async(_message: string, _default: number): number { return _default; }
+  show_message(_str: string): void { console.log("GML show_message:", _str); }
+
+  // ---- char ----
+  chr(code: number): string { return String.fromCharCode(code); }
+
+  // ---- More buffer ----
+  buffer_peek(_buffer: number, _offset: number, _type: number): any {
+    throw new Error("buffer_peek: implement in platform layer");
+  }
+
+  // ---- More Steam ----
+  steam_utils_enable_callbacks(_enable: boolean): void {}
+  steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void {}
+  steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void {}
+  steam_ugc_start_item_update(_appId: number, _fileId: number): number { return 0; }
+  steam_ugc_set_item_description(_handle: number, _desc: string): void {}
+  steam_net_packet_get_data(_buf: number): void {}
+  steam_net_packet_get_sender_id(): number { return 0; }
+  steam_net_packet_receive(): boolean { return false; }
+  steam_net_packet_send(_steamid: number, _buf: number, _size: number, _type: number): void {}
+  steam_music_play(): void {}
+  steam_music_is_enabled(): boolean { return false; }
+  steam_music_get_status(): number { return 0; }
+  steam_lobby_list_request(): void {}
+  steam_lobby_list_get_lobby_id(_index: number): number { return 0; }
+  steam_lobby_list_get_count(): number { return 0; }
+  steam_get_most_achieved_achievement_info(_info: any[]): boolean { return false; }
+  steam_get_local_file_change_count(): number { return 0; }
+  steam_available_languages(): string { return "english"; }
+  steam_inventory_get_all_items(_arr: any): boolean { return false; }
+  steam_get_quota_total(): number { return 0; }
+  steam_get_global_stat_history_real(_name: string, _days: number): number { return 0; }
+  steam_file_read(_path: string): string { return ""; }
+  steam_set_rich_presence(_key: string, _val: string): void {}
+  steam_user_get_auth_session_ticket(_arr: any): number { return 0; }
+
+  // ---- PS5 stubs ----
+  ps5_gamepad_set_vibration_mode(_port: number, _mode: number): void {}
+  ps5_gamepad_set_trigger_effect_vibration(_port: number, _trigger: number, _start: number, _end: number, _str: number): void {}
+
+  // ---- pass (no-op — used in some GML contexts) ----
+  pass(): void {}
+
   // ---- Instance position/collision with DS list ----
 
   instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; }
