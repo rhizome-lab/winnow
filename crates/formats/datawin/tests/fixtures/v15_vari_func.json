@@ -1,0 +1,72 @@
+{
+  "_kaitai_limitations": [
+    "push_body: 'size: 0' placeholder — type1-conditional operand length is not declaratively expressible in Kaitai 0.11",
+    "vari_body / func_body in game_maker_data.ksy: stored as raw size-eos blob — version-conditional layout requires cross-chunk GEN8.bytecode_version",
+    "string_ref resolution: Kaitai can read the raw u32 offset but cannot follow the STRG pointer without _root._io seek",
+    "shared_blob per-entry length: requires two-pass gap algorithm (sort offsets, compute gaps) — not expressible in Kaitai"
+  ],
+  "fixture": "v15_vari_func",
+  "description": "BC=15 VARI (3-field header + 20-byte entries) and FUNC (count + functions + CodeLocals)",
+  "file_size": 371,
+  "chunks": [
+    {"magic": "GEN8", "data_size": 132},
+    {"magic": "STRG", "data_size": 87},
+    {"magic": "CODE", "data_size": 36},
+    {"magic": "VARI", "data_size": 32},
+    {"magic": "FUNC", "data_size": 36}
+  ],
+  "gen8": {
+    "bytecode_version": 15,
+    "is_debug_disabled": false,
+    "game_id": 1,
+    "major": 1,
+    "minor": 0,
+    "room_count": 0,
+    "_name": "vf_game"
+  },
+  "strg": {
+    "count": 6,
+    "_strings": ["", "vf_game", "gml_Script_vf", "x", "my_func", "i"]
+  },
+  "code": {
+    "count": 1,
+    "entries": [
+      {
+        "_name": "gml_Script_vf",
+        "locals_count": 1,
+        "args_count": 0,
+        "_bc_byte_count": 8
+      }
+    ]
+  },
+  "vari": {
+    "_format": "v15: 12-byte header + 20-byte entries",
+    "instance_var_count": 1,
+    "instance_var_count_max": 1,
+    "max_local_var_count": 1,
+    "count": 1,
+    "entries": [
+      {
+        "_name": "x",
+        "instance_type": -1,
+        "var_id": 0,
+        "occurrences": 1,
+        "first_address": -1
+      }
+    ]
+  },
+  "func": {
+    "func_count": 1,
+    "functions": [
+      {"_name": "my_func", "occurrences": 1, "first_address": -1}
+    ],
+    "code_locals_count": 1,
+    "code_locals": [
+      {
+        "_entry_name": "gml_Script_vf",
+        "var_count": 1,
+        "locals": [{"index": 0, "_name": "i"}]
+      }
+    ]
+  }
+}

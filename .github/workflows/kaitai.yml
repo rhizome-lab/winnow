@@ -1,0 +1,54 @@
+name: Kaitai
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'crates/formats/datawin/game_maker_data.ksy'
+      - 'crates/formats/datawin/gml_bytecode.ksy'
+      - 'crates/formats/datawin/tests/fixtures/*.bin'
+      - 'crates/formats/datawin/tests/fixtures/*.json'
+      - 'crates/formats/datawin/tests/kaitai_validate.py'
+      - '.github/workflows/kaitai.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'crates/formats/datawin/game_maker_data.ksy'
+      - 'crates/formats/datawin/gml_bytecode.ksy'
+      - 'crates/formats/datawin/tests/fixtures/*.bin'
+      - 'crates/formats/datawin/tests/fixtures/*.json'
+      - 'crates/formats/datawin/tests/kaitai_validate.py'
+      - '.github/workflows/kaitai.yml'
+
+jobs:
+  kaitai:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/formats/datawin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Java (required by ksc)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Python + kaitaistruct
+        run: pip install kaitaistruct
+
+      - name: Download ksc (Kaitai Struct Compiler)
+        run: |
+          wget -q https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/0.10/kaitai-struct-compiler-0.10.zip
+          unzip -q kaitai-struct-compiler-0.10.zip
+        working-directory: /tmp
+
+      - name: Compile .ksy specs to Python
+        run: |
+          /tmp/kaitai-struct-compiler-0.10/bin/ksc -t python game_maker_data.ksy
+          /tmp/kaitai-struct-compiler-0.10/bin/ksc -t python gml_bytecode.ksy
+
+      - name: Validate fixtures against Kaitai-parsed structure
+        run: python3 tests/kaitai_validate.py

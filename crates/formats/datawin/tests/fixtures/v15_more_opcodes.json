@@ -1,0 +1,51 @@
+{
+  "_kaitai_limitations": [
+    "push_body: 'size: 0' placeholder — type1-conditional operand length is not declaratively expressible in Kaitai 0.11",
+    "vari_body / func_body in game_maker_data.ksy: stored as raw size-eos blob — version-conditional layout requires cross-chunk GEN8.bytecode_version",
+    "string_ref resolution: Kaitai can read the raw u32 offset but cannot follow the STRG pointer without _root._io seek",
+    "shared_blob per-entry length: requires two-pass gap algorithm (sort offsets, compute gaps) — not expressible in Kaitai"
+  ],
+  "fixture": "v15_more_opcodes",
+  "description": "Push.Float, Push.Int64, Push.Bool, PushLoc/Glb/Bltn (Variable), Pop.Variable, backward Bf branch",
+  "file_size": 315,
+  "chunks": [
+    {"magic": "GEN8", "data_size": 132},
+    {"magic": "STRG", "data_size": 55},
+    {"magic": "CODE", "data_size": 96}
+  ],
+  "gen8": {
+    "bytecode_version": 15,
+    "is_debug_disabled": false,
+    "game_id": 1,
+    "major": 1,
+    "minor": 0,
+    "room_count": 0,
+    "_name": "more_game"
+  },
+  "strg": {
+    "count": 3,
+    "_strings": ["", "more_game", "gml_Script_more"]
+  },
+  "code": {
+    "count": 1,
+    "entries": [
+      {
+        "_name": "gml_Script_more",
+        "locals_count": 0,
+        "args_count": 0,
+        "_bc_byte_count": 68,
+        "_instructions": [
+          {"opcode": "Push",    "type1": "Float",    "_value_f32": 2.5},
+          {"opcode": "Push",    "type1": "Int64",    "_value_i64": 999},
+          {"opcode": "Push",    "type1": "Bool",     "_value_bool": true},
+          {"opcode": "PushLoc", "type1": "Variable", "_instance": -1, "_variable_id": 0},
+          {"opcode": "PushGlb", "type1": "Variable", "_instance": -5, "_variable_id": 0},
+          {"opcode": "PushBltn","type1": "Variable", "_instance": -6, "_variable_id": 0},
+          {"opcode": "Pop",     "type1": "Variable", "_instance": -1, "_variable_id": 1},
+          {"opcode": "Bf", "_branch_bytes": -60, "_note": "backward branch; type1=Int16, type2=Raw(7) carry upper offset bits"},
+          {"opcode": "Ret"}
+        ]
+      }
+    ]
+  }
+}

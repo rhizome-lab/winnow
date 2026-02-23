@@ -1,0 +1,56 @@
+{
+  "_kaitai_limitations": [
+    "push_body: 'size: 0' placeholder — type1-conditional operand length is not declaratively expressible in Kaitai 0.11",
+    "vari_body / func_body in game_maker_data.ksy: stored as raw size-eos blob — version-conditional layout requires cross-chunk GEN8.bytecode_version",
+    "string_ref resolution: Kaitai can read the raw u32 offset but cannot follow the STRG pointer without _root._io seek",
+    "shared_blob per-entry length: requires two-pass gap algorithm (sort offsets, compute gaps) — not expressible in Kaitai"
+  ],
+  "fixture": "v15_shared_blob",
+  "description": "GMS2.3+ shared blob: parent + child share one bytecode blob; two-pass gap algorithm splits lengths",
+  "file_size": 312,
+  "chunks": [
+    {"magic": "GEN8", "data_size": 132},
+    {"magic": "STRG", "data_size": 84},
+    {"magic": "CODE", "data_size": 64}
+  ],
+  "gen8": {
+    "bytecode_version": 15,
+    "is_debug_disabled": false,
+    "game_id": 1,
+    "major": 1,
+    "minor": 0,
+    "room_count": 0,
+    "_name": "shared_game"
+  },
+  "strg": {
+    "count": 4,
+    "_strings": ["", "shared_game", "gml_Script_parent", "gml_Script_child"]
+  },
+  "code": {
+    "count": 2,
+    "_note": "Both entries have blob_length=12 (total); actual per-entry lengths are computed by the two-pass gap algorithm.",
+    "entries": [
+      {
+        "_name": "gml_Script_parent",
+        "locals_count": 0,
+        "args_count": 0,
+        "_offset_in_blob": 0,
+        "_actual_bc_bytes": 8,
+        "_instructions": [
+          {"opcode": "PushI", "type1": "Int16", "_value_i16": 1},
+          {"opcode": "Ret"}
+        ]
+      },
+      {
+        "_name": "gml_Script_child",
+        "locals_count": 0,
+        "args_count": 0,
+        "_offset_in_blob": 8,
+        "_actual_bc_bytes": 4,
+        "_instructions": [
+          {"opcode": "Ret"}
+        ]
+      }
+    ]
+  }
+}

@@ -227,6 +227,7 @@ name = "datawin"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "serde_json",
  "thiserror",
 ]
 

@@ -1,0 +1,58 @@
+{
+  "_kaitai_limitations": [
+    "push_body: 'size: 0' placeholder — type1-conditional operand length is not declaratively expressible in Kaitai 0.11",
+    "vari_body / func_body in game_maker_data.ksy: stored as raw size-eos blob — version-conditional layout requires cross-chunk GEN8.bytecode_version",
+    "string_ref resolution: Kaitai can read the raw u32 offset but cannot follow the STRG pointer without _root._io seek",
+    "shared_blob per-entry length: requires two-pass gap algorithm (sort offsets, compute gaps) — not expressible in Kaitai"
+  ],
+  "fixture": "v14_minimal",
+  "description": "BC=14: v14 CODE (simple 8-byte header), VARI (no header, 12-byte entries), FUNC (flat list, no count)",
+  "_note": "Bytecode uses v14 opcode 0x9D (Ret); not decodable by the v15 decoder.",
+  "file_size": 310,
+  "chunks": [
+    {"magic": "GEN8", "data_size": 132},
+    {"magic": "STRG", "data_size": 74},
+    {"magic": "CODE", "data_size": 20},
+    {"magic": "VARI", "data_size": 24},
+    {"magic": "FUNC", "data_size": 12}
+  ],
+  "gen8": {
+    "bytecode_version": 14,
+    "is_debug_disabled": false,
+    "game_id": 1,
+    "major": 1,
+    "minor": 0,
+    "room_count": 0,
+    "_name": "v14_game"
+  },
+  "strg": {
+    "count": 5,
+    "_strings": ["", "v14_game", "gml_Script_init", "x", "y"]
+  },
+  "code": {
+    "count": 1,
+    "_format": "v14: bytecode_offset = ptr + 8 (no extended header)",
+    "entries": [
+      {
+        "_name": "gml_Script_init",
+        "_bc_byte_count": 4,
+        "_raw_bc_hex": "9d000000"
+      }
+    ]
+  },
+  "vari": {
+    "_format": "v14: no header, 12-byte entries",
+    "count": 2,
+    "entries": [
+      {"_name": "x", "occurrences": 2, "first_address": -1},
+      {"_name": "y", "occurrences": 1, "first_address": -1}
+    ]
+  },
+  "func": {
+    "_format": "v14: flat list (no count prefix), 12-byte entries",
+    "count": 1,
+    "functions": [
+      {"_name": "gml_Script_init", "occurrences": 1, "first_address": -1}
+    ]
+  }
+}

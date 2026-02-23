@@ -6,31 +6,84 @@
 //!
 //!   1. **Regression tests** for the Rust parser — assertions check exact
 //!      field values, not just "no panic".
-//!   2. **Reference inputs** for Kaitai Struct spec validation — load a `.bin`
-//!      in the Kaitai Web IDE or via `ksc -t python` to verify that
-//!      `game_maker_data.ksy` and `gml_bytecode.ksy` parse them correctly.
+//!   2. **Reference inputs** for Kaitai Struct spec validation — run
+//!      `tests/kaitai_validate.py` after compiling the .ksy files to Python
+//!      (`ksc -t python game_maker_data.ksy gml_bytecode.ksy`).
 //!
-//! See `src/bin/gen_fixtures.rs` for the kaitai validation workflow.
+//! Each .bin fixture is paired with a .json expected-value file documenting
+//! the same expected values in a cross-language format. The JSON files are
+//! read by `kaitai_validate.py` for automated Kaitai validation.
+//!
+//! See `src/bin/gen_fixtures.rs` for the generation workflow.
 
 use datawin::bytecode::decode::{self, Operand};
 use datawin::bytecode::opcode::Opcode;
 use datawin::bytecode::types::DataType;
 use datawin::chunks::code::Code;
+use datawin::chunks::func::Func;
 use datawin::chunks::gen8::Gen8;
+use datawin::chunks::scpt::Scpt;
+use datawin::chunks::vari::Vari;
 use datawin::reader::ChunkIndex;
 use datawin::string_table::StringTable;
 use datawin::version::BytecodeVersion;
 use datawin::writer::{assemble_form, extract_chunks};
 
-// ── Fixture bytes (compiled into the test binary via include_bytes!) ──────────
+// ── Fixture bytes ─────────────────────────────────────────────────────────────
 
 static MINIMAL: &[u8] = include_bytes!("fixtures/v15_minimal.bin");
 static VARIETY: &[u8] = include_bytes!("fixtures/v15_bytecode_variety.bin");
 static BREAK_SIGNALS: &[u8] = include_bytes!("fixtures/v15_break_signals.bin");
+static V14_MINIMAL: &[u8] = include_bytes!("fixtures/v14_minimal.bin");
+static VARI_FUNC: &[u8] = include_bytes!("fixtures/v15_vari_func.bin");
+static MORE_OPCODES: &[u8] = include_bytes!("fixtures/v15_more_opcodes.bin");
+static SCPT: &[u8] = include_bytes!("fixtures/v15_scpt.bin");
+static SHARED_BLOB: &[u8] = include_bytes!("fixtures/v15_shared_blob.bin");
+
+// ── JSON expected-value files ─────────────────────────────────────────────────
+
+static JSON_MINIMAL: &str = include_str!("fixtures/v15_minimal.json");
+static JSON_VARIETY: &str = include_str!("fixtures/v15_bytecode_variety.json");
+static JSON_BREAK_SIGNALS: &str = include_str!("fixtures/v15_break_signals.json");
+static JSON_V14_MINIMAL: &str = include_str!("fixtures/v14_minimal.json");
+static JSON_VARI_FUNC: &str = include_str!("fixtures/v15_vari_func.json");
+static JSON_MORE_OPCODES: &str = include_str!("fixtures/v15_more_opcodes.json");
+static JSON_SCPT: &str = include_str!("fixtures/v15_scpt.json");
+static JSON_SHARED_BLOB: &str = include_str!("fixtures/v15_shared_blob.json");
+
+// ── JSON helper ───────────────────────────────────────────────────────────────
+
+/// Validate that the JSON file parses cleanly and its `file_size` field
+/// matches the actual binary size.
+fn check_json_file_size(json: &str, bin: &[u8], fixture_name: &str) {
+    let v: serde_json::Value = serde_json::from_str(json)
+        .unwrap_or_else(|e| panic!("{fixture_name}.json is invalid JSON: {e}"));
+    let expected = v["file_size"].as_u64().unwrap_or_else(|| {
+        panic!("{fixture_name}.json missing 'file_size'")
+    }) as usize;
+    assert_eq!(
+        bin.len(),
+        expected,
+        "{fixture_name}: binary size ({}) != JSON file_size ({})",
+        bin.len(),
+        expected
+    );
+}
+
+/// Extract a top-level u64 field from parsed JSON.
+fn json_u64(v: &serde_json::Value, path: &str) -> u64 {
+    v.pointer(path)
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| panic!("JSON path {path} missing or not u64"))
+}
 
 // ── v15_minimal ───────────────────────────────────────────────────────────────
 
-/// FORM envelope: exactly 3 chunks in order GEN8, STRG, CODE.
+#[test]
+fn minimal_json_file_size() {
+    check_json_file_size(JSON_MINIMAL, MINIMAL, "v15_minimal");
+}
+
 #[test]
 fn minimal_chunk_index() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -39,7 +92,6 @@ fn minimal_chunk_index() {
     assert_eq!(magics, ["GEN8", "STRG", "CODE"]);
 }
 
-/// GEN8: bytecode version 15, game_id 1, major 1, minor 0.
 #[test]
 fn minimal_gen8() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -54,9 +106,15 @@ fn minimal_gen8() {
     assert!(!gen8.is_debug_disabled);
     assert!(gen8.room_order.is_empty());
     assert!(gen8.gms2_data.is_empty());
+
+    // Validate against JSON
+    let v: serde_json::Value = serde_json::from_str(JSON_MINIMAL).unwrap();
+    assert_eq!(json_u64(&v, "/gen8/bytecode_version"), 15);
+    assert_eq!(json_u64(&v, "/gen8/game_id"), 1);
+    assert_eq!(json_u64(&v, "/gen8/major"), 1);
+    assert_eq!(json_u64(&v, "/gen8/minor"), 0);
 }
 
-/// GEN8 StringRefs resolve correctly against the full file.
 #[test]
 fn minimal_gen8_string_refs() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -70,7 +128,6 @@ fn minimal_gen8_string_refs() {
     assert_eq!(gen8.display_name.resolve(MINIMAL).unwrap(), "test_game");
 }
 
-/// STRG: exactly 4 strings with correct content.
 #[test]
 fn minimal_strg() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -89,7 +146,6 @@ fn minimal_strg() {
     assert_eq!(strg.get(3, MINIMAL).unwrap(), "gml_Script_test");
 }
 
-/// CODE: 1 entry whose name resolves to "gml_Script_test".
 #[test]
 fn minimal_code_entry() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -109,7 +165,6 @@ fn minimal_code_entry() {
     assert_eq!(e.args_count, 0);
 }
 
-/// Bytecode: exactly `PushI Int16(42)` + `Ret`.
 #[test]
 fn minimal_bytecode_decode() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -126,16 +181,13 @@ fn minimal_bytecode_decode() {
     let instructions = decode::decode(bc).unwrap();
 
     assert_eq!(instructions.len(), 2);
-
     assert_eq!(instructions[0].opcode, Opcode::PushI);
     assert_eq!(instructions[0].type1, DataType::Int16);
     assert!(matches!(instructions[0].operand, Operand::Int16(42)));
-
     assert_eq!(instructions[1].opcode, Opcode::Ret);
     assert!(matches!(instructions[1].operand, Operand::None));
 }
 
-/// Bytecode round-trip: encode(decode(bc)) == bc.
 #[test]
 fn minimal_bytecode_round_trip() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -154,7 +206,6 @@ fn minimal_bytecode_round_trip() {
     assert_eq!(bc, reencoded.as_slice());
 }
 
-/// File round-trip: extract all chunks → assemble → identical bytes.
 #[test]
 fn minimal_file_round_trip() {
     let index = ChunkIndex::parse(MINIMAL).unwrap();
@@ -165,7 +216,11 @@ fn minimal_file_round_trip() {
 
 // ── v15_bytecode_variety ──────────────────────────────────────────────────────
 
-/// All 10 instructions decode with correct opcodes and operand kinds.
+#[test]
+fn variety_json_file_size() {
+    check_json_file_size(JSON_VARIETY, VARIETY, "v15_bytecode_variety");
+}
+
 #[test]
 fn variety_bytecode_decode() {
     let index = ChunkIndex::parse(VARIETY).unwrap();
@@ -183,60 +238,49 @@ fn variety_bytecode_decode() {
 
     assert_eq!(instructions.len(), 10);
 
-    // Push f64 3.14
     assert_eq!(instructions[0].opcode, Opcode::Push);
     assert_eq!(instructions[0].type1, DataType::Double);
     assert!(matches!(instructions[0].operand, Operand::Double(v) if (v - 1.5).abs() < 1e-12));
 
-    // Push i32 100
     assert_eq!(instructions[1].opcode, Opcode::Push);
     assert_eq!(instructions[1].type1, DataType::Int32);
     assert!(matches!(instructions[1].operand, Operand::Int32(100)));
 
-    // PushI i16 -1 (inline)
     assert_eq!(instructions[2].opcode, Opcode::PushI);
     assert_eq!(instructions[2].type1, DataType::Int16);
     assert!(matches!(instructions[2].operand, Operand::Int16(-1)));
 
-    // Push String index 0
     assert_eq!(instructions[3].opcode, Opcode::Push);
     assert_eq!(instructions[3].type1, DataType::String);
     assert!(matches!(instructions[3].operand, Operand::StringIndex(0)));
 
-    // Push Variable Own[0]
     assert_eq!(instructions[4].opcode, Opcode::Push);
     assert_eq!(instructions[4].type1, DataType::Variable);
     let Operand::Variable { var_ref, instance } = &instructions[4].operand else {
         panic!("expected Variable operand");
     };
     assert_eq!(var_ref.variable_id, 0);
-    assert_eq!(*instance, -1); // Own
+    assert_eq!(*instance, -1);
 
-    // Cmp Less
     assert_eq!(instructions[5].opcode, Opcode::Cmp);
     use datawin::bytecode::types::ComparisonKind;
     assert!(matches!(instructions[5].operand, Operand::Comparison(ComparisonKind::Less)));
 
-    // Bf +8 bytes
     assert_eq!(instructions[6].opcode, Opcode::Bf);
     assert!(matches!(instructions[6].operand, Operand::Branch(8)));
 
-    // Dup(0)
     assert_eq!(instructions[7].opcode, Opcode::Dup);
     assert!(matches!(instructions[7].operand, Operand::Dup(0)));
 
-    // Call func=7, argc=0
     assert_eq!(instructions[8].opcode, Opcode::Call);
     assert!(matches!(
         instructions[8].operand,
         Operand::Call { function_id: 7, argc: 0 }
     ));
 
-    // Ret
     assert_eq!(instructions[9].opcode, Opcode::Ret);
 }
 
-/// Bytecode round-trip for the variety fixture.
 #[test]
 fn variety_bytecode_round_trip() {
     let index = ChunkIndex::parse(VARIETY).unwrap();
@@ -255,7 +299,6 @@ fn variety_bytecode_round_trip() {
     assert_eq!(bc, reencoded.as_slice());
 }
 
-/// Function name resolves correctly in the variety fixture.
 #[test]
 fn variety_code_name() {
     let index = ChunkIndex::parse(VARIETY).unwrap();
@@ -272,11 +315,11 @@ fn variety_code_name() {
 
 // ── v15_break_signals ─────────────────────────────────────────────────────────
 
-/// Break signal instructions decode with correct signal values.
-///
-/// - signal 0xFFF6 (-10): chknullish — no extra word
-/// - signal 0xFFFA (-6):  isstaticok — no extra word
-/// - signal 0xFFF5 (-11): pushref    — extra i32 word (type1 = Int32)
+#[test]
+fn break_signals_json_file_size() {
+    check_json_file_size(JSON_BREAK_SIGNALS, BREAK_SIGNALS, "v15_break_signals");
+}
+
 #[test]
 fn break_signals_decode() {
     let index = ChunkIndex::parse(BREAK_SIGNALS).unwrap();
@@ -294,16 +337,14 @@ fn break_signals_decode() {
 
     assert_eq!(instructions.len(), 4);
 
-    // chknullish
     assert_eq!(instructions[0].opcode, Opcode::Break);
-    assert_eq!(instructions[0].type1, DataType::Double); // no extra
+    assert_eq!(instructions[0].type1, DataType::Double);
     let Operand::Break { signal, extra } = &instructions[0].operand else {
         panic!("expected Break operand");
     };
     assert_eq!(*signal, 0xFFF6);
     assert!(extra.is_none());
 
-    // isstaticok
     assert_eq!(instructions[1].opcode, Opcode::Break);
     let Operand::Break { signal, extra } = &instructions[1].operand else {
         panic!("expected Break operand");
@@ -311,20 +352,17 @@ fn break_signals_decode() {
     assert_eq!(*signal, 0xFFFA);
     assert!(extra.is_none());
 
-    // pushref with extra
     assert_eq!(instructions[2].opcode, Opcode::Break);
-    assert_eq!(instructions[2].type1, DataType::Int32); // extra word present
+    assert_eq!(instructions[2].type1, DataType::Int32);
     let Operand::Break { signal, extra } = &instructions[2].operand else {
         panic!("expected Break operand");
     };
     assert_eq!(*signal, 0xFFF5);
-    assert_eq!(*extra, Some(5)); // (type_tag=0, asset_index=5)
+    assert_eq!(*extra, Some(5));
 
-    // Ret
     assert_eq!(instructions[3].opcode, Opcode::Ret);
 }
 
-/// Break signals bytecode round-trip.
 #[test]
 fn break_signals_round_trip() {
     let index = ChunkIndex::parse(BREAK_SIGNALS).unwrap();
@@ -341,4 +379,399 @@ fn break_signals_round_trip() {
     let instructions = decode::decode(bc).unwrap();
     let reencoded = datawin::bytecode::encode::encode(&instructions);
     assert_eq!(bc, reencoded.as_slice());
+}
+
+// ── v14_minimal ───────────────────────────────────────────────────────────────
+
+#[test]
+fn v14_json_file_size() {
+    check_json_file_size(JSON_V14_MINIMAL, V14_MINIMAL, "v14_minimal");
+}
+
+/// BC=14: GEN8 reports bytecode_version = 14.
+#[test]
+fn v14_gen8() {
+    let index = ChunkIndex::parse(V14_MINIMAL).unwrap();
+    let entry = index.find(b"GEN8").unwrap();
+    let gen8 =
+        Gen8::parse(&V14_MINIMAL[entry.data_offset()..entry.data_offset() + entry.size]).unwrap();
+
+    assert_eq!(gen8.bytecode_version, BytecodeVersion(14));
+    assert_eq!(gen8.game_id, 1);
+    assert_eq!(gen8.major, 1);
+    assert_eq!(gen8.name.resolve(V14_MINIMAL).unwrap(), "v14_game");
+}
+
+/// BC=14: chunks in order GEN8, STRG, CODE, VARI, FUNC.
+#[test]
+fn v14_chunk_index() {
+    let index = ChunkIndex::parse(V14_MINIMAL).unwrap();
+    assert_eq!(index.len(), 5);
+    let magics: Vec<&str> = index.chunks().iter().map(|c| c.magic_str()).collect();
+    assert_eq!(magics, ["GEN8", "STRG", "CODE", "VARI", "FUNC"]);
+}
+
+/// BC=14 CODE: simple format — bytecode immediately follows name+length header.
+///   - `locals_count = 0`, `args_count = 0` (v14 format has no such fields)
+///   - `bytecode_offset = ptr + 8`
+#[test]
+fn v14_code_entry() {
+    let index = ChunkIndex::parse(V14_MINIMAL).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &V14_MINIMAL[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(14),
+    )
+    .unwrap();
+
+    assert_eq!(code.entries.len(), 1);
+    let e = &code.entries[0];
+    assert_eq!(e.name.resolve(V14_MINIMAL).unwrap(), "gml_Script_init");
+    assert_eq!(e.locals_count, 0);
+    assert_eq!(e.args_count, 0);
+    assert_eq!(e.length, 4); // one 4-byte instruction
+
+    // Verify bytecode_offset points into the file and the raw bytes are correct.
+    let bc = code.entry_bytecode(0, V14_MINIMAL).unwrap();
+    assert_eq!(bc.len(), 4);
+    assert_eq!(bc[0], 0x9D, "expected v14 Ret opcode (0x9D)");
+}
+
+/// BC=14 VARI: no header, 12-byte entries; `instance_type` and `var_id`
+/// default to 0 (not present in the format).
+#[test]
+fn v14_vari() {
+    let index = ChunkIndex::parse(V14_MINIMAL).unwrap();
+    let entry = index.find(b"VARI").unwrap();
+    let vari = Vari::parse(
+        &V14_MINIMAL[entry.data_offset()..entry.data_offset() + entry.size],
+        BytecodeVersion(14),
+    )
+    .unwrap();
+
+    // v14 header fields default to 0.
+    assert_eq!(vari.instance_var_count, 0);
+    assert_eq!(vari.instance_var_count_max, 0);
+    assert_eq!(vari.max_local_var_count, 0);
+
+    assert_eq!(vari.variables.len(), 2);
+    assert_eq!(vari.variables[0].name.resolve(V14_MINIMAL).unwrap(), "x");
+    assert_eq!(vari.variables[0].occurrences, 2);
+    assert_eq!(vari.variables[0].first_address, -1);
+    assert_eq!(vari.variables[1].name.resolve(V14_MINIMAL).unwrap(), "y");
+    assert_eq!(vari.variables[1].occurrences, 1);
+}
+
+/// BC=14 FUNC: flat list (no count prefix); `code_locals` is empty.
+#[test]
+fn v14_func() {
+    let index = ChunkIndex::parse(V14_MINIMAL).unwrap();
+    let entry = index.find(b"FUNC").unwrap();
+    let func = Func::parse(
+        &V14_MINIMAL[entry.data_offset()..entry.data_offset() + entry.size],
+        BytecodeVersion(14),
+    )
+    .unwrap();
+
+    assert_eq!(func.functions.len(), 1);
+    assert_eq!(func.functions[0].name.resolve(V14_MINIMAL).unwrap(), "gml_Script_init");
+    assert_eq!(func.functions[0].occurrences, 1);
+    assert_eq!(func.functions[0].first_address, -1);
+    assert!(func.code_locals.is_empty());
+}
+
+// ── v15_vari_func ─────────────────────────────────────────────────────────────
+
+#[test]
+fn vari_func_json_file_size() {
+    check_json_file_size(JSON_VARI_FUNC, VARI_FUNC, "v15_vari_func");
+}
+
+/// BC=15 VARI: 3-field header + 20-byte entries with instance_type and var_id.
+#[test]
+fn vari_func_vari_v15() {
+    let index = ChunkIndex::parse(VARI_FUNC).unwrap();
+    let entry = index.find(b"VARI").unwrap();
+    let vari = Vari::parse(
+        &VARI_FUNC[entry.data_offset()..entry.data_offset() + entry.size],
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(vari.instance_var_count, 1);
+    assert_eq!(vari.instance_var_count_max, 1);
+    assert_eq!(vari.max_local_var_count, 1);
+
+    assert_eq!(vari.variables.len(), 1);
+    let v = &vari.variables[0];
+    assert_eq!(v.name.resolve(VARI_FUNC).unwrap(), "x");
+    assert_eq!(v.instance_type, -1); // Own
+    assert_eq!(v.var_id, 0);
+    assert_eq!(v.occurrences, 1);
+    assert_eq!(v.first_address, -1);
+}
+
+/// BC=15 FUNC: count-prefixed functions + CodeLocals section.
+#[test]
+fn vari_func_func_v15() {
+    let index = ChunkIndex::parse(VARI_FUNC).unwrap();
+    let entry = index.find(b"FUNC").unwrap();
+    let func = Func::parse(
+        &VARI_FUNC[entry.data_offset()..entry.data_offset() + entry.size],
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(func.functions.len(), 1);
+    assert_eq!(func.functions[0].name.resolve(VARI_FUNC).unwrap(), "my_func");
+    assert_eq!(func.functions[0].occurrences, 1);
+    assert_eq!(func.functions[0].first_address, -1);
+
+    assert_eq!(func.code_locals.len(), 1);
+    let cl = &func.code_locals[0];
+    assert_eq!(cl.name.resolve(VARI_FUNC).unwrap(), "gml_Script_vf");
+    assert_eq!(cl.locals.len(), 1);
+    assert_eq!(cl.locals[0].index, 0);
+    assert_eq!(cl.locals[0].name.resolve(VARI_FUNC).unwrap(), "i");
+}
+
+/// CODE entry in the vari_func fixture has locals_count = 1.
+#[test]
+fn vari_func_code_locals_count() {
+    let index = ChunkIndex::parse(VARI_FUNC).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &VARI_FUNC[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(code.entries.len(), 1);
+    let e = &code.entries[0];
+    assert_eq!(e.name.resolve(VARI_FUNC).unwrap(), "gml_Script_vf");
+    assert_eq!(e.locals_count, 1);
+    assert_eq!(e.args_count, 0);
+}
+
+// ── v15_more_opcodes ──────────────────────────────────────────────────────────
+
+#[test]
+fn more_opcodes_json_file_size() {
+    check_json_file_size(JSON_MORE_OPCODES, MORE_OPCODES, "v15_more_opcodes");
+}
+
+/// Push.Float, Push.Int64, Push.Bool, PushLoc/Glb/Bltn, Pop.Variable,
+/// backward Bf branch — all decode correctly and round-trip.
+#[test]
+fn more_opcodes_decode() {
+    let index = ChunkIndex::parse(MORE_OPCODES).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &MORE_OPCODES[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    let bc = code.entry_bytecode(0, MORE_OPCODES).unwrap();
+    let instructions = decode::decode(bc).unwrap();
+
+    assert_eq!(instructions.len(), 9);
+
+    // 0: Push.Float 2.5
+    assert_eq!(instructions[0].opcode, Opcode::Push);
+    assert_eq!(instructions[0].type1, DataType::Float);
+    assert!(matches!(instructions[0].operand, Operand::Float(v) if (v - 2.5_f32).abs() < 1e-6));
+
+    // 1: Push.Int64 999
+    assert_eq!(instructions[1].opcode, Opcode::Push);
+    assert_eq!(instructions[1].type1, DataType::Int64);
+    assert!(matches!(instructions[1].operand, Operand::Int64(999)));
+
+    // 2: Push.Bool true
+    assert_eq!(instructions[2].opcode, Opcode::Push);
+    assert_eq!(instructions[2].type1, DataType::Bool);
+    assert!(matches!(instructions[2].operand, Operand::Bool(true)));
+
+    // 3: PushLoc.Variable Own[0]
+    assert_eq!(instructions[3].opcode, Opcode::PushLoc);
+    assert_eq!(instructions[3].type1, DataType::Variable);
+    let Operand::Variable { var_ref, instance } = &instructions[3].operand else {
+        panic!("expected Variable");
+    };
+    assert_eq!(var_ref.variable_id, 0);
+    assert_eq!(*instance, -1); // Own
+
+    // 4: PushGlb.Variable Global[0]
+    assert_eq!(instructions[4].opcode, Opcode::PushGlb);
+    let Operand::Variable { instance, .. } = &instructions[4].operand else {
+        panic!("expected Variable");
+    };
+    assert_eq!(*instance, -5); // Global
+
+    // 5: PushBltn.Variable Builtin[0]
+    assert_eq!(instructions[5].opcode, Opcode::PushBltn);
+    let Operand::Variable { instance, .. } = &instructions[5].operand else {
+        panic!("expected Variable");
+    };
+    assert_eq!(*instance, -6); // Builtin
+
+    // 6: Pop.Variable Own[1]
+    assert_eq!(instructions[6].opcode, Opcode::Pop);
+    let Operand::Variable { var_ref, instance } = &instructions[6].operand else {
+        panic!("expected Variable");
+    };
+    assert_eq!(var_ref.variable_id, 1);
+    assert_eq!(*instance, -1); // Own
+
+    // 7: Bf -60 (backward branch)
+    assert_eq!(instructions[7].opcode, Opcode::Bf);
+    assert!(matches!(instructions[7].operand, Operand::Branch(-60)));
+
+    // 8: Ret
+    assert_eq!(instructions[8].opcode, Opcode::Ret);
+}
+
+#[test]
+fn more_opcodes_round_trip() {
+    let index = ChunkIndex::parse(MORE_OPCODES).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &MORE_OPCODES[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    let bc = code.entry_bytecode(0, MORE_OPCODES).unwrap();
+    let instructions = decode::decode(bc).unwrap();
+    let reencoded = datawin::bytecode::encode::encode(&instructions);
+    assert_eq!(bc, reencoded.as_slice());
+}
+
+// ── v15_scpt ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn scpt_json_file_size() {
+    check_json_file_size(JSON_SCPT, SCPT, "v15_scpt");
+}
+
+/// SCPT chunk: 1 script entry with name "Script_foo" mapping to code_id 0.
+#[test]
+fn scpt_parse() {
+    let index = ChunkIndex::parse(SCPT).unwrap();
+    assert_eq!(index.len(), 4);
+    let magics: Vec<&str> = index.chunks().iter().map(|c| c.magic_str()).collect();
+    assert_eq!(magics, ["GEN8", "STRG", "CODE", "SCPT"]);
+
+    let entry = index.find(b"SCPT").unwrap();
+    let scpt_abs = entry.data_offset();
+    let scpt = Scpt::parse(
+        &SCPT[scpt_abs..scpt_abs + entry.size],
+        scpt_abs,
+        SCPT,
+    )
+    .unwrap();
+
+    assert_eq!(scpt.scripts.len(), 1);
+    assert_eq!(scpt.scripts[0].name.resolve(SCPT).unwrap(), "Script_foo");
+    assert_eq!(scpt.scripts[0].code_id, 0);
+}
+
+/// SCPT name is independent from the CODE entry name.
+#[test]
+fn scpt_code_entry_name() {
+    let index = ChunkIndex::parse(SCPT).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &SCPT[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(code.entries.len(), 1);
+    assert_eq!(code.entries[0].name.resolve(SCPT).unwrap(), "gml_Script_foo");
+}
+
+// ── v15_shared_blob ───────────────────────────────────────────────────────────
+
+#[test]
+fn shared_blob_json_file_size() {
+    check_json_file_size(JSON_SHARED_BLOB, SHARED_BLOB, "v15_shared_blob");
+}
+
+/// GMS2.3+ shared blob: two CODE entries decode with correct separate lengths.
+///
+/// The two-pass gap algorithm must compute:
+///   - parent: length = 8 bytes (PushI + Ret)
+///   - child:  length = 4 bytes (Ret)
+#[test]
+fn shared_blob_code_entries() {
+    let index = ChunkIndex::parse(SHARED_BLOB).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &SHARED_BLOB[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(code.entries.len(), 2);
+
+    let parent = &code.entries[0];
+    assert_eq!(parent.name.resolve(SHARED_BLOB).unwrap(), "gml_Script_parent");
+    assert_eq!(parent.length, 8); // PushI + Ret = 8 bytes
+    assert_eq!(parent.locals_count, 0);
+
+    let child = &code.entries[1];
+    assert_eq!(child.name.resolve(SHARED_BLOB).unwrap(), "gml_Script_child");
+    assert_eq!(child.length, 4); // Ret = 4 bytes
+    assert_eq!(child.locals_count, 0);
+
+    // Parent and child have different bytecode offsets but the same blob.
+    assert_ne!(parent.bytecode_offset, child.bytecode_offset);
+    assert_eq!(child.bytecode_offset, parent.bytecode_offset + 8);
+}
+
+/// Both shared-blob entries decode and round-trip correctly.
+#[test]
+fn shared_blob_bytecode_decode() {
+    let index = ChunkIndex::parse(SHARED_BLOB).unwrap();
+    let entry = index.find(b"CODE").unwrap();
+    let code_abs = entry.data_offset();
+    let code = Code::parse(
+        &SHARED_BLOB[code_abs..code_abs + entry.size],
+        code_abs,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    // Parent: PushI Int16(1) + Ret
+    let parent_bc = code.entry_bytecode(0, SHARED_BLOB).unwrap();
+    let parent_instrs = decode::decode(parent_bc).unwrap();
+    assert_eq!(parent_instrs.len(), 2);
+    assert_eq!(parent_instrs[0].opcode, Opcode::PushI);
+    assert!(matches!(parent_instrs[0].operand, Operand::Int16(1)));
+    assert_eq!(parent_instrs[1].opcode, Opcode::Ret);
+
+    // Child: Ret
+    let child_bc = code.entry_bytecode(1, SHARED_BLOB).unwrap();
+    let child_instrs = decode::decode(child_bc).unwrap();
+    assert_eq!(child_instrs.len(), 1);
+    assert_eq!(child_instrs[0].opcode, Opcode::Ret);
+
+    // Round-trips
+    let re_parent = datawin::bytecode::encode::encode(&parent_instrs);
+    assert_eq!(parent_bc, re_parent.as_slice());
+    let re_child = datawin::bytecode::encode::encode(&child_instrs);
+    assert_eq!(child_bc, re_child.as_slice());
 }

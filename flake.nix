@@ -26,6 +26,9 @@
             clang
             # JS tooling for docs
             bun
+            # Kaitai Struct — format spec compiler + Python runtime
+            kaitai-struct-compiler
+            (python3.withPackages (ps: [ ps.kaitaistruct ]))
           ];
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}:$LD_LIBRARY_PATH";
         };

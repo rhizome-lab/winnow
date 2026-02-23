@@ -1,0 +1,47 @@
+{
+  "_kaitai_limitations": [
+    "push_body: 'size: 0' placeholder — type1-conditional operand length is not declaratively expressible in Kaitai 0.11",
+    "vari_body / func_body in game_maker_data.ksy: stored as raw size-eos blob — version-conditional layout requires cross-chunk GEN8.bytecode_version",
+    "string_ref resolution: Kaitai can read the raw u32 offset but cannot follow the STRG pointer without _root._io seek",
+    "shared_blob per-entry length: requires two-pass gap algorithm (sort offsets, compute gaps) — not expressible in Kaitai"
+  ],
+  "fixture": "v15_minimal",
+  "description": "Minimal valid data.win: GEN8 + STRG (4 strings) + CODE (1 function, PushI Int16(42) + Ret)",
+  "file_size": 271,
+  "chunks": [
+    {"magic": "GEN8", "data_size": 132},
+    {"magic": "STRG", "data_size": 71},
+    {"magic": "CODE", "data_size": 36}
+  ],
+  "gen8": {
+    "bytecode_version": 15,
+    "is_debug_disabled": false,
+    "game_id": 1,
+    "major": 1,
+    "minor": 0,
+    "room_count": 0,
+    "_filename": "default",
+    "_config": "default",
+    "_name": "test_game",
+    "_display_name": "test_game"
+  },
+  "strg": {
+    "count": 4,
+    "_strings": ["", "default", "test_game", "gml_Script_test"]
+  },
+  "code": {
+    "count": 1,
+    "entries": [
+      {
+        "_name": "gml_Script_test",
+        "locals_count": 0,
+        "args_count": 0,
+        "_bc_byte_count": 8,
+        "_instructions": [
+          {"opcode": "PushI", "type1": "Int16", "_value_i16": 42},
+          {"opcode": "Ret"}
+        ]
+      }
+    ]
+  }
+}
