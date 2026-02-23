@@ -19,10 +19,24 @@
 use datawin::bytecode::decode::{self, Operand};
 use datawin::bytecode::opcode::Opcode;
 use datawin::bytecode::types::DataType;
+use datawin::chunks::audo::Audo;
+use datawin::chunks::bgnd::Bgnd;
 use datawin::chunks::code::Code;
+use datawin::chunks::font::Font;
 use datawin::chunks::func::Func;
 use datawin::chunks::gen8::Gen8;
+use datawin::chunks::glob::Glob;
+use datawin::chunks::lang::Lang;
+use datawin::chunks::objt::Objt;
+use datawin::chunks::optn::Optn;
+use datawin::chunks::room::Room;
 use datawin::chunks::scpt::Scpt;
+use datawin::chunks::seqn::Seqn;
+use datawin::chunks::shdr::Shdr;
+use datawin::chunks::sond::Sond;
+use datawin::chunks::sprt::Sprt;
+use datawin::chunks::tpag::Tpag;
+use datawin::chunks::txtr::Txtr;
 use datawin::chunks::vari::Vari;
 use datawin::reader::ChunkIndex;
 use datawin::string_table::StringTable;
@@ -39,6 +53,13 @@ static VARI_FUNC: &[u8] = include_bytes!("fixtures/v15_vari_func.bin");
 static MORE_OPCODES: &[u8] = include_bytes!("fixtures/v15_more_opcodes.bin");
 static SCPT: &[u8] = include_bytes!("fixtures/v15_scpt.bin");
 static SHARED_BLOB: &[u8] = include_bytes!("fixtures/v15_shared_blob.bin");
+static SIMPLE_CHUNKS: &[u8] = include_bytes!("fixtures/v15_simple_chunks.bin");
+static SOND_AUDO: &[u8] = include_bytes!("fixtures/v15_sond_audo.bin");
+static SPRT_TPAG_TXTR: &[u8] = include_bytes!("fixtures/v15_sprt_tpag_txtr.bin");
+static OPTN: &[u8] = include_bytes!("fixtures/v15_optn.bin");
+static FONT_FIXTURE: &[u8] = include_bytes!("fixtures/v15_font.bin");
+static OBJT_FIXTURE: &[u8] = include_bytes!("fixtures/v15_objt.bin");
+static ROOM_FIXTURE: &[u8] = include_bytes!("fixtures/v15_room.bin");
 
 // ── JSON expected-value files ─────────────────────────────────────────────────
 
@@ -50,6 +71,13 @@ static JSON_VARI_FUNC: &str = include_str!("fixtures/v15_vari_func.json");
 static JSON_MORE_OPCODES: &str = include_str!("fixtures/v15_more_opcodes.json");
 static JSON_SCPT: &str = include_str!("fixtures/v15_scpt.json");
 static JSON_SHARED_BLOB: &str = include_str!("fixtures/v15_shared_blob.json");
+static JSON_SIMPLE_CHUNKS: &str = include_str!("fixtures/v15_simple_chunks.json");
+static JSON_SOND_AUDO: &str = include_str!("fixtures/v15_sond_audo.json");
+static JSON_SPRT_TPAG_TXTR: &str = include_str!("fixtures/v15_sprt_tpag_txtr.json");
+static JSON_OPTN: &str = include_str!("fixtures/v15_optn.json");
+static JSON_FONT: &str = include_str!("fixtures/v15_font.json");
+static JSON_OBJT: &str = include_str!("fixtures/v15_objt.json");
+static JSON_ROOM: &str = include_str!("fixtures/v15_room.json");
 
 // ── JSON helper ───────────────────────────────────────────────────────────────
 
@@ -774,4 +802,369 @@ fn shared_blob_bytecode_decode() {
     assert_eq!(parent_bc, re_parent.as_slice());
     let re_child = datawin::bytecode::encode::encode(&child_instrs);
     assert_eq!(child_bc, re_child.as_slice());
+}
+
+// ── v15_simple_chunks ─────────────────────────────────────────────────────────
+
+#[test]
+fn simple_chunks_json_file_size() {
+    check_json_file_size(JSON_SIMPLE_CHUNKS, SIMPLE_CHUNKS, "v15_simple_chunks");
+}
+
+#[test]
+fn simple_chunks_glob() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let entry = index.find(b"GLOB").unwrap();
+    let glob = Glob::parse(&SIMPLE_CHUNKS[entry.data_offset()..entry.data_offset() + entry.size])
+        .unwrap();
+    assert_eq!(glob.script_ids.len(), 1);
+    assert_eq!(glob.script_ids[0], 0);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SIMPLE_CHUNKS).unwrap();
+    assert_eq!(json_u64(&v, "/glob/count"), 1);
+    assert_eq!(json_u64(&v, "/glob/script_ids/0"), 0);
+}
+
+#[test]
+fn simple_chunks_lang() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let entry = index.find(b"LANG").unwrap();
+    let lang = Lang::parse(&SIMPLE_CHUNKS[entry.data_offset()..entry.data_offset() + entry.size])
+        .unwrap();
+    assert_eq!(lang.entry_count, 1);
+    assert_eq!(lang.entries.len(), 1);
+    assert_eq!(lang.entries[0].name.resolve(SIMPLE_CHUNKS).unwrap(), "English");
+    assert_eq!(lang.entries[0].region.resolve(SIMPLE_CHUNKS).unwrap(), "en");
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SIMPLE_CHUNKS).unwrap();
+    assert_eq!(json_u64(&v, "/lang/entry_count"), 1);
+    assert_eq!(json_u64(&v, "/lang/count"), 1);
+}
+
+#[test]
+fn simple_chunks_shdr() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let entry = index.find(b"SHDR").unwrap();
+    let shdr =
+        Shdr::parse(&SIMPLE_CHUNKS[entry.data_offset()..entry.data_offset() + entry.size], SIMPLE_CHUNKS)
+            .unwrap();
+    assert_eq!(shdr.shaders.len(), 1);
+    assert_eq!(shdr.shaders[0].name.resolve(SIMPLE_CHUNKS).unwrap(), "shader_name");
+}
+
+#[test]
+fn simple_chunks_bgnd() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let entry = index.find(b"BGND").unwrap();
+    let bgnd =
+        Bgnd::parse(&SIMPLE_CHUNKS[entry.data_offset()..entry.data_offset() + entry.size], SIMPLE_CHUNKS)
+            .unwrap();
+    assert_eq!(bgnd.backgrounds.len(), 1);
+    assert_eq!(bgnd.backgrounds[0].name.resolve(SIMPLE_CHUNKS).unwrap(), "bg_name");
+}
+
+#[test]
+fn simple_chunks_seqn() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let entry = index.find(b"SEQN").unwrap();
+    let seqn =
+        Seqn::parse(&SIMPLE_CHUNKS[entry.data_offset()..entry.data_offset() + entry.size], SIMPLE_CHUNKS)
+            .unwrap();
+    assert_eq!(seqn.sequences.len(), 1);
+    assert_eq!(seqn.sequences[0].name.resolve(SIMPLE_CHUNKS).unwrap(), "sequence_name");
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SIMPLE_CHUNKS).unwrap();
+    assert_eq!(json_u64(&v, "/seqn/version"), 1);
+}
+
+#[test]
+fn simple_chunks_chunk_list() {
+    let index = ChunkIndex::parse(SIMPLE_CHUNKS).unwrap();
+    let magics: Vec<&str> = index.chunks().iter().map(|c| c.magic_str()).collect();
+    assert_eq!(magics, ["GEN8", "STRG", "GLOB", "LANG", "SHDR", "BGND", "SEQN"]);
+}
+
+// ── v15_sond_audo ─────────────────────────────────────────────────────────────
+
+#[test]
+fn sond_audo_json_file_size() {
+    check_json_file_size(JSON_SOND_AUDO, SOND_AUDO, "v15_sond_audo");
+}
+
+#[test]
+fn sond_audo_sond() {
+    let index = ChunkIndex::parse(SOND_AUDO).unwrap();
+    let entry = index.find(b"SOND").unwrap();
+    let sond =
+        Sond::parse(&SOND_AUDO[entry.data_offset()..entry.data_offset() + entry.size], SOND_AUDO)
+            .unwrap();
+
+    assert_eq!(sond.sounds.len(), 1);
+    let s = &sond.sounds[0];
+    assert_eq!(s.name.resolve(SOND_AUDO).unwrap(), "explosion");
+    assert_eq!(s.flags, 0);
+    assert_eq!(s.type_name.resolve(SOND_AUDO).unwrap(), ".wav");
+    assert_eq!(s.file_name.resolve(SOND_AUDO).unwrap(), "explosion.wav");
+    assert_eq!(s.effects, 0);
+    assert!((s.volume - 1.0).abs() < 1e-6);
+    assert!((s.pitch - 1.0).abs() < 1e-6);
+    assert_eq!(s.group_id, -1);
+    assert_eq!(s.audio_id, 0);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SOND_AUDO).unwrap();
+    assert_eq!(json_u64(&v, "/sond/count"), 1);
+    assert_eq!(json_u64(&v, "/sond/entries/0/flags"), 0);
+    assert_eq!(json_u64(&v, "/sond/entries/0/audio_id"), 0);
+}
+
+#[test]
+fn sond_audo_audo() {
+    let index = ChunkIndex::parse(SOND_AUDO).unwrap();
+    let entry = index.find(b"AUDO").unwrap();
+    let audo_abs = entry.data_offset();
+    let audo =
+        Audo::parse(&SOND_AUDO[audo_abs..audo_abs + entry.size], audo_abs).unwrap();
+
+    assert_eq!(audo.entries.len(), 1);
+    assert_eq!(audo.entries[0].length, 4);
+
+    // Audio data is 4 zero bytes.
+    let audio = audo.audio_data(0, SOND_AUDO).unwrap();
+    assert_eq!(audio.len(), 4);
+    assert_eq!(audio, &[0u8, 0, 0, 0]);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SOND_AUDO).unwrap();
+    assert_eq!(json_u64(&v, "/audo/count"), 1);
+    assert_eq!(json_u64(&v, "/audo/entries/0/length"), 4);
+}
+
+// ── v15_sprt_tpag_txtr ────────────────────────────────────────────────────────
+
+#[test]
+fn sprt_tpag_txtr_json_file_size() {
+    check_json_file_size(JSON_SPRT_TPAG_TXTR, SPRT_TPAG_TXTR, "v15_sprt_tpag_txtr");
+}
+
+#[test]
+fn sprt_tpag_txtr_txtr() {
+    let index = ChunkIndex::parse(SPRT_TPAG_TXTR).unwrap();
+    let entry = index.find(b"TXTR").unwrap();
+    let txtr = Txtr::parse(
+        &SPRT_TPAG_TXTR[entry.data_offset()..entry.data_offset() + entry.size],
+        SPRT_TPAG_TXTR,
+    )
+    .unwrap();
+
+    // 2 GMS1-format entries (pointer spacing = 8, not > 12 → is_gms2=false)
+    assert_eq!(txtr.textures.len(), 2);
+    assert!(txtr.textures[0].gms2_fields.is_none());
+    assert!(txtr.textures[1].gms2_fields.is_none());
+    // data_offset values encoded in the fixture (0xDEAD and 0xBEEF)
+    assert_eq!(txtr.textures[0].data_offset, 0xDEAD);
+    assert_eq!(txtr.textures[1].data_offset, 0xBEEF);
+}
+
+#[test]
+fn sprt_tpag_txtr_tpag() {
+    let index = ChunkIndex::parse(SPRT_TPAG_TXTR).unwrap();
+    let entry = index.find(b"TPAG").unwrap();
+    let tpag = Tpag::parse(
+        &SPRT_TPAG_TXTR[entry.data_offset()..entry.data_offset() + entry.size],
+        SPRT_TPAG_TXTR,
+    )
+    .unwrap();
+
+    assert_eq!(tpag.items.len(), 1);
+    let item = &tpag.items[0];
+    assert_eq!(item.source_width, 16);
+    assert_eq!(item.source_height, 16);
+    assert_eq!(item.render_width, 16);
+    assert_eq!(item.render_height, 16);
+    assert_eq!(item.texture_page_id, 0);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SPRT_TPAG_TXTR).unwrap();
+    assert_eq!(json_u64(&v, "/tpag/count"), 1);
+    assert_eq!(json_u64(&v, "/tpag/entries/0/render_width"), 16);
+    assert_eq!(json_u64(&v, "/tpag/entries/0/texture_page_id"), 0);
+}
+
+#[test]
+fn sprt_tpag_txtr_sprt() {
+    let index = ChunkIndex::parse(SPRT_TPAG_TXTR).unwrap();
+    let entry = index.find(b"SPRT").unwrap();
+    let sprt = Sprt::parse(
+        &SPRT_TPAG_TXTR[entry.data_offset()..entry.data_offset() + entry.size],
+        SPRT_TPAG_TXTR,
+    )
+    .unwrap();
+
+    assert_eq!(sprt.sprites.len(), 1);
+    let s = &sprt.sprites[0];
+    assert_eq!(s.name.resolve(SPRT_TPAG_TXTR).unwrap(), "spr_player");
+    assert_eq!(s.width, 16);
+    assert_eq!(s.height, 16);
+    assert_eq!(s.origin_x, 8);
+    assert_eq!(s.origin_y, 8);
+    assert_eq!(s.tpag_indices.len(), 1);
+    // tpag_indices stores absolute file offsets; the TPAG entry is at data_offset+8.
+    let tpag_entry = index.find(b"TPAG").unwrap();
+    let expected_tpag_abs = (tpag_entry.data_offset() + 8) as u32;
+    assert_eq!(s.tpag_indices[0], expected_tpag_abs);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_SPRT_TPAG_TXTR).unwrap();
+    assert_eq!(json_u64(&v, "/sprt/count"), 1);
+    assert_eq!(json_u64(&v, "/sprt/entries/0/width"), 16);
+    assert_eq!(json_u64(&v, "/sprt/entries/0/tpag_count"), 1);
+}
+
+// ── v15_optn ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn optn_json_file_size() {
+    check_json_file_size(JSON_OPTN, OPTN, "v15_optn");
+}
+
+#[test]
+fn optn_parse() {
+    let index = ChunkIndex::parse(OPTN).unwrap();
+    let entry = index.find(b"OPTN").unwrap();
+    let optn =
+        Optn::parse(&OPTN[entry.data_offset()..entry.data_offset() + entry.size]).unwrap();
+
+    assert_eq!(optn.flags, 0);
+    assert_eq!(optn.constants.len(), 1);
+    assert_eq!(optn.constants[0].name.resolve(OPTN).unwrap(), "my_const");
+    assert_eq!(optn.constants[0].value.resolve(OPTN).unwrap(), "42");
+
+    let v: serde_json::Value = serde_json::from_str(JSON_OPTN).unwrap();
+    assert_eq!(json_u64(&v, "/optn/flags"), 0);
+    assert_eq!(json_u64(&v, "/optn/constant_count"), 1);
+}
+
+// ── v15_font ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn font_json_file_size() {
+    check_json_file_size(JSON_FONT, FONT_FIXTURE, "v15_font");
+}
+
+#[test]
+fn font_parse() {
+    let index = ChunkIndex::parse(FONT_FIXTURE).unwrap();
+    let entry = index.find(b"FONT").unwrap();
+    let font =
+        Font::parse(&FONT_FIXTURE[entry.data_offset()..entry.data_offset() + entry.size], FONT_FIXTURE)
+            .unwrap();
+
+    assert_eq!(font.fonts.len(), 1);
+    let f = &font.fonts[0];
+    assert_eq!(f.name.resolve(FONT_FIXTURE).unwrap(), "fnt_main");
+    assert_eq!(f.display_name.resolve(FONT_FIXTURE).unwrap(), "Arial");
+    assert_eq!(f.size, 12);
+    assert!(!f.bold);
+    assert!(!f.italic);
+    assert_eq!(f.range_start, 32);
+    assert_eq!(f.charset, 0);
+    assert_eq!(f.antialias, 2);
+    assert_eq!(f.range_end, 127);
+    assert_eq!(f.tpag_index, 0);
+    assert!((f.scale_x - 1.0).abs() < 1e-6);
+    assert!((f.scale_y - 1.0).abs() < 1e-6);
+
+    assert_eq!(f.glyphs.len(), 1);
+    let g = &f.glyphs[0];
+    assert_eq!(g.character, 65); // 'A'
+    assert_eq!(g.x, 10);
+    assert_eq!(g.y, 0);
+    assert_eq!(g.width, 8);
+    assert_eq!(g.height, 12);
+    assert_eq!(g.shift, 9);
+    assert_eq!(g.offset, 0);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_FONT).unwrap();
+    assert_eq!(json_u64(&v, "/font/count"), 1);
+    assert_eq!(json_u64(&v, "/font/entries/0/size"), 12);
+    assert_eq!(json_u64(&v, "/font/entries/0/glyph_count"), 1);
+    assert_eq!(json_u64(&v, "/font/entries/0/glyphs/0/character"), 65);
+}
+
+// ── v15_objt ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn objt_json_file_size() {
+    check_json_file_size(JSON_OBJT, OBJT_FIXTURE, "v15_objt");
+}
+
+#[test]
+fn objt_parse() {
+    let index = ChunkIndex::parse(OBJT_FIXTURE).unwrap();
+    let entry = index.find(b"OBJT").unwrap();
+    let objt = Objt::parse(
+        &OBJT_FIXTURE[entry.data_offset()..entry.data_offset() + entry.size],
+        OBJT_FIXTURE,
+        BytecodeVersion(15),
+    )
+    .unwrap();
+
+    assert_eq!(objt.objects.len(), 1);
+    let o = &objt.objects[0];
+    assert_eq!(o.name.resolve(OBJT_FIXTURE).unwrap(), "obj_player");
+    assert_eq!(o.sprite_index, 0);
+    assert!(o.visible);
+    assert!(!o.solid);
+    assert_eq!(o.depth, 0);
+    assert!(!o.persistent);
+    assert_eq!(o.parent_index, -1);
+    assert_eq!(o.mask_index, -1);
+    assert!(!o.physics_enabled);
+    assert!(!o.physics_sensor);
+    assert_eq!(o.physics_vertices.len(), 0);
+    assert!(!o.physics_kinematic);
+    assert!(o.physics_awake);
+    assert_eq!(o.events.len(), 0);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_OBJT).unwrap();
+    assert_eq!(json_u64(&v, "/objt/count"), 1);
+    assert_eq!(json_u64(&v, "/objt/entries/0/sprite_index"), 0);
+    assert_eq!(json_u64(&v, "/objt/entries/0/event_type_count"), 0);
+}
+
+// ── v15_room ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn room_json_file_size() {
+    check_json_file_size(JSON_ROOM, ROOM_FIXTURE, "v15_room");
+}
+
+#[test]
+fn room_parse() {
+    let index = ChunkIndex::parse(ROOM_FIXTURE).unwrap();
+    let entry = index.find(b"ROOM").unwrap();
+    let room =
+        Room::parse(&ROOM_FIXTURE[entry.data_offset()..entry.data_offset() + entry.size], ROOM_FIXTURE)
+            .unwrap();
+
+    assert_eq!(room.rooms.len(), 1);
+    let r = &room.rooms[0];
+    assert_eq!(r.name.resolve(ROOM_FIXTURE).unwrap(), "rm_main");
+    assert_eq!(r.caption.resolve(ROOM_FIXTURE).unwrap(), "");
+    assert_eq!(r.width, 640);
+    assert_eq!(r.height, 480);
+    assert_eq!(r.speed, 60);
+    assert!(!r.persistent);
+    assert_eq!(r.background_color, 0);
+    assert!(r.draw_background_color);
+    assert_eq!(r.creation_code_id, -1);
+    assert_eq!(r.flags, 0);
+    assert_eq!(r.objects.len(), 0);
+    assert!(!r.physics_world);
+    assert!((r.physics_gravity_x - 0.0).abs() < 1e-6);
+    assert!((r.physics_gravity_y - 10.0).abs() < 1e-6);
+
+    let v: serde_json::Value = serde_json::from_str(JSON_ROOM).unwrap();
+    assert_eq!(json_u64(&v, "/room/count"), 1);
+    assert_eq!(json_u64(&v, "/room/entries/0/width"), 640);
+    assert_eq!(json_u64(&v, "/room/entries/0/height"), 480);
+    assert_eq!(json_u64(&v, "/room/entries/0/speed"), 60);
+    assert_eq!(json_u64(&v, "/room/entries/0/object_count"), 0);
 }
