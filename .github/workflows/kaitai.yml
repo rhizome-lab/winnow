@@ -41,14 +41,14 @@ jobs:
 
       - name: Download ksc (Kaitai Struct Compiler)
         run: |
-          wget -q https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/0.10/kaitai-struct-compiler-0.10.zip
-          unzip -q kaitai-struct-compiler-0.10.zip
+          wget -q https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/0.11/kaitai-struct-compiler-0.11.zip
+          unzip -q kaitai-struct-compiler-0.11.zip
         working-directory: /tmp
 
       - name: Compile .ksy specs to Python
         run: |
-          /tmp/kaitai-struct-compiler-0.10/bin/ksc -t python game_maker_data.ksy
-          /tmp/kaitai-struct-compiler-0.10/bin/ksc -t python gml_bytecode.ksy
+          /tmp/kaitai-struct-compiler-0.11/bin/ksc -t python game_maker_data.ksy
+          /tmp/kaitai-struct-compiler-0.11/bin/ksc -t python gml_bytecode.ksy
 
       - name: Validate fixtures against Kaitai-parsed structure
         run: python3 tests/kaitai_validate.py
