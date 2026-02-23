@@ -230,6 +230,7 @@ fn translate_scripts(
             self_object_index: None,
             ancestor_indices: HashSet::new(),
             script_names,
+            is_with_body: false,
         };
 
         match translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -302,6 +303,7 @@ fn translate_global_inits(
             self_object_index: None,
             ancestor_indices: HashSet::new(),
             script_names,
+            is_with_body: false,
         };
 
         if let Ok((func, extra_funcs)) = translate::translate_code_entry(bytecode, &func_name, &ctx) {
@@ -374,6 +376,7 @@ fn translate_room_creation(
             self_object_index: None,
             ancestor_indices: HashSet::new(),
             script_names,
+            is_with_body: false,
         };
 
         if let Ok((func, extra_funcs)) = translate::translate_code_entry(bytecode, &func_name, &ctx) {

@@ -118,6 +118,7 @@ pub fn translate_objects(
                         self_object_index: Some(obj_idx),
                         ancestor_indices: build_ancestor_chain(&objt.objects, obj_idx),
                         script_names,
+                        is_with_body: false,
                     };
 
                     match translate::translate_code_entry(bytecode, &func_name, &ctx) {

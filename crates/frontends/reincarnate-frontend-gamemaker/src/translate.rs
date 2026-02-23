@@ -50,6 +50,10 @@ pub struct TranslateCtx<'a> {
     pub ancestor_indices: HashSet<usize>,
     /// Set of clean script names (for injecting self at call sites).
     pub script_names: &'a HashSet<String>,
+    /// True when translating a with-body closure (extracted from a PushEnv/PopEnv pair).
+    /// In this context, a PopEnv instruction is an early-exit signal — the outer with-loop
+    /// is managed by `withInstances`, so we do NOT emit `withEnd()` for PopEnv.
+    pub is_with_body: bool,
 }
 
 /// Translate a single code entry's bytecode into an IR Function.
@@ -640,31 +644,85 @@ fn build_empty_function(name: &str, ctx: &TranslateCtx) -> Result<Function, Stri
 
 /// Map each PushEnv instruction index to its corresponding PopEnv index.
 ///
-/// PushEnv's Branch operand gives the byte offset (relative to instruction
-/// start) that targets the PopEnv instruction. We resolve this to an
-/// instruction index in the slice.
+/// Uses the PushEnv's branch operand to locate the matching PopEnv, handling
+/// both GMS1 and GMS2.3+ bytecode conventions:
+///
+/// - **GMS1**: `PushEnv Branch(N)` where `offset + N = PopEnv.offset`.
+/// - **GMS2.3+**: `PushEnv Branch(N)` where `offset + N = continuation.offset`
+///   (instruction AFTER PopEnv). Since PopEnv is a 4-byte instruction,
+///   PopEnv.offset = continuation - 4. We also try continuation - 8 as a
+///   fallback for cases where the continuation is measured differently.
+///
+/// Stack-based nesting cannot be used because GML emits "early-exit" PopEnv
+/// instructions (e.g. `return` inside a `with` body) that would be incorrectly
+/// paired with an inner PushEnv, causing the wrong body slice to be extracted.
+///
+/// PushEnvs whose PopEnv lies in a sibling code entry (GMS2.3+ cross-code-entry
+/// with-blocks) are left unmatched. The translate_instruction fallback handles
+/// them by executing the body once for `self` only.
 fn find_with_ranges(instructions: &[Instruction]) -> HashMap<usize, usize> {
+    // Build offset → index map for this slice.
     let offset_to_idx: HashMap<usize, usize> = instructions
         .iter()
         .enumerate()
         .map(|(i, inst)| (inst.offset, i))
         .collect();
-    instructions
-        .iter()
-        .enumerate()
-        .filter_map(|(i, inst)| {
-            if inst.opcode != Opcode::PushEnv {
-                return None;
+
+    let mut result = HashMap::new();
+
+    for (i, inst) in instructions.iter().enumerate() {
+        if inst.opcode != Opcode::PushEnv {
+            continue;
+        }
+        let branch_offset = match inst.operand {
+            Operand::Branch(off) => off,
+            _ => continue,
+        };
+        // PushEnv Branch(N): the target is either:
+        //   GMS1 style — target == PopEnv.offset  (branch jumps to the PopEnv)
+        //   GMS2.3+ style — target == PopEnv.offset + sizeof(PopEnv)  (jumps to continuation)
+        //
+        // PopEnv is a 4-byte instruction, so sizeof(PopEnv) = 4.
+        // So in GMS2.3+: PopEnv.offset = branch_target - 4.
+        let branch_target = (inst.offset as i64 + branch_offset as i64) as usize;
+
+        // Try GMS1: branch target IS the PopEnv.
+        if let Some(&popenv_idx) = offset_to_idx.get(&branch_target) {
+            if instructions[popenv_idx].opcode == Opcode::PopEnv {
+                result.insert(i, popenv_idx);
+                continue;
             }
-            if let Operand::Branch(offset) = inst.operand {
-                let target = (inst.offset as i64 + offset as i64) as usize;
-                let &popenv_idx = offset_to_idx.get(&target)?;
-                Some((i, popenv_idx))
-            } else {
-                None
+        }
+
+        // Try GMS2.3+: branch target is the continuation (PopEnv = target - 4).
+        if branch_target >= 4 {
+            let popenv_off = branch_target - 4;
+            if let Some(&popenv_idx) = offset_to_idx.get(&popenv_off) {
+                if instructions[popenv_idx].opcode == Opcode::PopEnv {
+                    result.insert(i, popenv_idx);
+                    continue;
+                }
             }
-        })
-        .collect()
+        }
+
+        // Also try target - 8 (some GMS2 versions may encode continuation differently).
+        if branch_target >= 8 {
+            let popenv_off = branch_target - 8;
+            if let Some(&popenv_idx) = offset_to_idx.get(&popenv_off) {
+                if instructions[popenv_idx].opcode == Opcode::PopEnv {
+                    result.insert(i, popenv_idx);
+                    continue;
+                }
+            }
+        }
+
+        // Neither heuristic found the PopEnv: the matching PopEnv is in a sibling
+        // code entry (GMS2.3+ cross-code-entry with-block). The unmatched PushEnv
+        // falls through to translate_instruction which handles it by discarding the
+        // target and falling through to the body — semantically incomplete but valid.
+    }
+
+    result
 }
 
 /// Find the names of outer local variables accessed in a slice of instructions.
@@ -881,6 +939,9 @@ fn translate_with_body(
         self_object_index: ctx.self_object_index,
         ancestor_indices: ctx.ancestor_indices.clone(),
         script_names: ctx.script_names,
+        // This IS a with-body closure — PopEnv inside is an early-exit signal,
+        // not a loop-control instruction (the loop is managed by withInstances).
+        is_with_body: true,
     };
 
     fb.switch_to_block(fb.entry_block());
@@ -1759,42 +1820,37 @@ fn translate_instruction(
         // PushEnv / PopEnv (with-blocks)
         // ============================================================
         Opcode::PushEnv => {
-            if let Operand::Branch(offset) = inst.operand {
-                let target_obj = pop(stack, inst)?;
-                let _with_begin = fb.system_call(
-                    "GameMaker.Instance",
-                    "withBegin",
-                    &[target_obj],
-                    Type::Dynamic,
-                );
+            if let Operand::Branch(_offset) = inst.operand {
+                // Unmatched PushEnv: the matching PopEnv is in a sibling code entry
+                // (GMS2.3+ cross-code-entry with-block).  We can't extract the full
+                // body as a closure here.  Pop the target object (discarded) and fall
+                // through to the body block — this executes the body for `self` only,
+                // which is semantically incomplete but produces valid TypeScript.
+                let _target_obj = pop(stack, inst)?;
                 let (body_off, body_block) = resolve_fallthrough(instructions, inst_idx, block_map)?;
                 let args = get_branch_args(stack, block_entry_depths.get(&body_off).copied().unwrap_or(0));
                 fb.br(body_block, &args);
                 *terminated = true;
-                let _end_offset = offset;
             }
         }
         Opcode::PopEnv => {
             if let Operand::Branch(_) = inst.operand {
-                // Emit withEnd and fall through to the post-with code.
-                //
-                // The GML VM uses PopEnv as a loop-advance instruction: if more
-                // instances remain, it jumps back to the body; otherwise it falls
-                // through to the continuation. We model GML `with` as a flat
-                // withBegin + body + withEnd + continuation — the actual iteration
-                // is handled entirely by withInstances() in the runtime. So in
-                // both the normal loop-back case (sentinel >= 0) and the break-out
-                // case (sentinel < 0), we unconditionally fall through to the next
-                // instruction (the post-with continuation code).
-                fb.system_call(
-                    "GameMaker.Instance",
-                    "withEnd",
-                    &[],
-                    Type::Void,
-                );
-                let (fall_off, fall) = resolve_fallthrough(instructions, inst_idx, block_map)?;
-                let args = get_branch_args(stack, block_entry_depths.get(&fall_off).copied().unwrap_or(0));
-                fb.br(fall, &args);
+                if ctx.is_with_body {
+                    // Inside a with-body closure, PopEnv is an early-exit signal
+                    // (e.g., `return` or `break` inside a `with` body). The outer
+                    // iteration is managed by withInstances — just return from the
+                    // closure. Any subsequent RET will be in a dead block (DCE cleans
+                    // it up).
+                    fb.ret(None);
+                } else {
+                    // Unmatched PopEnv (sibling of an unmatched PushEnv in the same
+                    // function, or the loop-back PopEnv of a GMS2.3+ cross-code-entry
+                    // with-block).  Fall through to the continuation block.
+                    let (fall_off, fall) = resolve_fallthrough(instructions, inst_idx, block_map)?;
+                    let args =
+                        get_branch_args(stack, block_entry_depths.get(&fall_off).copied().unwrap_or(0));
+                    fb.br(fall, &args);
+                }
                 *terminated = true;
             }
         }
@@ -2636,6 +2692,7 @@ mod tests {
             self_object_index: None,
             ancestor_indices: HashSet::new(),
             script_names,
+            is_with_body: false,
         }
     }
 
