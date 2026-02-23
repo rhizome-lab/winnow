@@ -978,11 +978,11 @@ export class GameRuntime {
   steam_input_get_digital_action_handle(_name: string): number { return 0; }
 
   // ---- More collision ----
-  collision_point(_x: number, _y: number, _classIndex: number, _prec: boolean, _notme: boolean): any { return -4; }
-  collision_circle(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean): any { return -4; }
-  collision_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any { return -4; }
-  collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { return 0; }
-  collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { return 0; }
+  collision_point(_x: number, _y: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_point: requires collision system implementation"); }
+  collision_circle(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_circle: requires collision system implementation"); }
+  collision_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_ellipse: requires collision system implementation"); }
+  collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_line_list: requires collision system implementation"); }
+  collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_rectangle_list: requires collision system implementation"); }
   distance_to_point(_x: number, _y: number): number {
     throw new Error("distance_to_point: implement using instance spatial data");
   }
@@ -1043,9 +1043,9 @@ export class GameRuntime {
   audio_sound_length(_sound: number): number { return 0; }
 
   // ---- Buffer extras ----
-  buffer_base64_decode(_str: string): number { return -1; }
-  buffer_load_async(_path: string, _buf: number, _offset: number, _size: number): number { return -1; }
-  buffer_save_async(_buf: number, _path: string, _offset: number, _size: number): number { return -1; }
+  buffer_base64_decode(_str: string): number { throw new Error("buffer_base64_decode: implement in platform layer"); }
+  buffer_load_async(_path: string, _buf: number, _offset: number, _size: number): number { throw new Error("buffer_load_async: implement in platform layer"); }
+  buffer_save_async(_buf: number, _path: string, _offset: number, _size: number): number { throw new Error("buffer_save_async: implement in platform layer"); }
   buffer_set_surface(_buf: number, _surf: number, _offset: number): void {
     throw new Error("buffer_set_surface: requires WebGL implementation");
   }
@@ -1207,7 +1207,7 @@ export class GameRuntime {
   layer_sequence_destroy(_seq: number): void {}
 
   // ---- More collision ----
-  collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { return 0; }
+  collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_ellipse_list: requires collision system implementation"); }
 
   // ---- Instance change ----
   instance_change(_classIndex: number, _performEvents: boolean): void {}
@@ -1247,7 +1247,7 @@ export class GameRuntime {
     if (sx1 >= dx1 && sx2 <= dx2 && sy1 >= dy1 && sy2 <= dy2) return 2;
     return 1;
   }
-  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { return 0; }
+  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number): number { throw new Error("collision_circle_list: requires collision system implementation"); }
 
   // ---- More draw ----
   draw_roundrect(_x1: number, _y1: number, _x2: number, _y2: number, _xr: number, _yr: number, _outline: boolean): void {}
@@ -1351,7 +1351,7 @@ export class GameRuntime {
   texture_get_texel_width(_tex: number): number { return 0; }
 
   // ---- Vertex buffer (stubs) ----
-  vertex_create_buffer(): number { return -1; }
+  vertex_create_buffer(): number { throw new Error("vertex_create_buffer: requires WebGL implementation"); }
   vertex_delete_buffer(_buf: number): void {}
   vertex_begin(_buf: number, _format: number): void {}
   vertex_end(_buf: number): void {}
@@ -1372,7 +1372,7 @@ export class GameRuntime {
   mouse_wheel_down(): boolean { return false; }
 
   // ---- Navigation mesh ----
-  mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { return false; }
+  mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { throw new Error("mp_grid_path: requires pathfinding implementation"); }
 
   // ---- struct alias ----
   struct_exists(struct: any, name: string): boolean {
@@ -1490,6 +1490,128 @@ export class GameRuntime {
 
   // ---- More sprite/font ----
   sprite_save(_spr: number, _sub: number, _fname: string): void {}
+  sprite_add(_path: string, _frames: number, _removebg: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { return -1; }
+  sprite_get_uvs(_spr: number, _sub: number): number[] { return [0, 0, 1, 1, 0, 0, 1, 1]; }
+  sprite_prefetch(_spr: number): void {}
+  sprite_set_speed(_spr: number, _speed: number, _type: number): void {}
+
+  // ---- ord / chr extras ----
+  ord(char: string): number { return char.charCodeAt(0) || 0; }
+
+  // ---- Type checks ----
+  is_struct(val: any): boolean {
+    return val !== null && typeof val === "object" && !Array.isArray(val) && !(val instanceof Object.getPrototypeOf(Object).constructor);
+  }
+  is_method(val: any): boolean { return typeof val === "function"; }
+  _instanceof(val: any, constructor: any): boolean { return this.is_instanceof(val, constructor); }
+
+  // ---- Game speed ----
+  game_get_speed(_type: number): number { return this.room_speed; }
+
+  // ---- Layer extras ----
+  layer_get_depth(_layer: any): number { return 0; }
+  layer_set_visible(_layer: any, _visible: boolean): void {}
+  layer_x(_layer: any): number { return 0; }
+  layer_y(_layer: any): number { return 0; }
+
+  // ---- More instance ----
+  instance_deactivate_all(_notme: boolean): void { throw new Error("instance_deactivate_all: requires instance activation system"); }
+  instance_furthest(_x: number, _y: number, _classIndex: number): any { throw new Error("instance_furthest: requires spatial instance index"); }
+  instance_position(_x: number, _y: number, _classIndex: number): any { throw new Error("instance_position: requires collision system implementation"); }
+
+  // ---- Object extras ----
+  object_get_parent(classIndex: number): number {
+    const clazz = this.classes[classIndex];
+    if (!clazz) return -1;
+    const parent = Object.getPrototypeOf(clazz.prototype)?.constructor;
+    const idx = this.classes.indexOf(parent);
+    return idx >= 0 ? idx : -1;
+  }
+
+  // ---- More geometry ----
+  point_in_circle(px: number, py: number, cx: number, cy: number, r: number): boolean {
+    return ((px - cx) ** 2 + (py - cy) ** 2) <= r * r;
+  }
+  point_distance_3d(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number): number {
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2 + (z2 - z1) ** 2);
+  }
+
+  // ---- Room extras ----
+  room_instance_clear(_room: number): void {}
+
+  // ---- GPU extras ----
+  gpu_set_blendmode_ext_sepalpha(_src: number, _dest: number, _srcA: number, _destA: number): void {}
+
+  // ---- Gamepad extras ----
+  gamepad_get_description(_device: number): string { return ""; }
+  gamepad_is_supported(): boolean { return false; }
+  gamepad_set_axis_deadzone(_device: number, _axis: number, _deadzone: number): void {}
+  gamepad_set_color(_device: number, _col: number): void {}
+
+  // ---- GC extras ----
+  gc_enable(_enable: boolean): void {}
+
+  // ---- MP grid (pathfinding) ----
+  mp_grid_create(_left: number, _top: number, _hcells: number, _vcells: number, _cellw: number, _cellh: number): number { throw new Error("mp_grid_create: requires pathfinding implementation"); }
+  mp_grid_add_rectangle(_id: number, _x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("mp_grid_add_rectangle: requires pathfinding implementation"); }
+  mp_grid_add_instances(_id: number, _classIndex: number, _prec: boolean): void { throw new Error("mp_grid_add_instances: requires pathfinding implementation"); }
+  mp_grid_clear_all(_id: number): void { throw new Error("mp_grid_clear_all: requires pathfinding implementation"); }
+  mp_grid_clear_rectangle(_id: number, _x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("mp_grid_clear_rectangle: requires pathfinding implementation"); }
+  mp_grid_draw(_id: number): void {}
+
+  // ---- Particle extras ----
+  part_emitter_stream(_syst: number, _emit: number, _type: number, _num: number): void {}
+  part_particles_clear(_syst: number): void {}
+  part_system_automatic_update(_syst: number, _on: boolean): void {}
+  part_system_drawit(_syst: number): void {}
+
+  // ---- Path extras ----
+  path_get_length(_path: number): number { throw new Error("path_get_length: requires path system implementation"); }
+  path_start(_path: number, _speed: number, _end: number, _abs: boolean): void { throw new Error("path_start: requires path system implementation"); }
+
+  // ---- Debug ----
+  show_debug_log(_str: string): void { console.debug("GML debug:", _str); }
+  show_debug_overlay(_enable: boolean): void {}
+
+  // ---- More async ----
+  get_string_async(_message: string, _default: string): string { return _default; }
+
+  // ---- Video extras ----
+  video_get_format(): string { return ""; }
+
+  // ---- PSN stubs ----
+  psn_init_trophy(): void {}
+  psn_unlock_trophy(_id: number): void {}
+  psn_get_trophy_unlock_state(_id: number): number { return 0; }
+  psn_tick(): void {}
+  psn_tick_error_dialog(): void {}
+  psn_np_commerce_dialog_tick(): void {}
+  psn_save_data_backup(): void {}
+  psn_communication_restriction_status(): number { return 0; }
+
+  // ---- More Steam ----
+  steam_activate_overlay_browser(_url: string): void {}
+  steam_clear_achievement(_name: string): void {}
+  steam_file_delete(_path: string): void {}
+  steam_file_get_list(): string[] { return []; }
+  steam_file_share(_path: string): void {}
+  steam_file_size(_path: string): number { return 0; }
+  steam_file_write_buffer(_path: string, _buf: number, _size: number): boolean { return false; }
+  steam_file_write_file(_path: string, _srcpath: string): boolean { return false; }
+  steam_get_achievement_progress_limits_int(_name: string): [number, number] { return [0, 0]; }
+  steam_get_global_stat_real(_name: string): number { return 0; }
+  steam_get_local_file_change(_index: number): string { return ""; }
+  steam_input_activate_action_set(_handle: number, _setHandle: number): void {}
+  steam_input_get_action_origin_from_xbox_origin(_handle: number, _origin: number): number { return 0; }
+  steam_input_get_analog_action_handle(_name: string): number { return 0; }
+  steam_input_get_connected_controllers(): number[] { return []; }
+  steam_input_get_digital_action_data(_controller: number, _action: number): boolean { return false; }
+  steam_input_get_digital_action_origins(_controller: number, _action_set: number, _action: number): number[] { return []; }
+  steam_input_get_glyph_png_for_action_origin(_controller: number, _origin: number, _style: number, _flags: number): string { return ""; }
+  steam_input_init(_explicit: boolean): void {}
+  steam_inventory_trigger_item_drop(_id: number): void {}
+  steam_is_subscribed(): boolean { return false; }
+  steam_lobby_leave(_lobby: number): void {}
 
   // ---- Instance position/collision with DS list ----
 

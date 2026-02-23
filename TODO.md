@@ -144,6 +144,30 @@ Known violations as of 2026-02-22 (see high-priority issues below for details):
 - `runtime/twine/ts/platform/save-ui.ts` — `saveUI` (SaveUI singleton)
 - `runtime/twine/ts/platform/settings-ui.ts` — `settingsUI` (SettingsUI singleton)
 
+### GML runtime stubs — silent returns audit — last audited: (never)
+
+Many GML built-in stubs added in 2026-02 silently return `0`, `""`, `false`, or `-1` for
+functions that require real implementations (collision, path-finding, particle systems,
+video, vertex buffers, DS operations, etc.). Per the CLAUDE.md rule, these should throw
+`Error("name: not yet implemented")` instead of returning wrong values silently.
+
+```bash
+# Find suspicious silent-return stubs in GML runtime
+grep -n "{ return 0; }\|{ return \"\"; }\|{ return false; }\|{ return -1; }" \
+  runtime/gamemaker/ts/gamemaker/runtime.ts | grep -v "// genuine"
+```
+
+Functions to audit (partial list):
+- `mp_grid_*` — pathfinding (returns -1/void, but caller uses return value for grid ID)
+- `collision_point/circle/ellipse` — collision (returns -4 but caller may iterate over results)
+- `path_start/path_get_length` — path following
+- `part_*` — particle system state
+- `instance_deactivate_all`, `instance_furthest`, `instance_position`
+- `ds_priority_*` — DS priority queue (partially implemented)
+- `buffer_*` async variants
+- `surface_copy`, `vertex_*` — graphics
+- `layer_get_depth`, `layer_x`, `layer_y` — layer state queries
+
 ### Runtime type widening — last audited: (never)
 
 Review runtime files for type signatures widened to silence TypeScript errors from game code (e.g. `string` → `any`, required param made optional). Such changes hide real bugs.
