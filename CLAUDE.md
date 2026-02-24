@@ -54,6 +54,8 @@ Reincarnate works on **bytecode and script**, not native code:
 
 **A user correction means CLAUDE.md failed.** When the user has to correct your approach — not a factual mistake, but a wrong *way of thinking* about a problem — that is direct evidence that the rules didn't catch it. Don't just fix the immediate thing. Ask: what rule, if it had existed, would have prevented this? Write that rule before proceeding. A correction that doesn't produce a new rule is a correction that will happen again.
 
+**If you acknowledge you could have done better, CLAUDE.md failed.** When you realize mid-session that an approach was wrong — not a factual mistake, but a *wrong way of thinking* about a problem — that is evidence the rules didn't prevent it. Do not just fix the immediate thing. Ask: what rule, if written beforehand, would have prevented this mistake? Write that rule immediately. A realization without a new rule is a realization that will recur.
+
 **Do the work properly.** When asked to analyze X, actually read X - don't synthesize from conversation.
 
 ## Behavioral Patterns
