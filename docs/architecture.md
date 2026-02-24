@@ -353,14 +353,75 @@ drawing, audio playback, keyboard input, file access). It must be:
 
 ### Platform capabilities
 
-| Capability | Methods | Purpose |
-|-----------|---------|---------|
-| **Graphics** | `set_transform`, `fill_rect`, `draw_image`, `draw_text`, `measure_text`, `begin_path`, `clip`, `save_state`, `restore_state` | 2D rendering with transforms, clipping, text |
-| **Audio** | `load_sound`, `play_sound`, `stop_sound`, `set_volume` | Sound playback and mixing |
-| **Input** | `is_key_down`, `is_mouse_down`, `mouse_position`, `poll_events` | Keyboard, mouse, touch, gamepad |
-| **Network** | `fetch_bytes`, `fetch_text` | HTTP resource loading |
-| **Persistence** | `save`, `load`, `delete`, `list_keys` | Key-value storage (save files, local storage) |
-| **Timing** | `delta_time`, `elapsed`, `frame_count`, `request_frame` | Frame pacing and time tracking |
+The platform interface is a **cross-language contract** — TypeScript, Rust, C#/Unity, SDL all implement the same conceptual interface. Names below are the canonical snake_case form; TypeScript implementations camelCase them. API surfaces use only primitive types (int, float, bool, string, opaque handles) — no language-specific types (`AudioBuffer`, `HTMLImageElement`) in exported signatures.
+
+#### Graphics
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `init_canvas` | `(id: str, doc?) → void` | Bind to canvas element by ID |
+| `create_canvas` | `(doc?) → canvas_handle` | Create an offscreen canvas |
+| `resize_canvas` | `(w: int, h: int) → void` | Resize the main canvas |
+| `set_transform` | `(a,b,c,d,e,f: float) → void` | Set CTM (6-element affine) |
+| `fill_rect` | `(x,y,w,h: float, color: int) → void` | Filled rectangle |
+| `draw_image` | `(img: handle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Draw image with source/dest rects |
+| `draw_text` | `(text: str, x,y: float, font: str, size: float) → void` | Text rendering |
+| `measure_text` | `(text: str, font: str, size: float) → float` | Text width measurement |
+| `begin_path` / `clip` / `save_state` / `restore_state` | — | Path clipping and state stack |
+
+#### Audio
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds at startup |
+| `play` | `(index: int, loop: bool, gain: float, pitch: float, offset: float) → handle` | Play sound, returns handle |
+| `stop` | `(handle: int) → void` | Stop and discard |
+| `stop_all` | `() → void` | Stop all playing sounds |
+| `pause` | `(handle: int) → void` | Pause, remember position |
+| `resume` | `(handle: int) → void` | Resume from pause position |
+| `resume_all` | `() → void` | Resume all paused sounds |
+| `is_playing` | `(handle: int) → bool` | True if playing (not paused, not ended) |
+| `get_gain` | `(handle: int) → float` | Per-sound gain |
+| `set_gain` | `(handle: int, gain: float, fade_ms: float) → void` | Per-sound gain with optional fade |
+| `get_pitch` | `(handle: int) → float` | Playback rate multiplier |
+| `set_pitch` | `(handle: int, pitch: float) → void` | |
+| `set_master_gain` | `(gain: float) → void` | Global gain |
+| `get_position` | `(handle: int) → float` | Playback position in seconds |
+| `set_position` | `(handle: int, pos: float) → void` | Seek (restarts node internally) |
+| `sound_length` | `(index: int) → float` | Duration of loaded sound in seconds |
+
+#### Input
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `on_mouse_move` | `(cb: (x,y: float) → void) → void` | |
+| `on_mouse_down` | `(cb: (button: int) → void) → void` | |
+| `on_mouse_up` | `(cb: (button: int) → void) → void` | |
+| `on_key_down` | `(cb: (key: str, keycode: int) → void) → void` | |
+| `on_key_up` | `(cb: (key: str, keycode: int) → void) → void` | |
+| `on_scroll` | `(cb: (delta: float) → void) → void` | |
+
+#### Images
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `load_image` | `(url: str) → handle` (async) | Decode image from URL |
+
+#### Persistence
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `init` | `() → void` (async) | Preload storage (OPFS or equivalent) |
+| `save` | `(key: str, data: str) → void` | Write-through: sync + async backing |
+| `load` | `(key: str) → str \| null` | Sync read from in-memory cache |
+| `remove` | `(key: str) → void` | |
+
+#### Timing
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `schedule_frame` | `(cb: () → void, delay_ms: float) → handle` | |
+| `cancel_frame` | `(handle: int) → void` | |
 
 ### Rust: generic traits
 

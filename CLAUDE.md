@@ -134,6 +134,11 @@ Layer 1: Platform Implementation         platform/browser.ts
 
 Swap platforms by changing the re-export in `platform/index.ts` — zero runtime cost since it's just module aliasing.
 
+**The platform interface is a cross-language contract.** TypeScript, Rust, C#/Unity, SDL — all language runtimes implement the same conceptual interface. TypeScript is the current backend, not the only one. This has three hard consequences:
+- **Generic names only.** Platform functions are named for what they do, not for the engine API they serve: `play`, `stop`, `save`, `load` — never `audioPlay`, `audio_play_sound`, `steam_file_write`. Engine-specific concepts (GML `priority`, `audio_group`, etc.) are absorbed by the engine shim layer and must never appear in the platform.
+- **Primitive types only in the API surface.** No language-specific types (`AudioBuffer`, `HTMLImageElement`) in exported function signatures — those are implementation details hidden inside the platform module. Across all languages, parameters and return values are ints, floats, bools, strings, or opaque integer handles.
+- **Canonical names are snake_case.** TypeScript implementations use camelCase (`playSound`), Rust uses snake_case (`play_sound`) — but the conceptual name is snake_case. Use that when documenting or discussing the interface. See `docs/architecture.md` Platform Interface section for the full function list.
+
 ## Workflow
 
 **Batch cargo commands** to minimize round-trips:

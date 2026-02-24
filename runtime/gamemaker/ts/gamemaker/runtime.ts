@@ -10,9 +10,16 @@ import { gmlColorToCss } from "./color";
 import { StorageState, createStorageAPI } from "./storage";
 import {
   AudioState, loadAudio,
-  audioPlay, audioStop, audioStopAll, audioPause, audioResume, audioResumeAll,
-  audioIsPlaying, audioSetGain, audioGetGain, audioSetPitch, audioGetPitch,
-  audioSetMasterGain, audioGetTrackPosition, audioSetTrackPosition, audioSoundLength,
+  play as audioPlay, stop as audioStop, stopAll as audioStopAll,
+  pause as audioPause, resume as audioResume, resumeAll as audioResumeAll,
+  isPlaying as audioIsPlaying, isPaused as audioIsPaused,
+  setGain as audioSetGain, getGain as audioGetGain,
+  setPitch as audioSetPitch, getPitch as audioGetPitch,
+  setPan as audioSetPan, getPan as audioGetPan,
+  setMasterGain as audioSetMasterGain,
+  getPosition as audioGetPosition, setPosition as audioSetPosition,
+  soundLength as audioSoundLength,
+  createBus, setBusGain, getBusGain, pauseBus, resumeBus, stopBus,
 } from "./platform/audio";
 import { MathState, createMathAPI } from "./math";
 import { createGlobalAPI } from "./global";
@@ -595,10 +602,10 @@ export class GameRuntime {
   // ---- Audio API ----
 
   audio_play_sound(sound: number, _priority: number, loop: boolean, gain = 1, offset = 0, pitch = 1): number {
-    return audioPlay(this._audio, sound, loop, gain, offset, pitch);
+    return audioPlay(this._audio, sound, 0, loop, gain, pitch, 0, offset);
   }
   audio_play_sound_at(sound: number, _x: number, _y: number, _z: number, _falloff: number, _min: number, _max: number, _priority: number, loop: boolean): number {
-    return audioPlay(this._audio, sound, loop);
+    return audioPlay(this._audio, sound, 0, loop, 1, 1, 0, 0);
   }
   audio_stop_sound(handle: number): void { audioStop(this._audio, handle); }
   audio_stop_all(): void { audioStopAll(this._audio); }
@@ -606,19 +613,22 @@ export class GameRuntime {
   audio_resume_sound(handle: number): void { audioResume(this._audio, handle); }
   audio_resume_all(): void { audioResumeAll(this._audio); }
   audio_is_playing(handle: number): boolean { return audioIsPlaying(this._audio, handle); }
+  audio_is_paused(handle: number): boolean { return audioIsPaused(this._audio, handle); }
   audio_sound_gain(handle: number, gain: number, timeMs: number): void { audioSetGain(this._audio, handle, gain, timeMs); }
   audio_sound_get_gain(handle: number): number { return audioGetGain(this._audio, handle); }
   audio_sound_pitch(handle: number, pitch: number): void { audioSetPitch(this._audio, handle, pitch); }
   audio_sound_get_pitch(handle: number): number { return audioGetPitch(this._audio, handle); }
+  audio_sound_set_pan(handle: number, pan: number): void { audioSetPan(this._audio, handle, pan); }
+  audio_sound_get_pan(handle: number): number { return audioGetPan(this._audio, handle); }
   audio_master_gain(gain: number): void { audioSetMasterGain(this._audio, gain); }
   audio_sound_length(sound: number): number { return audioSoundLength(this._audio, sound); }
-  audio_sound_set_track_position(handle: number, pos: number): void { audioSetTrackPosition(this._audio, handle, pos); }
-  audio_sound_get_track_position(handle: number): number { return audioGetTrackPosition(this._audio, handle); }
+  audio_sound_set_track_position(handle: number, pos: number): void { audioSetPosition(this._audio, handle, pos); }
+  audio_sound_get_track_position(handle: number): number { return audioGetPosition(this._audio, handle); }
   audio_exists(sound: number): boolean { return sound >= 0 && sound < this.sounds.length && this.sounds[sound]!.url !== ""; }
   audio_get_name(sound: number): string { return this.sounds[sound]?.name ?? ""; }
   audio_group_load(_group: number): void { /* no-op — all audio loaded at startup */ }
   audio_group_stop_all(_group: number): void { audioStopAll(this._audio); }
-  audio_group_set_gain(_group: number, gain: number, _timeMs: number): void { audioSetMasterGain(this._audio, gain); }
+  audio_group_set_gain(_group: number, gain: number, timeMs: number): void { setBusGain(this._audio, 0, gain, timeMs); }
 
   // ---- Particle API (unimplemented — requires particle simulation) ----
 
