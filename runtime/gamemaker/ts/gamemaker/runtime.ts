@@ -2,7 +2,7 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleFrame, saveItem, loadItem, removeItem } from "./platform";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleFrame, initPersistence, saveItem, loadItem, removeItem } from "./platform";
 import type { RenderRoot } from "../../../shared/ts/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
@@ -2039,6 +2039,9 @@ export class GameRuntime {
   // ---- Game startup ----
 
   async start(config: GameConfig): Promise<void> {
+    // Init persistence before anything else — preloads OPFS into sync cache (falls back to localStorage).
+    await initPersistence();
+
     this._roomDatas = config.rooms;
     this.sprites = config.sprites;
     this.textures = config.textures;
