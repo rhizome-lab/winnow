@@ -46,6 +46,8 @@ Reincarnate works on **bytecode and script**, not native code:
 
 **Triggers:** User corrects you, 2+ failed attempts, "aha" moment, framework quirk discovered → document **before** proceeding. Never describe a bug in conversation and move on — write it to TODO.md first, then continue working.
 
+**Every observed problem goes to TODO.md. No exceptions. No deferral.** When you notice a problem — a TODO comment in code, a violation of an architecture rule, a missing implementation, a known bug you can't fix right now — write it to TODO.md *before* continuing. Not "at the end of the session". Not "if I remember". Not "it's already in a code comment". A code comment is not a tracked item. A commit message is not a tracked item. A mention in conversation is not a tracked item. The only tracked item is an entry in TODO.md. If you write a TODO comment in source code, the NEXT action is to open TODO.md and write the entry. This rule has no exceptions based on priority, size, or confidence that it will be fixed soon.
+
 **Something unexpected is a signal, not noise.** When a result is surprising — output that's 12x larger than input, a file that shouldn't contain JS but does, a number that's off by an order of magnitude — stop immediately and ask why. Don't accept the anomaly and move on. Surprising results are almost always early evidence of a bug. Treating them as "close enough" or "probably fine" is how bugs stay hidden for sessions. Investigate before proceeding.
 
 **Update CLAUDE.md the moment you find a systematic gap.** If a bug reveals that the existing rules didn't prevent a class of mistake, add the rule immediately — not after the fix, not at the end of the session. The rule is only useful if it's written before the next similar mistake can happen.

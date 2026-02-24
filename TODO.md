@@ -133,7 +133,7 @@ grep -rn "^const [a-z].* = new " runtime/ --include="*.ts" | grep -v node_module
 
 Known violations as of 2026-02-22 (see high-priority issues below for details):
 - `runtime/flash/ts/flash/display.ts` — `export let _dragTarget/Bounds/LockCenter/OffsetX/OffsetY`
-- `runtime/flash/ts/audio.ts` — `audioCtx`, `channels`
+- `runtime/flash/ts/audio.ts` — `_audio` (AudioState singleton)
 - `runtime/flash/ts/input.ts` — `state` (InputState singleton)
 - `runtime/flash/ts/timing.ts` — `state` (TimingState singleton)
 - `runtime/flash/ts/renderer.ts` — `canvas`, `ctx` (hardcoded DOM element)
@@ -192,7 +192,7 @@ All mutable state in the Flash runtime lives at module scope, which means two Fl
 - [ ] **`flash/display.ts` — exported drag state** (`_dragTarget`, `_dragBounds`, `_dragLockCenter`, `_dragOffsetX`, `_dragOffsetY`, lines 712–720) and `_displayState` singleton (line 1213). Drag state is `export let`, meaning any importer can mutate it — remove the export, move onto runtime instance.
 - [ ] **`flash/timing.ts` — `TimingState` singleton** — `state = new TimingState()` at module scope (line 9); `timing` object wraps it. Move to `FlashRuntime.timing` instance field; same pattern as `GameRuntime.onTick`.
 - [ ] **`flash/input.ts` — `InputState` singleton** — `state = new InputState()` at module scope (line 12); DOM event listeners registered unconditionally on import. Move to `FlashRuntime.input`; attach/detach listeners in `start()`/`stop()`.
-- [ ] **`flash/audio.ts` — `AudioContext` + `channels` set** — `audioCtx = new AudioContext()` and `channels: Set<ChannelHandle>` at module scope (lines 1, 12). Move to `FlashRuntime.audio`.
+- [ ] **`flash/audio.ts` — `AudioState` singleton** — `_audio = new AudioState()` at module scope. Move to `FlashRuntime.audio`; `_ensureInit()` becomes part of `FlashRuntime.start()`.
 - [ ] **`flash/renderer.ts` — hardcoded canvas** — `canvas = document.getElementById("reincarnate-canvas")` at module scope (lines 1–2). Move to `FlashRuntime.renderer`; accept canvas element (or ID) as a constructor arg.
 - [ ] **`flash/memory.ts` — shared heap** — `heap = new ArrayBuffer(HEAP_SIZE)` and typed array views at module scope (lines 4–13). Unlikely to matter in practice (single game per page for Flash), but still wrong in principle. Move to `FlashRuntime`.
 
