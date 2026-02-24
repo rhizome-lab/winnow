@@ -4,7 +4,7 @@
  * Settings are persisted to localStorage via the platform layer.
  */
 
-import { loadLocal, saveLocal, removeLocal, type SettingUIEntry, showSettingsUI } from "../platform";
+import { loadLocal, saveLocal, removeLocal, type SettingUIEntry } from "../platform";
 
 const STORAGE_KEY = "reincarnate-settings";
 
@@ -193,7 +193,14 @@ export class SCSettings {
   }
 
   /** Register commands for settings management. */
-  initCommands(registerCommand: (id: string, binding: string, handler: () => void) => void): void {
+  initCommands(
+    registerCommand: (id: string, binding: string, handler: () => void) => void,
+    showSettingsUI: (
+      entries: SettingUIEntry[],
+      onSet: (name: string, value: boolean | number | string) => void,
+      onReset: () => void,
+    ) => void,
+  ): void {
     this.register = registerCommand;
     registerCommand("open-settings", "", () => {
       const entries: SettingUIEntry[] = [];

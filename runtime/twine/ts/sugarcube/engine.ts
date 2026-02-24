@@ -12,7 +12,6 @@
  * Stateful operations (ensureGlobals, done_start/end, eval) are on SCEngine.
  */
 
-import * as Platform from "../platform";
 import jQuery from "jquery";
 import { installExtensions } from "./jquery-extensions";
 import { installSugarCubeExtensions } from "./extensions";
@@ -37,6 +36,7 @@ export class SCEngine {
 
     const g = globalThis as any;
     const rt = this.rt;
+    const Platform = rt.Platform;
     const State = rt.State;
     const Navigation = rt.Navigation;
     const Output = rt.Output;
@@ -462,7 +462,7 @@ export class SCEngine {
     };
 
     // --- Commands ---
-    Settings.initCommands(Platform.registerCommand);
+    Settings.initCommands(Platform.registerCommand, Platform.showSettingsUI);
     Navigation.initCommands(Platform.registerCommand);
 
     Settings.load();

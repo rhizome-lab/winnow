@@ -7,8 +7,7 @@
 import type { RenderRoot } from "../shared/render-root";
 import type { PassageFn } from "./navigation";
 import type { PersistenceOpts } from "../platform";
-import * as Platform from "../platform";
-import { tryResume, diffHistory, snapshotHistory } from "../platform";
+import { PlatformBundle, diffHistory, snapshotHistory, localStorageBackend, debounced } from "../platform";
 import { SCState } from "./state";
 import { SCEvents } from "./events";
 import { SCOutput } from "./output";
@@ -23,6 +22,7 @@ import { SCEngine } from "./engine";
 import { Wikifier } from "./wikifier";
 
 export class SugarCubeRuntime {
+  readonly Platform: PlatformBundle;
   readonly State: SCState;
   readonly Events: SCEvents;
   readonly Output: SCOutput;
@@ -36,6 +36,7 @@ export class SugarCubeRuntime {
   readonly Engine: SCEngine;
 
   constructor(persistence?: PersistenceOpts) {
+    this.Platform = new PlatformBundle();
     Wikifier.setRuntime(this);
     const history = persistence?.history === "diff"
       ? diffHistory()
@@ -84,15 +85,14 @@ export class SugarCubeRuntime {
     const p = opts?.persistence;
 
     // Wire persistence
-    let backend = Platform.localStorageBackend();
+    let backend = localStorageBackend();
     if (p?.debounce_ms) {
-      backend = Platform.debounced(backend, p.debounce_ms);
+      backend = debounced(backend, p.debounce_ms);
     }
-    Platform.initSave(
+    this.Platform.initSave(
       this.State,
       backend,
       this.Navigation.goto.bind(this.Navigation),
-      Platform.registerCommand,
       undefined,
       p?.autosave,
     );
@@ -111,7 +111,7 @@ export class SugarCubeRuntime {
 
     // Try to resume from autosave
     if (autosave && resume !== "ignore") {
-      const resumed = tryResume();
+      const resumed = this.Platform.tryResume();
       if (resumed) {
         const fn = this.Navigation.passages.get(resumed);
         if (fn) {

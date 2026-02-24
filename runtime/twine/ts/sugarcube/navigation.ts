@@ -1,7 +1,6 @@
 /** SugarCube navigation — passage registry, goto/back/return/include. */
 
 import type { SugarCubeRuntime } from "./runtime";
-import { commitSave } from "../platform";
 
 /** Passage function signature: receives the runtime instance. */
 export type PassageFn = (rt: SugarCubeRuntime) => void;
@@ -74,7 +73,7 @@ export class SCNavigation {
     }
     this.rt.State.pushMoment(target);
     this.renderPassage(target, fn);
-    commitSave();
+    this.rt.Platform.commitSave();
   }
 
   /** Go back to the previous passage. */
