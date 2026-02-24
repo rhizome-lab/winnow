@@ -1,6 +1,6 @@
 /** Browser graphics — Canvas 2D initialization and context management. */
 
-import type { DocumentFactory } from "../../../../shared/ts/render-root";
+import type { DocumentFactory } from "../render-root";
 
 export class GraphicsContext {
   canvas!: HTMLCanvasElement;

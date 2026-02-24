@@ -1,7 +1,7 @@
 /** GML input handling — mouse, keyboard. */
 
 import type { GameRuntime } from "./runtime";
-import { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "./platform";
+import { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "../shared/platform";
 import { ACTIVE, noop } from "./constants";
 
 interface ButtonState { pressed: boolean; released: boolean; held: boolean; }

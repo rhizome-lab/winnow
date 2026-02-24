@@ -2,9 +2,9 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleTimeout } from "./platform";
-import { PersistenceState, init as initPersistence, save, load as loadItem, remove } from "./platform/persistence";
-import type { RenderRoot } from "../../../shared/ts/render-root";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleTimeout } from "../shared/platform";
+import { PersistenceState, init as initPersistence, save, load as loadItem, remove } from "../shared/platform/persistence";
+import type { RenderRoot } from "../shared/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
 import { gmlColorToCss } from "./color";
@@ -21,7 +21,7 @@ import {
   getPosition as audioGetPosition, setPosition as audioSetPosition,
   soundLength as audioSoundLength,
   setNodeParam as audioSetNodeParam,
-} from "./platform/audio";
+} from "../shared/platform/audio";
 import { MathState, createMathAPI } from "./math";
 import { createGlobalAPI } from "./global";
 import { createInstanceAPI } from "./instance";
