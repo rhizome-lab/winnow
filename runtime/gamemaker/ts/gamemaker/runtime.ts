@@ -630,7 +630,7 @@ export class GameRuntime {
   audio_get_name(sound: number): string { return this.sounds[sound]?.name ?? ""; }
   audio_group_load(_group: number): void { /* no-op — all audio loaded at startup */ }
   audio_group_stop_all(_group: number): void { audioStopAll(this._audio); }
-  audio_group_set_gain(_group: number, gain: number, timeMs: number): void { audioSetNodeParam(this._audio, 0, { kind: "gain", value: gain }, timeMs); }
+  audio_group_set_gain(_group: number, gain: number, timeMs: number): void { audioSetNodeParam(this._audio, 0, "gain", gain, timeMs); }
 
   // ---- Particle API (unimplemented — requires particle simulation) ----
 

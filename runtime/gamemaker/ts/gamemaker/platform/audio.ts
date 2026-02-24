@@ -12,8 +12,7 @@
  *   Setup tier  — graph construction at init time: createNode, connect, disconnect, setNodeParam
  *   Hot tier    — per-frame voice control: play, stop, pause, resume, setVoiceGain, ...
  *
- * Hot-tier functions use only primitive arguments (no object allocation at call site).
- * Node params use a Param value enum so each set_node_param call is self-describing.
+ * All functions use only primitive arguments — no object allocation at call site.
  */
 
 // ---- Public types ----
@@ -25,23 +24,21 @@ export type NodeKind =
   | "reverb" | "delay"
   | "mixer";
 
-/** A parameter carried as a value enum: kind + value in one object. */
-export type Param =
-  | { kind: "gain";       value: number }   // linear amplitude (0..∞)
-  | { kind: "pan";        value: number }   // stereo position (-1=L, 0=C, 1=R)
-  | { kind: "cutoff";     value: number }   // filter cutoff frequency (Hz)
-  | { kind: "resonance";  value: number }   // filter Q factor
-  | { kind: "wet_mix";    value: number }   // wet/dry blend (0=dry, 1=wet)
-  | { kind: "decay";      value: number }   // reverb tail length (seconds)
-  | { kind: "delay_time"; value: number }   // echo delay (seconds)
-  | { kind: "feedback";   value: number }   // echo feedback (0..1)
-  | { kind: "threshold";  value: number }   // compressor threshold (dBFS, negative)
-  | { kind: "ratio";      value: number }   // compressor ratio (e.g. 4 = 4:1)
-  | { kind: "attack";     value: number }   // compressor/envelope attack (seconds)
-  | { kind: "release";    value: number }   // compressor/envelope release (seconds)
-  | { kind: "knee";       value: number };  // compressor knee width (dB)
-
-export type ParamKind = Param["kind"];
+/** Named parameter for a DSP node. All param values are floats. */
+export type ParamKind =
+  | "gain"       // linear amplitude (0..∞)
+  | "pan"        // stereo position (-1=L, 0=C, 1=R)
+  | "cutoff"     // filter cutoff frequency (Hz)
+  | "resonance"  // filter Q factor
+  | "wet_mix"    // wet/dry blend (0=dry, 1=wet)
+  | "decay"      // reverb tail length (seconds)
+  | "delay_time" // echo delay (seconds)
+  | "feedback"   // echo feedback (0..1)
+  | "threshold"  // compressor threshold (dBFS, negative)
+  | "ratio"      // compressor ratio (e.g. 4 = 4:1)
+  | "attack"     // attack time (seconds)
+  | "release"    // release time (seconds)
+  | "knee";      // compressor knee width (dB)
 
 // ---- Internal interfaces ----
 
@@ -192,20 +189,19 @@ export function disconnect(state: AudioState, from: number, to: number): void {
 }
 
 /**
- * Set or animate a node's parameter.
- * Throws if param.kind is not valid for this node's kind.
+ * Set or animate a node's parameter. Throws if kind is not valid for this node's kind.
  */
-export function setNodeParam(state: AudioState, nodeId: number, param: Param, fadeMs = 0): void {
+export function setNodeParam(state: AudioState, nodeId: number, kind: ParamKind, value: number, fadeMs = 0): void {
   const node = state.nodes.get(nodeId);
   if (!state.ctx || !node) return;
-  const ap = node.audioParams.get(param.kind);
+  const ap = node.audioParams.get(kind);
   if (ap === undefined) {
-    throw new Error(`setNodeParam: node kind "${node.kind}" does not support param "${param.kind}"`);
+    throw new Error(`setNodeParam: node kind "${node.kind}" does not support param "${kind}"`);
   }
   if (fadeMs > 0) {
-    ap.linearRampToValueAtTime(param.value, state.ctx.currentTime + fadeMs / 1000);
+    ap.linearRampToValueAtTime(value, state.ctx.currentTime + fadeMs / 1000);
   } else {
-    ap.value = param.value;
+    ap.value = value;
   }
 }
 
@@ -363,9 +359,9 @@ export function getVoicePan(state: AudioState, voiceId: number): number {
   return state.voices.get(voiceId)?.pan ?? 0;
 }
 
-/** Convenience: set master gain (equivalent to setNodeParam(state, 0, {kind:"gain",value:gain})). */
+/** Convenience: set master gain (equivalent to setNodeParam(state, 0, "gain", gain)). */
 export function setMasterGain(state: AudioState, gain: number): void {
-  setNodeParam(state, 0, { kind: "gain", value: gain });
+  setNodeParam(state, 0, "gain", gain);
 }
 
 export function getPosition(state: AudioState, voiceId: number): number {

@@ -5,7 +5,7 @@ export { scheduleTimeout, cancelTimeout } from "./timing";
 export { PersistenceState, init, save, load, remove } from "./persistence";
 export {
   AudioState,
-  NodeKind, Param, ParamKind,
+  NodeKind, ParamKind,
   loadAudio,
   createNode, connect, disconnect, setNodeParam, getNodeParam,
   play, stop, stopAll, pause, resume, resumeAll,

@@ -388,22 +388,24 @@ Fixed topologies (Buffer→Bus→Master) are special cases of the graph, not the
 
 **Node kinds**: `gain | pan | low_pass | high_pass | band_pass | notch | compressor | reverb | delay | mixer`
 
-**Param value enum** — carries both the parameter kind and its value, so each call is self-describing:
-```
-{ kind: "gain",       value: float }   // linear amplitude (0..∞)
-{ kind: "pan",        value: float }   // stereo position (-1=L, 0=C, 1=R)
-{ kind: "cutoff",     value: float }   // filter cutoff (Hz)
-{ kind: "resonance",  value: float }   // filter Q factor
-{ kind: "wet_mix",    value: float }   // reverb/delay wet/dry blend (0=dry, 1=wet)
-{ kind: "decay",      value: float }   // reverb tail (seconds)
-{ kind: "delay_time", value: float }   // echo delay (seconds)
-{ kind: "feedback",   value: float }   // echo feedback (0..1)
-{ kind: "threshold",  value: float }   // compressor threshold (dBFS, negative)
-{ kind: "ratio",      value: float }   // compressor ratio (e.g. 4 = 4:1)
-{ kind: "attack",     value: float }   // attack time (seconds)
-{ kind: "release",    value: float }   // release time (seconds)
-{ kind: "knee",       value: float }   // compressor knee width (dB)
-```
+**`ParamKind`** — all param values are floats; no wrapper struct needed:
+
+| ParamKind | Unit | Notes |
+|-----------|------|-------|
+| `gain` | linear (0..∞) | amplitude multiplier |
+| `pan` | -1..1 | -1=L, 0=C, 1=R |
+| `cutoff` | Hz | filter cutoff frequency |
+| `resonance` | Q | filter resonance |
+| `wet_mix` | 0..1 | reverb/delay wet blend |
+| `decay` | seconds | reverb tail length |
+| `delay_time` | seconds | echo delay |
+| `feedback` | 0..1 | echo feedback |
+| `threshold` | dBFS | compressor threshold (negative) |
+| `ratio` | x:1 | compressor ratio |
+| `attack` | seconds | compressor/envelope attack |
+| `release` | seconds | compressor/envelope release |
+| `knee` | dB | compressor knee width |
+
 Each node kind accepts only its own params; others throw at runtime.
 
 **Setup tier** (graph construction, init-time, not perf-critical):
@@ -414,7 +416,7 @@ Each node kind accepts only its own params; others throw at runtime.
 | `create_node` | `(kind: NodeKind) → NodeId` | Create a DSP node |
 | `connect` | `(from: NodeId, to: NodeId) → void` | Add DAG edge: from.output → to.input |
 | `disconnect` | `(from: NodeId, to: NodeId) → void` | Remove edge |
-| `set_node_param` | `(node: NodeId, param: Param, fade_ms: float) → void` | Set/animate a node param |
+| `set_node_param` | `(node: NodeId, kind: ParamKind, value: float, fade_ms: float) → void` | Set/animate a node param |
 | `get_node_param` | `(node: NodeId, kind: ParamKind) → float` | Read current param value |
 
 **Hot tier** (per-frame voice control, all args are primitives — zero object allocation at call site):
