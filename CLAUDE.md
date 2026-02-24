@@ -106,6 +106,8 @@ From ecosystem-wide session analysis:
 
 **Games are instantiable.** Multiple independent game instances must be able to run on the same page without sharing state. All mutable runtime state lives on a root runtime instance (`GameRuntime`, `FlashRuntime`, etc.) created at the entry point and threaded through generated code. No singletons, no module-level mutable state. Pure functions (math, string ops, color constants) stay as static imports; stateful functions are destructured from `this._rt` in methods or received as a `_rt` parameter in free functions.
 
+**The singleton rule is an architectural invariant, not defensive programming.** Do not argue that a module-level singleton or `let` variable is acceptable because "multiple instances per page won't happen in practice" or "avoiding singletons is just a precaution." It is not a precaution — it is a load-bearing rule. Module-level mutable state couples code to a single runtime lifetime, breaks hot reload, prevents parallel testing, and makes lifecycle ownership invisible. These costs exist even with one instance. The correct challenge to raise when applying this rule is: *where does this state actually belong?* — not whether the rule applies.
+
 ## Runtime Architecture
 
 Each engine runtime uses a three-layer architecture:
@@ -195,7 +197,7 @@ Do not:
 - Use path dependencies in Cargo.toml - causes clippy to stash changes across repos
 - Use `--no-verify` - fix the issue or fix the hook
 - Assume tools are missing - check if `nix develop` is available for the right environment
-- Use module-level mutable state — state belongs on the runtime instance that owns its lifecycle. If data flows from A to B, pass it explicitly (return value, parameter, field on an instance). Module-level `let` variables that get mutated across calls are hidden coupling, make code unpredictable, and prevent multiple game instances from coexisting on the same page. There are no exceptions — even registries (`Map<string, PassageFn>`) belong on the runtime instance.
+- Use module-level mutable state — state belongs on the runtime instance that owns its lifecycle. If data flows from A to B, pass it explicitly (return value, parameter, field on an instance). Module-level `let` variables that get mutated across calls are hidden coupling, make code unpredictable, and prevent multiple game instances from coexisting on the same page. There are no exceptions — even registries (`Map<string, PassageFn>`) belong on the runtime instance. **Do not argue that a singleton is acceptable because "one instance is the realistic case" — see the "Games are instantiable" design principle for why this reasoning is wrong.**
 - Use DOM data attributes as a state-passing mechanism — if you need to communicate between code paths, pass values through function parameters or object fields. Storing data on elements and querying it back later is a jQuery-era anti-pattern. Data attributes are for CSS selectors and third-party integration, not for plumbing your own code.
 - **Promote `|`/`&` to `||`/`&&` based on inferred types.** `|` and `||` are semantically different: `|` always evaluates both operands; `||` short-circuits. Replacing `a | b` with `a || b` silently changes runtime behavior when `b` has side effects. TypeScript errors from `boolean | boolean` (TS2447/TS2363) are game-author errors — the author used bitwise operators where they meant logical ones. Do not suppress these by silently changing the emitted operator. This has been decided multiple times.
 
