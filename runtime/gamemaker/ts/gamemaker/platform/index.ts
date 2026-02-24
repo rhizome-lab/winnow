@@ -2,3 +2,4 @@ export { GraphicsContext, initCanvas, createCanvas, resizeCanvas } from "./graph
 export { loadImage } from "./images";
 export { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onMouseWheel } from "./input";
 export { scheduleFrame, cancelFrame } from "./timing";
+export { saveItem, loadItem, removeItem } from "./persistence";

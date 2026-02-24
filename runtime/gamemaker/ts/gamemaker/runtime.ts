@@ -2,7 +2,7 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleFrame } from "./platform";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleFrame, saveItem, loadItem } from "./platform";
 import type { RenderRoot } from "../../../shared/ts/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
@@ -648,6 +648,7 @@ export class GameRuntime {
   private _hashVarMap = new Map<number, string>();
   private _nextVarHash = 1;
   private _gamepadDeadzones = new Map<number, number>();
+  private _psnTrophies = new Set<number>();
 
   ds_list_create(): number { const id = this._dsNextId++; this._dsLists.set(id, []); return id; }
   ds_list_destroy(list: number): void { this._dsLists.delete(list); }
@@ -1265,7 +1266,8 @@ export class GameRuntime {
   steam_input_run_frame(): void { throw new Error("steam_input_run_frame: not yet implemented"); }
   steam_file_write(_path: string, _data: string, _length?: number): boolean { throw new Error("steam_file_write: not yet implemented"); }
   steam_file_exists(_path: string): boolean { throw new Error("steam_file_exists: not yet implemented"); }
-  psn_post_uds_event(_evtype: number, ..._args: any[]): void { /* no-op: PSN not available in browser */ }
+  /** UDS (User Data System) is PS4-specific telemetry — no browser equivalent. */
+  psn_post_uds_event(_evtype: number, ..._args: any[]): void { /* no-op — PS4 telemetry, no browser equivalent */ }
 
   // ---- More file/buffer API ----
   file_text_open_write(_path: string): number {
@@ -1826,14 +1828,49 @@ export class GameRuntime {
   // ---- Video extras ----
   video_get_format(): string { throw new Error("video_get_format: not yet implemented"); }
 
-  // ---- PSN stubs ----
-  psn_init_trophy(_pad_index?: number): void { /* no-op: PSN not available in browser */ }
-  psn_unlock_trophy(_id: number, _slot: number = 0): void { /* no-op */ }
-  psn_get_trophy_unlock_state(_id: number): number { return 0; }
-  psn_tick(): void { /* no-op */ }
-  psn_tick_error_dialog(): void { /* no-op */ }
-  psn_np_commerce_dialog_tick(): void { /* no-op */ }
-  psn_save_data_backup(_slot?: any, _id?: any): void { /* no-op */ }
+  // ---- PSN — mapped to browser equivalents ----
+  // Trophy state is stored under __psn_trophy_<gameName> (distinct from __gml_fs_ ini saves).
+  // Save data backup is a no-op: localStorage is already persistent; no cloud sync needed.
+  // Communication restrictions and commerce dialogs have no browser equivalent.
+
+  /** Load trophy unlock state from storage into the in-memory set. */
+  psn_init_trophy(_pad_index?: number): void {
+    const gameName = this._storage.gameName;
+    const raw = loadItem("__psn_trophy_" + gameName);
+    if (raw) {
+      try {
+        const ids: number[] = JSON.parse(raw);
+        for (const id of ids) this._psnTrophies.add(id);
+      } catch { /* corrupt data — start fresh */ }
+    }
+  }
+
+  /** Unlock a trophy by ID; persist immediately. */
+  psn_unlock_trophy(id: number, _slot: number = 0): void {
+    this._psnTrophies.add(id);
+    saveItem("__psn_trophy_" + this._storage.gameName, JSON.stringify([...this._psnTrophies]));
+  }
+
+  /**
+   * Return trophy unlock state: 0 = locked, 1 = unlocked.
+   * (GML also defines 2 = "unlock pending"; we use 0/1 since our unlocks are synchronous.)
+   */
+  psn_get_trophy_unlock_state(id: number): number {
+    return this._psnTrophies.has(id) ? 1 : 0;
+  }
+
+  /** Process pending PSN async callbacks. All our PSN ops are synchronous, so this is a no-op. */
+  psn_tick(): void { /* no-op — all PSN operations are synchronous in browser */ }
+  psn_tick_error_dialog(): void { /* no-op — no PSN errors in browser */ }
+  psn_np_commerce_dialog_tick(): void { /* no-op — PSN commerce not available in browser */ }
+
+  /**
+   * Request a cloud backup of save data. localStorage is already persistent,
+   * so this is a no-op in the browser (data is not lost between sessions).
+   */
+  psn_save_data_backup(_slot?: any, _id?: any): void { /* no-op — localStorage is already persistent */ }
+
+  /** Return communication restriction status. 0 = unrestricted (no PSN parental controls in browser). */
   psn_communication_restriction_status(_pad_index?: number): number { return 0; }
 
   // ---- More Steam ----
