@@ -4,10 +4,16 @@ export { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } fro
 export { scheduleTimeout, cancelTimeout } from "./timing";
 export { PersistenceState, init, save, load, remove } from "./persistence";
 export {
-  AudioState, loadAudio,
+  AudioState,
+  NodeKind, Param, ParamKind,
+  loadAudio,
+  createNode, connect, disconnect, setNodeParam, getNodeParam,
   play, stop, stopAll, pause, resume, resumeAll,
   isPlaying, isPaused,
-  setGain, getGain, setPitch, getPitch, setPan, getPan,
-  setMasterGain, getPosition, setPosition, soundLength,
-  createBus, setBusGain, getBusGain, pauseBus, resumeBus, stopBus,
+  setVoiceGain, getVoiceGain,
+  setVoicePitch, getVoicePitch,
+  setVoicePan, getVoicePan,
+  setMasterGain,
+  getPosition, setPosition, soundLength,
+  stopNode, pauseNode, resumeNode,
 } from "./audio";

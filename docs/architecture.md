@@ -371,24 +371,81 @@ The platform interface is a **cross-language contract** — TypeScript, Rust, C#
 
 #### Audio
 
+The audio platform is a **node graph**. The signal path is:
+
+```
+[Buffer] → [Voice (gain+pan)] → [NodeGraph: user DAG] → [Master (node 0)]
+```
+
+Voices are per-play instances; the node graph is a user-defined DAG of DSP nodes
+established at init time. Playing a voice routes its output to a designated sink node.
+Fixed topologies (Buffer→Bus→Master) are special cases of the graph, not the interface.
+
+**Opaque handle types** (u32, cross-language safe):
+- `BufferId` — decoded audio data (`load_audio` assigns IDs = SOND index)
+- `NodeId` — a DSP node in the graph (0 = master output, always valid)
+- `VoiceId` — a playing voice instance (0 = invalid)
+
+**Node kinds**: `gain | pan | low_pass | high_pass | band_pass | notch | compressor | reverb | delay | mixer`
+
+**Param value enum** — carries both the parameter kind and its value, so each call is self-describing:
+```
+{ kind: "gain",       value: float }   // linear amplitude (0..∞)
+{ kind: "pan",        value: float }   // stereo position (-1=L, 0=C, 1=R)
+{ kind: "cutoff",     value: float }   // filter cutoff (Hz)
+{ kind: "resonance",  value: float }   // filter Q factor
+{ kind: "wet_mix",    value: float }   // reverb/delay wet/dry blend (0=dry, 1=wet)
+{ kind: "decay",      value: float }   // reverb tail (seconds)
+{ kind: "delay_time", value: float }   // echo delay (seconds)
+{ kind: "feedback",   value: float }   // echo feedback (0..1)
+{ kind: "threshold",  value: float }   // compressor threshold (dBFS, negative)
+{ kind: "ratio",      value: float }   // compressor ratio (e.g. 4 = 4:1)
+{ kind: "attack",     value: float }   // attack time (seconds)
+{ kind: "release",    value: float }   // release time (seconds)
+{ kind: "knee",       value: float }   // compressor knee width (dB)
+```
+Each node kind accepts only its own params; others throw at runtime.
+
+**Setup tier** (graph construction, init-time, not perf-critical):
+
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds at startup |
-| `play` | `(index: int, loop: bool, gain: float, pitch: float, offset: float) → handle` | Play sound, returns handle |
-| `stop` | `(handle: int) → void` | Stop and discard |
-| `stop_all` | `() → void` | Stop all playing sounds |
-| `pause` | `(handle: int) → void` | Pause, remember position |
-| `resume` | `(handle: int) → void` | Resume from pause position |
-| `resume_all` | `() → void` | Resume all paused sounds |
-| `is_playing` | `(handle: int) → bool` | True if playing (not paused, not ended) |
-| `get_gain` | `(handle: int) → float` | Per-sound gain |
-| `set_gain` | `(handle: int, gain: float, fade_ms: float) → void` | Per-sound gain with optional fade |
-| `get_pitch` | `(handle: int) → float` | Playback rate multiplier |
-| `set_pitch` | `(handle: int, pitch: float) → void` | |
-| `set_master_gain` | `(gain: float) → void` | Global gain |
-| `get_position` | `(handle: int) → float` | Playback position in seconds |
-| `set_position` | `(handle: int, pos: float) → void` | Seek (restarts node internally) |
-| `sound_length` | `(index: int) → float` | Duration of loaded sound in seconds |
+| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds; assigns BufferIds |
+| `create_node` | `(kind: NodeKind) → NodeId` | Create a DSP node |
+| `connect` | `(from: NodeId, to: NodeId) → void` | Add DAG edge: from.output → to.input |
+| `disconnect` | `(from: NodeId, to: NodeId) → void` | Remove edge |
+| `set_node_param` | `(node: NodeId, param: Param, fade_ms: float) → void` | Set/animate a node param |
+| `get_node_param` | `(node: NodeId, kind: ParamKind) → float` | Read current param value |
+
+**Hot tier** (per-frame voice control, all args are primitives — zero object allocation at call site):
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `play` | `(buffer: BufferId, sink: NodeId, loop: bool, gain: float, pitch: float, pan: float, offset: float) → VoiceId` | Play, route through sink |
+| `stop` | `(voice: VoiceId) → void` | Stop and discard |
+| `stop_all` | `() → void` | Stop all voices |
+| `pause` | `(voice: VoiceId) → void` | Pause, remember position |
+| `resume` | `(voice: VoiceId) → void` | Resume from pause position |
+| `resume_all` | `() → void` | Resume all paused voices |
+| `is_playing` | `(voice: VoiceId) → bool` | True if playing (not paused, not ended) |
+| `is_paused` | `(voice: VoiceId) → bool` | |
+| `set_voice_gain` | `(voice: VoiceId, gain: float, fade_ms: float) → void` | Per-voice gain |
+| `get_voice_gain` | `(voice: VoiceId) → float` | |
+| `set_voice_pitch` | `(voice: VoiceId, pitch: float, fade_ms: float) → void` | Playback rate |
+| `get_voice_pitch` | `(voice: VoiceId) → float` | |
+| `set_voice_pan` | `(voice: VoiceId, pan: float) → void` | Stereo pan |
+| `get_voice_pan` | `(voice: VoiceId) → float` | |
+| `set_master_gain` | `(gain: float) → void` | Shorthand for set_node_param(0, gain) |
+| `get_position` | `(voice: VoiceId) → float` | Playback position in seconds |
+| `set_position` | `(voice: VoiceId, pos: float) → void` | Seek |
+| `sound_length` | `(buffer: BufferId) → float` | Duration in seconds |
+| `stop_node` | `(node: NodeId) → void` | Stop all voices routed to node |
+| `pause_node` | `(node: NodeId) → void` | Pause all voices routed to node |
+| `resume_node` | `(node: NodeId) → void` | Resume all paused voices routed to node |
+
+Engine-specific audio behaviors (exclusive channels, BGM crossfade, voice stealing by priority,
+named channels) are shim concerns — implemented by composing the above primitives, not baked
+into the platform interface.
 
 #### Input
 
@@ -420,8 +477,8 @@ The platform interface is a **cross-language contract** — TypeScript, Rust, C#
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `schedule_frame` | `(cb: () → void, delay_ms: float) → handle` | |
-| `cancel_frame` | `(handle: int) → void` | |
+| `schedule_timeout` | `(cb: () → void, delay_ms: float) → handle` | |
+| `cancel_timeout` | `(handle: int) → void` | |
 
 ### Rust: generic traits
 

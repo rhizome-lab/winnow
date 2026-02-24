@@ -14,13 +14,13 @@ import {
   play as audioPlay, stop as audioStop, stopAll as audioStopAll,
   pause as audioPause, resume as audioResume, resumeAll as audioResumeAll,
   isPlaying as audioIsPlaying, isPaused as audioIsPaused,
-  setGain as audioSetGain, getGain as audioGetGain,
-  setPitch as audioSetPitch, getPitch as audioGetPitch,
-  setPan as audioSetPan, getPan as audioGetPan,
+  setVoiceGain as audioSetGain, getVoiceGain as audioGetGain,
+  setVoicePitch as audioSetPitch, getVoicePitch as audioGetPitch,
+  setVoicePan as audioSetPan, getVoicePan as audioGetPan,
   setMasterGain as audioSetMasterGain,
   getPosition as audioGetPosition, setPosition as audioSetPosition,
   soundLength as audioSoundLength,
-  createBus, setBusGain, getBusGain, pauseBus, resumeBus, stopBus,
+  setNodeParam as audioSetNodeParam,
 } from "./platform/audio";
 import { MathState, createMathAPI } from "./math";
 import { createGlobalAPI } from "./global";
@@ -630,7 +630,7 @@ export class GameRuntime {
   audio_get_name(sound: number): string { return this.sounds[sound]?.name ?? ""; }
   audio_group_load(_group: number): void { /* no-op — all audio loaded at startup */ }
   audio_group_stop_all(_group: number): void { audioStopAll(this._audio); }
-  audio_group_set_gain(_group: number, gain: number, timeMs: number): void { setBusGain(this._audio, 0, gain, timeMs); }
+  audio_group_set_gain(_group: number, gain: number, timeMs: number): void { audioSetNodeParam(this._audio, 0, { kind: "gain", value: gain }, timeMs); }
 
   // ---- Particle API (unimplemented — requires particle simulation) ----
 
