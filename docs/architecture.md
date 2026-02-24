@@ -493,6 +493,22 @@ trait Graphics {
     fn draw_text(&mut self, text: &str, x: f32, y: f32, font: &str, size: f32);
     // ...
 }
+
+trait Audio {
+    fn create_node(&mut self, kind: NodeKind) -> NodeId;
+    fn connect(&mut self, from: NodeId, to: NodeId);
+    fn set_node_param(&mut self, node: NodeId, kind: ParamKind, value: f32, fade_ms: f32);
+    fn play(&mut self, params: PlayParams) -> VoiceId;  // struct avoids 8-arg limit
+    fn stop(&mut self, voice: VoiceId);
+    fn set_voice_gain(&mut self, voice: VoiceId, gain: f32, fade_ms: f32);
+    // ...
+}
+
+trait Persistence {
+    fn save(&mut self, key: &str, data: &str);
+    fn load(&self, key: &str) -> Option<String>;
+    fn remove(&mut self, key: &str);
+}
 ```
 
 The Flash API shim is generic over the platform:
