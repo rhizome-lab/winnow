@@ -1,19 +1,27 @@
 /** Browser dialog — modal dialogue boxes. */
 
-import { buildDialogChrome, hideOverlay, isOverlayVisible } from "./_overlay";
+import { OverlayManager } from "./_overlay";
 
-export function showDialog(title: string, content: DocumentFragment | HTMLElement): void {
-  buildDialogChrome(title, content, closeDialog);
-}
+export class DialogManager {
+  private overlay: OverlayManager;
 
-export function closeDialog(): void {
-  hideOverlay();
-}
+  constructor(overlay: OverlayManager) {
+    this.overlay = overlay;
+  }
 
-export function isDialogOpen(): boolean {
-  return isOverlayVisible();
-}
+  showDialog(title: string, content: DocumentFragment | HTMLElement): void {
+    this.overlay.buildDialogChrome(title, content, () => this.closeDialog());
+  }
 
-export function initCommands(register: (id: string, binding: string, handler: () => void) => void): void {
-  register("close-dialog", "escape", closeDialog);
+  closeDialog(): void {
+    this.overlay.hideOverlay();
+  }
+
+  isDialogOpen(): boolean {
+    return this.overlay.isOverlayVisible();
+  }
+
+  initCommands(register: (id: string, binding: string, handler: () => void) => void): void {
+    register("close-dialog", "escape", () => this.closeDialog());
+  }
 }

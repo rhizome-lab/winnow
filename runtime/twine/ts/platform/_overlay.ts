@@ -5,85 +5,83 @@
  * files and can ignore or replace this helper.
  */
 
-class DialogManager {
-  dialogOverlay: HTMLDivElement | null = null;
-}
+export class OverlayManager {
+  private dialogOverlay: HTMLDivElement | null = null;
 
-const dialog = new DialogManager();
-
-export function getOrCreateOverlay(onClose: () => void): HTMLDivElement {
-  if (dialog.dialogOverlay) {
-    // Update the click-to-close handler for the current consumer
-    dialog.dialogOverlay.onclick = (e) => {
-      if (e.target === dialog.dialogOverlay) onClose();
+  getOrCreateOverlay(onClose: () => void): HTMLDivElement {
+    if (this.dialogOverlay) {
+      // Update the click-to-close handler for the current consumer
+      this.dialogOverlay.onclick = (e) => {
+        if (e.target === this.dialogOverlay) onClose();
+      };
+      return this.dialogOverlay;
+    }
+    const overlay = document.createElement("div");
+    overlay.id = "reincarnate-dialog-overlay";
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.6); display: flex;
+      justify-content: center; align-items: center;
+    `;
+    overlay.onclick = (e) => {
+      if (e.target === overlay) onClose();
     };
-    return dialog.dialogOverlay;
+    document.body.appendChild(overlay);
+    this.dialogOverlay = overlay;
+    return overlay;
   }
-  const overlay = document.createElement("div");
-  overlay.id = "reincarnate-dialog-overlay";
-  overlay.style.cssText = `
-    position: fixed; inset: 0; z-index: 10000;
-    background: rgba(0,0,0,0.6); display: flex;
-    justify-content: center; align-items: center;
-  `;
-  overlay.onclick = (e) => {
-    if (e.target === overlay) onClose();
-  };
-  document.body.appendChild(overlay);
-  dialog.dialogOverlay = overlay;
-  return overlay;
-}
 
-export function hideOverlay(): void {
-  if (dialog.dialogOverlay) {
-    dialog.dialogOverlay.style.display = "none";
-    dialog.dialogOverlay.innerHTML = "";
+  hideOverlay(): void {
+    if (this.dialogOverlay) {
+      this.dialogOverlay.style.display = "none";
+      this.dialogOverlay.innerHTML = "";
+    }
   }
-}
 
-export function isOverlayVisible(): boolean {
-  return dialog.dialogOverlay !== null && dialog.dialogOverlay.style.display !== "none";
-}
+  isOverlayVisible(): boolean {
+    return this.dialogOverlay !== null && this.dialogOverlay.style.display !== "none";
+  }
 
-export function buildDialogChrome(
-  title: string,
-  content: DocumentFragment | HTMLElement,
-  onClose: () => void,
-): void {
-  const overlay = getOrCreateOverlay(onClose);
-  overlay.style.display = "flex";
-  overlay.innerHTML = "";
+  buildDialogChrome(
+    title: string,
+    content: DocumentFragment | HTMLElement,
+    onClose: () => void,
+  ): void {
+    const overlay = this.getOrCreateOverlay(onClose);
+    overlay.style.display = "flex";
+    overlay.innerHTML = "";
 
-  const dialog = document.createElement("div");
-  dialog.style.cssText = `
-    background: #1a1a1a; color: #eee; border: 1px solid #555;
-    border-radius: 6px; max-width: 600px; width: 90%; max-height: 80vh;
-    overflow-y: auto; padding: 0;
-  `;
+    const dialog = document.createElement("div");
+    dialog.style.cssText = `
+      background: #1a1a1a; color: #eee; border: 1px solid #555;
+      border-radius: 6px; max-width: 600px; width: 90%; max-height: 80vh;
+      overflow-y: auto; padding: 0;
+    `;
 
-  const header = document.createElement("div");
-  header.style.cssText = `
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0.8em 1em; border-bottom: 1px solid #333;
-  `;
-  const titleEl = document.createElement("h3");
-  titleEl.style.cssText = "margin: 0; font-size: 1.1em;";
-  titleEl.textContent = title;
-  const closeBtn = document.createElement("button");
-  closeBtn.textContent = "\u00D7";
-  closeBtn.style.cssText = `
-    background: none; border: none; color: #aaa; font-size: 1.4em;
-    cursor: pointer; padding: 0 0.3em; line-height: 1;
-  `;
-  closeBtn.addEventListener("click", onClose);
-  header.appendChild(titleEl);
-  header.appendChild(closeBtn);
+    const header = document.createElement("div");
+    header.style.cssText = `
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.8em 1em; border-bottom: 1px solid #333;
+    `;
+    const titleEl = document.createElement("h3");
+    titleEl.style.cssText = "margin: 0; font-size: 1.1em;";
+    titleEl.textContent = title;
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "\u00D7";
+    closeBtn.style.cssText = `
+      background: none; border: none; color: #aaa; font-size: 1.4em;
+      cursor: pointer; padding: 0 0.3em; line-height: 1;
+    `;
+    closeBtn.addEventListener("click", onClose);
+    header.appendChild(titleEl);
+    header.appendChild(closeBtn);
 
-  const body = document.createElement("div");
-  body.style.cssText = "padding: 1em;";
-  body.appendChild(content);
+    const body = document.createElement("div");
+    body.style.cssText = "padding: 1em;";
+    body.appendChild(content);
 
-  dialog.appendChild(header);
-  dialog.appendChild(body);
-  overlay.appendChild(dialog);
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    overlay.appendChild(dialog);
+  }
 }

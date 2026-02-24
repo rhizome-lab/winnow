@@ -3,66 +3,61 @@
 import keybindsInit, { type Command, registerComponents, executeCommand } from "keybinds";
 
 // Register web components (<command-palette>, <keybind-cheatsheet>, etc.)
+// This is idempotent and browser-global — safe to call at module load time.
 registerComponents();
 
-class InputManager {
-  commands: Command[] = [];
-  cleanup: (() => void) | null = null;
-  palette: HTMLElement | null = null;
-  cheatsheet: HTMLElement | null = null;
-}
+export class InputManager {
+  private commands: Command[] = [];
+  private cleanup: (() => void) | null = null;
+  private palette: HTMLElement | null = null;
+  private cheatsheet: HTMLElement | null = null;
 
-const input = new InputManager();
+  private ensureUI(): void {
+    if (this.palette) return;
+    this.palette = document.createElement("command-palette");
+    this.palette.setAttribute("auto-trigger", "");
+    document.body.appendChild(this.palette);
 
-function ensureUI(): void {
-  if (input.palette) return;
-  input.palette = document.createElement("command-palette");
-  input.palette.setAttribute("auto-trigger", "");
-  document.body.appendChild(input.palette);
-
-  input.cheatsheet = document.createElement("keybind-cheatsheet");
-  input.cheatsheet.setAttribute("auto-trigger", "");
-  document.body.appendChild(input.cheatsheet);
-}
-
-function syncUI(): void {
-  if (input.palette) (input.palette as any).commands = input.commands;
-  if (input.cheatsheet) (input.cheatsheet as any).commands = input.commands;
-}
-
-function rebind(): void {
-  if (input.cleanup) input.cleanup();
-  if (input.commands.length > 0) {
-    input.cleanup = keybindsInit(input.commands);
+    this.cheatsheet = document.createElement("keybind-cheatsheet");
+    this.cheatsheet.setAttribute("auto-trigger", "");
+    document.body.appendChild(this.cheatsheet);
   }
-  syncUI();
-}
 
-export function registerCommand(
-  id: string,
-  defaultBinding: string,
-  handler: () => void,
-): void {
-  ensureUI();
-  input.commands = input.commands.filter(c => c.id !== id);
-  input.commands.push({
-    id,
-    label: id.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
-    keys: defaultBinding ? [defaultBinding] : [],
-    execute: handler,
-  });
-  rebind();
-}
+  private syncUI(): void {
+    if (this.palette) (this.palette as any).commands = this.commands;
+    if (this.cheatsheet) (this.cheatsheet as any).commands = this.commands;
+  }
 
-export function removeCommand(id: string): void {
-  input.commands = input.commands.filter(c => c.id !== id);
-  rebind();
-}
+  private rebind(): void {
+    if (this.cleanup) this.cleanup();
+    if (this.commands.length > 0) {
+      this.cleanup = keybindsInit(this.commands);
+    }
+    this.syncUI();
+  }
 
-export function triggerCommand(id: string): void {
-  executeCommand(input.commands, id);
-}
+  registerCommand(id: string, defaultBinding: string, handler: () => void): void {
+    this.ensureUI();
+    this.commands = this.commands.filter(c => c.id !== id);
+    this.commands.push({
+      id,
+      label: id.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+      keys: defaultBinding ? [defaultBinding] : [],
+      execute: handler,
+    });
+    this.rebind();
+  }
 
-export function getCommands(): Command[] {
-  return input.commands;
+  removeCommand(id: string): void {
+    this.commands = this.commands.filter(c => c.id !== id);
+    this.rebind();
+  }
+
+  triggerCommand(id: string): void {
+    executeCommand(this.commands, id);
+  }
+
+  getCommands(): Command[] {
+    return this.commands;
+  }
 }

@@ -5,7 +5,7 @@
  * Deployers can swap the SaveBackend to change where saves are stored.
  */
 
-import { type SaveSlotInfo, showSaveUI } from "./save-ui";
+import { type SaveSlotInfo } from "./save-ui";
 
 /** Deployer-configurable persistence options (from reincarnate.json). */
 export interface PersistenceOpts {
@@ -33,127 +33,139 @@ export interface SaveableState {
   deserialize(data: string): string | undefined;
 }
 
-// --- Module state (injected via init) ---
+// --- Save service ---
 
-let state: SaveableState;
-let backend: SaveBackend;
-let gotoFn: (passage: string) => void;
-let slotPrefix = "reincarnate-save-";
-let autosaveEnabled = true;
-const SLOT_COUNT = 8;
+export class SaveManager {
+  private state: SaveableState;
+  private backend: SaveBackend;
+  private gotoFn: (passage: string) => void;
+  private _showSaveUI: (
+    slots: SaveSlotInfo[],
+    onSave: (i: number) => void,
+    onLoad: (i: number) => void,
+    onDelete: (i: number) => void,
+  ) => void;
+  private slotPrefix = "reincarnate-save-";
+  private autosaveEnabled = true;
+  private static readonly SLOT_COUNT = 8;
 
-// --- Public API ---
+  constructor(
+    state: SaveableState,
+    backend: SaveBackend,
+    gotoFn: (passage: string) => void,
+    registerCommand: (id: string, binding: string, handler: () => void) => void,
+    showSaveUI: (
+      slots: SaveSlotInfo[],
+      onSave: (i: number) => void,
+      onLoad: (i: number) => void,
+      onDelete: (i: number) => void,
+    ) => void,
+    prefix?: string,
+    autosave?: boolean,
+  ) {
+    this.state = state;
+    this.backend = backend;
+    this.gotoFn = gotoFn;
+    this._showSaveUI = showSaveUI;
+    if (prefix !== undefined) this.slotPrefix = prefix;
+    this.autosaveEnabled = autosave !== false;
 
-/** Initialize the save service. Must be called before any other save function. */
-export function init(
-  s: SaveableState,
-  b: SaveBackend,
-  goto: (passage: string) => void,
-  registerCommand: (id: string, binding: string, handler: () => void) => void,
-  prefix?: string,
-  autosave?: boolean,
-): void {
-  state = s;
-  backend = b;
-  gotoFn = goto;
-  if (prefix !== undefined) slotPrefix = prefix;
-  autosaveEnabled = autosave !== false;
-
-  registerCommand("quicksave", "$mod+s", () => saveSlot("auto"));
-  registerCommand("quickload", "", () => {
-    const title = loadSlot("auto");
-    if (title) gotoFn(title);
-  });
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    const slot = i;
-    registerCommand(`save-to-slot-${slot + 1}`, "", () => saveSlot(String(slot)));
-    registerCommand(`load-from-slot-${slot + 1}`, "", () => {
-      const title = loadSlot(String(slot));
-      if (title) gotoFn(title);
+    registerCommand("quicksave", "$mod+s", () => this.saveSlot("auto"));
+    registerCommand("quickload", "", () => {
+      const title = this.loadSlot("auto");
+      if (title) this.gotoFn(title);
+    });
+    for (let i = 0; i < SaveManager.SLOT_COUNT; i++) {
+      const slot = i;
+      registerCommand(`save-to-slot-${slot + 1}`, "", () => this.saveSlot(String(slot)));
+      registerCommand(`load-from-slot-${slot + 1}`, "", () => {
+        const title = this.loadSlot(String(slot));
+        if (title) this.gotoFn(title);
+      });
+    }
+    registerCommand("open-saves", "", () => {
+      const slots: SaveSlotInfo[] = [];
+      for (let i = 0; i < SaveManager.SLOT_COUNT; i++) {
+        const has = this.hasSlot(String(i));
+        slots.push({ index: i, title: has ? `Save ${i + 1}` : null, date: null, isEmpty: !has });
+      }
+      this._showSaveUI(
+        slots,
+        (i) => this.saveSlot(String(i)),
+        (i) => { const t = this.loadSlot(String(i)); if (t) this.gotoFn(t); },
+        (i) => this.deleteSlot(String(i)),
+      );
+    });
+    registerCommand("export-save", "", () => {
+      navigator.clipboard.writeText(btoa(this.state.serialize()));
     });
   }
-  registerCommand("open-saves", "", () => {
-    const slots: SaveSlotInfo[] = [];
-    for (let i = 0; i < SLOT_COUNT; i++) {
-      const has = hasSlot(String(i));
-      slots.push({ index: i, title: has ? `Save ${i + 1}` : null, date: null, isEmpty: !has });
+
+  /** Continuous autosave — call after each passage transition. */
+  commit(): void {
+    if (!this.autosaveEnabled) return;
+    try {
+      this.backend.save(this.slotPrefix + "_autosave", this.state.serialize());
+    } catch {
+      // Silent fail — autosave is best-effort
     }
-    showSaveUI(
-      slots,
-      (i) => saveSlot(String(i)),
-      (i) => { const t = loadSlot(String(i)); if (t) gotoFn(t); },
-      (i) => deleteSlot(String(i)),
-    );
-  });
-  registerCommand("export-save", "", () => {
-    navigator.clipboard.writeText(btoa(state.serialize()));
-  });
-}
+  }
 
-/** Continuous autosave — call after each passage transition. */
-export function commit(): void {
-  if (!autosaveEnabled) return;
-  try {
-    backend.save(slotPrefix + "_autosave", state.serialize());
-  } catch {
-    // Silent fail — autosave is best-effort
+  /** Check for an existing autosave and resume. Returns passage title or undefined. */
+  tryResume(): string | undefined {
+    const raw = this.backend.load(this.slotPrefix + "_autosave");
+    if (raw === null) return undefined;
+    return this.state.deserialize(raw);
+  }
+
+  /** Clear the autosave. */
+  clearAutosave(): void {
+    this.backend.remove(this.slotPrefix + "_autosave");
+  }
+
+  /** Save current state to a named slot. */
+  saveSlot(name: string): boolean {
+    try {
+      this.backend.save(this.slotPrefix + name, this.state.serialize());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Load state from a named slot. Returns passage title or undefined. */
+  loadSlot(name: string): string | undefined {
+    const raw = this.backend.load(this.slotPrefix + name);
+    if (raw === null) return undefined;
+    return this.state.deserialize(raw);
+  }
+
+  /** Delete a save slot. */
+  deleteSlot(name: string): void {
+    this.backend.remove(this.slotPrefix + name);
+  }
+
+  /** Check if a save slot exists. */
+  hasSlot(name: string): boolean {
+    return this.backend.load(this.slotPrefix + name) !== null;
+  }
+
+  /** Get the number of used slots (excluding auto). */
+  slotCount(): number {
+    let n = 0;
+    for (let i = 0; i < SaveManager.SLOT_COUNT; i++) {
+      if (this.hasSlot(String(i))) n++;
+    }
+    return n;
+  }
+
+  /** Get the total number of available slots. */
+  totalSlots(): number {
+    return SaveManager.SLOT_COUNT;
   }
 }
 
-/** Check for an existing autosave and resume. Returns passage title or undefined. */
-export function tryResume(): string | undefined {
-  const raw = backend.load(slotPrefix + "_autosave");
-  if (raw === null) return undefined;
-  return state.deserialize(raw);
-}
-
-/** Clear the autosave. */
-export function clearAutosave(): void {
-  backend.remove(slotPrefix + "_autosave");
-}
-
-/** Save current state to a named slot. */
-export function saveSlot(name: string): boolean {
-  try {
-    backend.save(slotPrefix + name, state.serialize());
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Load state from a named slot. Returns passage title or undefined. */
-export function loadSlot(name: string): string | undefined {
-  const raw = backend.load(slotPrefix + name);
-  if (raw === null) return undefined;
-  return state.deserialize(raw);
-}
-
-/** Delete a save slot. */
-export function deleteSlot(name: string): void {
-  backend.remove(slotPrefix + name);
-}
-
-/** Check if a save slot exists. */
-export function hasSlot(name: string): boolean {
-  return backend.load(slotPrefix + name) !== null;
-}
-
-/** Get the number of used slots (excluding auto). */
-export function slotCount(): number {
-  let n = 0;
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    if (hasSlot(String(i))) n++;
-  }
-  return n;
-}
-
-/** Get the total number of available slots. */
-export function totalSlots(): number {
-  return SLOT_COUNT;
-}
-
-// --- Composable backend wrappers ---
+// --- Composable backend wrappers (pure, no state) ---
 
 /** Fan-out writes to multiple backends. Reads from the first. */
 export function tee(...backends: SaveBackend[]): SaveBackend {
