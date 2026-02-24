@@ -705,25 +705,24 @@ export class Bitmap extends DisplayObject {
 }
 
 // ---------------------------------------------------------------------------
-// Drag state (module-level singleton)
+// Drag state (per-stage, keyed by Stage instance)
 // ---------------------------------------------------------------------------
 
 /** @internal */
-export let _dragTarget: Sprite | null = null;
-/** @internal */
-export let _dragBounds: Rectangle | null = null;
-/** @internal */
-export let _dragLockCenter = false;
-/** @internal */
-export let _dragOffsetX = NaN;
-/** @internal */
-export let _dragOffsetY = NaN;
-
-/** @internal */
-export function _setDragOffset(ox: number, oy: number): void {
-  _dragOffsetX = ox;
-  _dragOffsetY = oy;
+export interface DragState {
+  target: Sprite;
+  bounds: Rectangle | null;
+  lockCenter: boolean;
+  offsetX: number;
+  offsetY: number;
 }
+
+/**
+ * Per-stage drag state — each FlashRuntime has its own Stage, so this
+ * WeakMap naturally provides isolation between concurrent game instances.
+ * @internal
+ */
+export const _dragStateByStage = new WeakMap<Stage, DragState | null>();
 
 // ---------------------------------------------------------------------------
 // Sprite
@@ -751,19 +750,18 @@ export class Sprite extends DisplayObjectContainer {
   set useHandCursor(v: boolean) { this._useHandCursor = v; }
 
   startDrag(lockCenter = false, bounds: Rectangle | null = null): void {
-    _dragTarget = this;
-    _dragLockCenter = lockCenter;
-    _dragBounds = bounds;
-    // NaN offset = first-move sentinel; computed on first mouse move.
-    _dragOffsetX = NaN;
-    _dragOffsetY = NaN;
+    const stage = this.stage;
+    if (stage) {
+      // NaN offset = first-move sentinel; computed on first mouse move.
+      _dragStateByStage.set(stage, { target: this, lockCenter, bounds, offsetX: NaN, offsetY: NaN });
+    }
   }
 
   stopDrag(): void {
-    if (_dragTarget === this) {
-      _dragTarget = null;
-      _dragBounds = null;
-    }
+    const stage = this.stage;
+    if (!stage) return;
+    const drag = _dragStateByStage.get(stage);
+    if (drag?.target === this) _dragStateByStage.set(stage, null);
   }
 }
 

@@ -11,12 +11,7 @@ import {
   Sprite,
   MovieClip,
   Graphics,
-  _dragTarget,
-  _dragBounds,
-  _dragLockCenter,
-  _dragOffsetX,
-  _dragOffsetY,
-  _setDragOffset,
+  _dragStateByStage,
   _setConstructingRoot,
 } from "./display";
 import {
@@ -147,7 +142,7 @@ export class FlashRuntime {
 
       // Update drag target position on mouse move.
       if (type === FlashMouseEvent.MOUSE_MOVE) {
-        updateDrag(sx, sy);
+        updateDrag(stage, sx, sy);
       }
 
       // Find the deepest interactive object under the mouse.
@@ -587,25 +582,28 @@ function canvasCoords(canvas: HTMLCanvasElement, e: MouseEvent): [number, number
   return [e.clientX - rect.left, e.clientY - rect.top];
 }
 
-function updateDrag(sx: number, sy: number): void {
-  if (!_dragTarget) return;
+function updateDrag(stage: Stage, sx: number, sy: number): void {
+  const drag = _dragStateByStage.get(stage) ?? null;
+  if (!drag) return;
   // Compute offset on first move.
-  if (isNaN(_dragOffsetX)) {
-    if (_dragLockCenter) {
-      _setDragOffset(0, 0);
+  if (isNaN(drag.offsetX)) {
+    if (drag.lockCenter) {
+      drag.offsetX = 0;
+      drag.offsetY = 0;
     } else {
-      _setDragOffset(_dragTarget.x - sx, _dragTarget.y - sy);
+      drag.offsetX = drag.target.x - sx;
+      drag.offsetY = drag.target.y - sy;
     }
   }
-  let nx = sx + _dragOffsetX;
-  let ny = sy + _dragOffsetY;
+  let nx = sx + drag.offsetX;
+  let ny = sy + drag.offsetY;
   // Apply bounds constraint.
-  if (_dragBounds) {
-    if (nx < _dragBounds.x) nx = _dragBounds.x;
-    if (ny < _dragBounds.y) ny = _dragBounds.y;
-    if (nx > _dragBounds.right) nx = _dragBounds.right;
-    if (ny > _dragBounds.bottom) ny = _dragBounds.bottom;
+  if (drag.bounds) {
+    if (nx < drag.bounds.x) nx = drag.bounds.x;
+    if (ny < drag.bounds.y) ny = drag.bounds.y;
+    if (nx > drag.bounds.right) nx = drag.bounds.right;
+    if (ny > drag.bounds.bottom) ny = drag.bounds.bottom;
   }
-  _dragTarget.x = nx;
-  _dragTarget.y = ny;
+  drag.target.x = nx;
+  drag.target.y = ny;
 }
