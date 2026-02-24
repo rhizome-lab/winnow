@@ -189,7 +189,8 @@ The rule: never widen types to accommodate buggy game code — TypeScript catchi
 
 All mutable state in the Flash runtime lives at module scope, which means two Flash games cannot run on the same page and a second `createFlashRuntime()` call would stomp on the first. All of the following need to move onto the `FlashRuntime` instance (analogous to how `GameRuntime` was designed from the start).
 
-- [ ] **`flash/display.ts` — exported drag state** (`_dragTarget`, `_dragBounds`, `_dragLockCenter`, `_dragOffsetX`, `_dragOffsetY`, lines 712–720) and `_displayState` singleton (line 1213). Drag state is `export let`, meaning any importer can mutate it — remove the export, move onto runtime instance.
+- [x] **`flash/display.ts` — exported drag state** (`_dragTarget`, `_dragBounds`, `_dragLockCenter`, `_dragOffsetX`, `_dragOffsetY`). Replaced with `_dragStateByStage: WeakMap<Stage, DragState | null>` — now keyed by Stage so each FlashRuntime has isolated drag state.
+- [ ] **`flash/display.ts` — `_displayState` singleton** (line ~1209). Single-threaded JS means two concurrent `constructRoot()` can't interleave, so this is safe in practice but still wrong in principle. Move to a WeakMap keyed by Stage or pass stage directly.
 - [ ] **`flash/timing.ts` — `TimingState` singleton** — `state = new TimingState()` at module scope (line 9); `timing` object wraps it. Move to `FlashRuntime.timing` instance field; same pattern as `GameRuntime.onTick`.
 - [ ] **`flash/input.ts` — `InputState` singleton** — `state = new InputState()` at module scope (line 12); DOM event listeners registered unconditionally on import. Move to `FlashRuntime.input`; attach/detach listeners in `start()`/`stop()`.
 - [ ] **`flash/audio.ts` — `AudioState` singleton** — `_audio = new AudioState()` at module scope. Move to `FlashRuntime.audio`; `_ensureInit()` becomes part of `FlashRuntime.start()`.
@@ -206,6 +207,13 @@ The Twine platform modules (`save`, `input`, `layout`, `save-ui`, `settings-ui`,
 - [ ] **`platform/layout.ts`** — `layout = new LayoutManager()` singleton. Export the class.
 - [ ] **`platform/save-ui.ts`** — `saveUI = new SaveUI()` singleton. Export the class.
 - [ ] **`platform/settings-ui.ts`** — `settingsUI = new SettingsUI()` singleton. Export the class.
+
+### `flash/utils.ts` — module-level class registries (multi-instance, emitter change required)
+
+`_interfaceRegistry` (WeakMap<Function, Set<Function>>) and `_traitRegistry` (WeakMap<Function, ClassTraits>) are already keyed by constructor identity and thus effectively per-game. But `_classRegistry` (Map<string, Function>) is keyed by qualified name string, meaning `getDefinitionByName("com.example::Foo")` would return whichever game registered that name last.
+
+- [ ] **`flash/utils.ts` — `_classRegistry` string-keyed map** (`getDefinitionByName` returns wrong class if two games use the same qualified name). Fix requires the emitter to generate per-runtime registration calls (`_rt.registerClass(Foo)` instead of module-level `registerClass(Foo)`) — non-trivial emitter change. Low priority: Flash games running simultaneously is rare.
+- [ ] **`flash/utils.ts` — `_bindCache` WeakMap** — `as3Bind()` caches bound functions globally across all games. Since it's keyed by `(function, thisArg)` pairs which are game-specific objects, no cross-game pollution occurs in practice. Safe to leave.
 
 ### `flash/vector.ts` — `Array.prototype` mutation
 
