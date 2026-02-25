@@ -225,6 +225,12 @@ class GMLRoom {
       }
     }
 
+    // Particle systems: update + auto-draw
+    for (const [, sys] of rt._partSystems) {
+      if (sys.autoUpdate) rt._partUpdate(sys);
+      if (sys.autoDraw) rt._partDraw(sys);
+    }
+
     rt.resetFrameInput();
   }
 
@@ -259,6 +265,70 @@ class GMLRoom {
       }
     }
   }
+}
+
+// ---- Particle system ----
+
+interface PartTypeConfig {
+  life: [number, number];
+  speed: [number, number, number, number];       // min, max, inc, wiggle
+  direction: [number, number, number, number];   // min, max, inc, wiggle
+  colors: number[];          // 1-3 color values for gradient
+  alphas: number[];          // 1-3 alpha values for gradient
+  size: [number, number, number, number];        // min, max, inc, wiggle
+  sizeX: [number, number, number, number] | null;
+  sizeY: [number, number, number, number] | null;
+  orientation: [number, number, number, number, boolean];  // min, max, inc, wiggle, relative
+  scale: [number, number];
+  shape: number;             // 0=pixel, 1=disk, 2=square, 3=line, 4=star, 5=circle, 6=ring
+  sprite: { spr: number; anim: boolean; stretch: boolean; random: boolean } | null;
+  gravity: [number, number]; // gx, gy
+}
+
+interface PartInst {
+  x: number; y: number; vx: number; vy: number;
+  life: number; maxLife: number;
+  typeId: number;
+  colorOverride: number | null;
+  size: number; angle: number;
+  sizeInc: number; angleInc: number; speedInc: number;
+  sizeWiggle: number; angleWiggle: number; speedWiggle: number;
+}
+
+interface PartSystem {
+  particles: PartInst[];
+  autoDraw: boolean;
+  autoUpdate: boolean;
+  depth: number;
+  pos: [number, number];
+  emitters: Map<number, {
+    x1: number; y1: number; x2: number; y2: number; shape: number; dist: number;
+  }>;
+  nextEmitId: number;
+}
+
+function defaultPartType(): PartTypeConfig {
+  return {
+    life: [1, 1], speed: [0, 0, 0, 0], direction: [0, 360, 0, 0],
+    colors: [0xffffff], alphas: [1],
+    size: [1, 1, 0, 0], sizeX: null, sizeY: null,
+    orientation: [0, 0, 0, 0, false], scale: [1, 1],
+    shape: 1, sprite: null, gravity: [0, 0],
+  };
+}
+
+function randf(min: number, max: number): number { return min + Math.random() * (max - min); }
+function hsv2rgb(h: number, s: number, v: number): number {
+  const hi = Math.floor(h / 60) % 6, f = h / 60 - Math.floor(h / 60);
+  const [p, q, t] = [v * (1 - s), v * (1 - f * s), v * (1 - (1 - f) * s)];
+  let [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][hi]!;
+  return ((r * 255) << 16) | ((g * 255) << 8) | (b * 255 | 0);
+}
+function lerpColor(c1: number, c2: number, t: number): number {
+  const r = ((c1 & 0xff) + ((c2 & 0xff) - (c1 & 0xff)) * t) | 0;
+  const g = (((c1 >> 8) & 0xff) + (((c2 >> 8) & 0xff) - ((c1 >> 8) & 0xff)) * t) | 0;
+  const b = (((c1 >> 16) & 0xff) + (((c2 >> 16) & 0xff) - ((c1 >> 16) & 0xff)) * t) | 0;
+  return r | (g << 8) | (b << 16);
 }
 
 // ---- Buffer helpers ----
@@ -322,6 +392,17 @@ export class GameRuntime {
 
   // Layer background sprite assignments (layer_background_set_sprite)
   _layerBackgroundSprites = new Map<number, number>();
+
+  // Particle system state
+  private _partSystems = new Map<number, PartSystem>();
+  private _partTypes = new Map<number, PartTypeConfig>();
+  private _nextPartId = 1;
+
+  // MP grid (pathfinding) state
+  private _mpGrids = new Map<number, { left: number; top: number; hcells: number; vcells: number; cellw: number; cellh: number; blocked: Uint8Array }>();
+  private _nextMpGridId = 1;
+  private _paths = new Map<number, { points: { x: number; y: number }[] }>();
+  private _nextPathId = 1;
 
   // File text handles: id → { path, content, pos, mode: 'r'|'w' }
   _textFiles = new Map<number, { path: string; content: string; pos: number; mode: 'r' | 'w' }>();
@@ -712,29 +793,43 @@ export class GameRuntime {
     if (canvas) this._gfx.ctx.drawImage(canvas, left, top, w, h, x, y, w, h);
   }
 
-  // ---- Shader API (unimplemented — requires WebGL shaders) ----
+  // ---- Shader API — no-op (Canvas 2D has no shader support) ----
 
-  shader_is_compiled(_sh: number): boolean { throw new Error("shader_is_compiled: shaders require WebGL implementation"); }
-  shader_set(_sh: number): void { throw new Error("shader_set: shaders require WebGL implementation"); }
-  shader_reset(): void { throw new Error("shader_reset: shaders require WebGL implementation"); }
-  shader_get_uniform(_sh: number, _name: string): number { throw new Error("shader_get_uniform: shaders require WebGL implementation"); }
-  shader_set_uniform_f(_handle: number, ..._vals: number[]): void { throw new Error("shader_set_uniform_f: shaders require WebGL implementation"); }
-  shader_set_uniform_i(_handle: number, ..._vals: number[]): void { throw new Error("shader_set_uniform_i: shaders require WebGL implementation"); }
-  shader_get_sampler_index(_sh: number, _name: string): number { throw new Error("shader_get_sampler_index: shaders require WebGL implementation"); }
-  shader_set_uniform_f_array(_handle: number, _arr: number[]): void { throw new Error("shader_set_uniform_f_array: shaders require WebGL implementation"); }
+  shader_is_compiled(_sh: number): boolean { return false; /* no shader support in Canvas 2D */ }
+  shader_set(_sh: number): void { /* no-op — shader execution not supported in Canvas 2D */ }
+  shader_reset(): void { /* no-op — shader execution not supported in Canvas 2D */ }
+  shader_get_uniform(_sh: number, _name: string): number { return -1; /* no shader support */ }
+  shader_set_uniform_f(_handle: number, ..._vals: number[]): void { /* no-op */ }
+  shader_set_uniform_i(_handle: number, ..._vals: number[]): void { /* no-op */ }
+  shader_get_sampler_index(_sh: number, _name: string): number { return -1; }
+  shader_set_uniform_f_array(_handle: number, _arr: number[]): void { /* no-op */ }
 
-  // ---- GPU state API (unimplemented — requires WebGL) ----
+  // ---- GPU state API — partial Canvas 2D support ----
 
-  gpu_set_colorwriteenable(_r: boolean, _g: boolean, _b: boolean, _a: boolean): void { throw new Error("gpu_set_colorwriteenable: requires WebGL implementation"); }
-  gpu_get_colorwriteenable(): [boolean, boolean, boolean, boolean] { throw new Error("gpu_get_colorwriteenable: requires WebGL implementation"); }
-  gpu_set_fog(_enabled: boolean, _color: number, _start: number, _end: number): void { throw new Error("gpu_set_fog: requires WebGL implementation"); }
-  gpu_set_blendmode(_mode: number): void { throw new Error("gpu_set_blendmode: requires WebGL implementation"); }
-  gpu_set_blendmode_ext(_src: number, _dst: number): void { throw new Error("gpu_set_blendmode_ext: requires WebGL implementation"); }
-  gpu_set_alphatestenable(_enabled: boolean): void { throw new Error("gpu_set_alphatestenable: requires WebGL implementation"); }
-  gpu_set_alphatestref(_ref: number): void { throw new Error("gpu_set_alphatestref: requires WebGL implementation"); }
-  gpu_set_ztestenable(_enabled: boolean): void { throw new Error("gpu_set_ztestenable: requires WebGL implementation"); }
-  gpu_set_zwriteenable(_enabled: boolean): void { throw new Error("gpu_set_zwriteenable: requires WebGL implementation"); }
-  gpu_set_cullmode(_mode: number): void { throw new Error("gpu_set_cullmode: requires WebGL implementation"); }
+  gpu_set_colorwriteenable(_r: boolean, _g: boolean, _b: boolean, _a: boolean): void { /* no-op — Canvas 2D has no per-channel write mask */ }
+  gpu_get_colorwriteenable(): [boolean, boolean, boolean, boolean] { return [true, true, true, true]; }
+  gpu_set_fog(_enabled: boolean, _color: number, _start: number, _end: number): void { /* no-op — Canvas 2D has no depth fog */ }
+  gpu_set_blendmode(mode: number): void {
+    // GML bm_normal=0, bm_add=1, bm_subtract=2, bm_max=3, bm_subtract_ext=4
+    const ctx = this._gfx.ctx;
+    switch (mode) {
+      case 1: ctx.globalCompositeOperation = "lighter"; break; // bm_add
+      case 2: ctx.globalCompositeOperation = "difference"; break; // approximate bm_subtract
+      default: ctx.globalCompositeOperation = "source-over"; break; // bm_normal
+    }
+  }
+  gpu_set_blendmode_ext(src: number, dst: number): void {
+    // Canvas 2D globalCompositeOperation covers common cases
+    const ctx = this._gfx.ctx;
+    if (src === 2 && dst === 1) ctx.globalCompositeOperation = "lighter"; // bm_src_alpha + bm_inv_src_alpha = additive
+    else if (src === 5 && dst === 6) ctx.globalCompositeOperation = "source-over"; // normal
+    else ctx.globalCompositeOperation = "source-over"; // default: source-over
+  }
+  gpu_set_alphatestenable(_enabled: boolean): void { /* no-op — Canvas 2D does not support alpha testing */ }
+  gpu_set_alphatestref(_ref: number): void { /* no-op */ }
+  gpu_set_ztestenable(_enabled: boolean): void { /* no-op — Canvas 2D is 2D, no depth buffer */ }
+  gpu_set_zwriteenable(_enabled: boolean): void { /* no-op */ }
+  gpu_set_cullmode(_mode: number): void { /* no-op — Canvas 2D is 2D, no face culling */ }
 
   // ---- Audio API ----
 
@@ -767,31 +862,185 @@ export class GameRuntime {
   audio_group_stop_all(_group: number): void { audioStopAll(this._audio); }
   audio_group_set_gain(_group: number, gain: number, timeMs: number): void { audioSetNodeParam(this._audio, 0, "gain", gain, timeMs); }
 
-  // ---- Particle API (unimplemented — requires particle simulation) ----
+  // ---- Particle API ----
 
-  part_system_create(): number { throw new Error("part_system_create: particle system not yet implemented"); }
-  part_system_destroy(_sys: number): void { throw new Error("part_system_destroy: particle system not yet implemented"); }
-  part_type_create(): number { throw new Error("part_type_create: particle system not yet implemented"); }
-  part_type_destroy(_type: number): void { throw new Error("part_type_destroy: particle system not yet implemented"); }
-  part_type_life(_type: number, _min: number, _max: number): void { throw new Error("part_type_life: particle system not yet implemented"); }
-  part_type_direction(_type: number, _dir1: number, _dir2: number, _inc: number, _wiggle: number): void { throw new Error("part_type_direction: particle system not yet implemented"); }
-  part_type_speed(_type: number, _min: number, _max: number, _inc: number, _wiggle: number): void { throw new Error("part_type_speed: particle system not yet implemented"); }
-  part_type_sprite(_type: number, _spr: number, _anim: boolean, _stretch: boolean, _random: boolean): void { throw new Error("part_type_sprite: particle system not yet implemented"); }
-  part_type_color1(_type: number, _col: number): void { throw new Error("part_type_color1: particle system not yet implemented"); }
-  part_type_color2(_type: number, _col1: number, _col2: number): void { throw new Error("part_type_color2: particle system not yet implemented"); }
-  part_type_color3(_type: number, _col1: number, _col2: number, _col3: number): void { throw new Error("part_type_color3: particle system not yet implemented"); }
-  part_type_alpha1(_type: number, _alpha: number): void { throw new Error("part_type_alpha1: particle system not yet implemented"); }
-  part_type_alpha2(_type: number, _a1: number, _a2: number): void { throw new Error("part_type_alpha2: particle system not yet implemented"); }
-  part_type_alpha3(_type: number, _a1: number, _a2: number, _a3: number): void { throw new Error("part_type_alpha3: particle system not yet implemented"); }
-  part_type_scale(_type: number, _xs: number, _ys: number): void { throw new Error("part_type_scale: particle system not yet implemented"); }
-  part_type_size(_type: number, _minSize: number, _maxSize: number, _inc: number, _wiggle: number): void { throw new Error("part_type_size: particle system not yet implemented"); }
-  part_type_orientation(_type: number, _min: number, _max: number, _inc: number, _wiggle: number, _relative: boolean): void { throw new Error("part_type_orientation: particle system not yet implemented"); }
-  part_particles_create(_sys: number, _x: number, _y: number, _type: number, _count: number): void { throw new Error("part_particles_create: particle system not yet implemented"); }
-  part_particles_create_color(_sys: number, _x: number, _y: number, _type: number, _color: number, _count: number): void { throw new Error("part_particles_create_color: particle system not yet implemented"); }
-  part_emitter_create(_sys: number): number { throw new Error("part_emitter_create: particle system not yet implemented"); }
-  part_emitter_destroy(_sys: number, _emit: number): void { throw new Error("part_emitter_destroy: particle system not yet implemented"); }
-  part_emitter_region(_sys: number, _emit: number, _x1: number, _y1: number, _x2: number, _y2: number, _shape: number, _dist: number): void { throw new Error("part_emitter_region: particle system not yet implemented"); }
-  part_emitter_burst(_sys: number, _emit: number, _type: number, _count: number): void { throw new Error("part_emitter_burst: particle system not yet implemented"); }
+  part_system_create(): number {
+    const id = this._nextPartId++;
+    this._partSystems.set(id, { particles: [], autoDraw: true, autoUpdate: true, depth: 0, pos: [0, 0], emitters: new Map(), nextEmitId: 1 });
+    return id;
+  }
+  part_system_destroy(sys: number): void { this._partSystems.delete(sys); }
+  part_system_exists(sys: number): boolean { return this._partSystems.has(sys); }
+  part_system_position(sys: number, x: number, y: number): void { const s = this._partSystems.get(sys); if (s) s.pos = [x, y]; }
+  part_system_draw_order(sys: number, order: boolean): void { const s = this._partSystems.get(sys); if (s) (s as any).drawOrder = order; }
+  part_system_automatic_update(sys: number, on: boolean): void { const s = this._partSystems.get(sys); if (s) s.autoUpdate = on; }
+  part_system_drawit(sys: number): void { const s = this._partSystems.get(sys); if (s) this._partDraw(s); }
+  part_type_create(): number {
+    const id = this._nextPartId++;
+    this._partTypes.set(id, defaultPartType());
+    return id;
+  }
+  part_type_destroy(type: number): void { this._partTypes.delete(type); }
+  part_type_exists(type: number): boolean { return this._partTypes.has(type); }
+  part_type_clear(type: number): void { const t = this._partTypes.get(type); if (t) Object.assign(t, defaultPartType()); }
+  part_type_life(type: number, min: number, max: number): void { const t = this._partTypes.get(type); if (t) t.life = [min, max]; }
+  part_type_direction(type: number, min: number, max: number, inc: number, wiggle: number): void { const t = this._partTypes.get(type); if (t) t.direction = [min, max, inc, wiggle]; }
+  part_type_speed(type: number, min: number, max: number, inc: number, wiggle: number): void { const t = this._partTypes.get(type); if (t) t.speed = [min, max, inc, wiggle]; }
+  part_type_sprite(type: number, spr: number, anim: boolean, stretch: boolean, random: boolean): void { const t = this._partTypes.get(type); if (t) t.sprite = { spr, anim, stretch, random }; }
+  part_type_color1(type: number, col: number): void { const t = this._partTypes.get(type); if (t) t.colors = [col]; }
+  part_type_color2(type: number, col1: number, col2: number): void { const t = this._partTypes.get(type); if (t) t.colors = [col1, col2]; }
+  part_type_color3(type: number, col1: number, col2: number, col3: number): void { const t = this._partTypes.get(type); if (t) t.colors = [col1, col2, col3]; }
+  part_type_color_hsv(type: number, hmin: number, hmax: number, smin: number, smax: number, vmin: number, vmax: number): void {
+    const t = this._partTypes.get(type); if (!t) return;
+    t.colors = [hsv2rgb(randf(hmin, hmax), randf(smin, smax) / 255, randf(vmin, vmax) / 255)];
+  }
+  part_type_alpha1(type: number, a: number): void { const t = this._partTypes.get(type); if (t) t.alphas = [a]; }
+  part_type_alpha2(type: number, a1: number, a2: number): void { const t = this._partTypes.get(type); if (t) t.alphas = [a1, a2]; }
+  part_type_alpha3(type: number, a1: number, a2: number, a3: number): void { const t = this._partTypes.get(type); if (t) t.alphas = [a1, a2, a3]; }
+  part_type_scale(type: number, xs: number, ys: number): void { const t = this._partTypes.get(type); if (t) t.scale = [xs, ys]; }
+  part_type_size(type: number, min: number, max: number, inc: number, wiggle: number): void { const t = this._partTypes.get(type); if (t) t.size = [min, max, inc, wiggle]; }
+  part_type_size_x(type: number, xmin: number, xmax: number, xinc: number, xwiggle: number): void { const t = this._partTypes.get(type); if (t) t.sizeX = [xmin, xmax, xinc, xwiggle]; }
+  part_type_size_y(type: number, ymin: number, ymax: number, yinc: number, ywiggle: number): void { const t = this._partTypes.get(type); if (t) t.sizeY = [ymin, ymax, yinc, ywiggle]; }
+  part_type_orientation(type: number, min: number, max: number, inc: number, wiggle: number, relative: boolean): void { const t = this._partTypes.get(type); if (t) t.orientation = [min, max, inc, wiggle, relative]; }
+  part_type_shape(type: number, shape: number): void { const t = this._partTypes.get(type); if (t) t.shape = shape; }
+  part_type_death(_type: number, _kind: number, _step: number): void { /* no-op: on-death particle spawning not implemented */ }
+  part_type_gravity(type: number, gx: number, gy: number): void { const t = this._partTypes.get(type); if (t) t.gravity = [gx, gy]; }
+  part_particles_create(sys: number, x: number, y: number, typeId: number, count: number): void {
+    const s = this._partSystems.get(sys); if (!s) return;
+    for (let i = 0; i < count; i++) this._spawnParticle(s, x, y, typeId, null);
+  }
+  part_particles_create_color(sys: number, x: number, y: number, typeId: number, color: number, count: number): void {
+    const s = this._partSystems.get(sys); if (!s) return;
+    for (let i = 0; i < count; i++) this._spawnParticle(s, x, y, typeId, color);
+  }
+  part_particles_clear(sys: number): void { const s = this._partSystems.get(sys); if (s) s.particles = []; }
+  part_emitter_create(sys: number): number {
+    const s = this._partSystems.get(sys); if (!s) return -1;
+    const id = s.nextEmitId++;
+    s.emitters.set(id, { x1: 0, y1: 0, x2: 64, y2: 64, shape: 0, dist: 0 });
+    return id;
+  }
+  part_emitter_destroy(sys: number, emit: number): void { this._partSystems.get(sys)?.emitters.delete(emit); }
+  part_emitter_region(sys: number, emit: number, x1: number, y1: number, x2: number, y2: number, shape: number, dist: number): void {
+    const e = this._partSystems.get(sys)?.emitters.get(emit); if (e) Object.assign(e, { x1, y1, x2, y2, shape, dist });
+  }
+  part_emitter_burst(sys: number, emit: number, typeId: number, count: number): void {
+    const s = this._partSystems.get(sys); if (!s) return;
+    const e = s.emitters.get(emit); if (!e) return;
+    for (let i = 0; i < count; i++) {
+      const [px, py] = this._emitterPoint(e);
+      this._spawnParticle(s, px, py, typeId, null);
+    }
+  }
+  part_emitter_stream(sys: number, emit: number, typeId: number, num: number): void {
+    // Called each step (auto-update); we handle it inside _partUpdate instead.
+    // Store stream config on the emitter.
+    const e = this._partSystems.get(sys)?.emitters.get(emit); if (!e) return;
+    (e as any).stream = { typeId, num };
+  }
+
+  // ---- Particle internals ----
+  private _spawnParticle(s: PartSystem, x: number, y: number, typeId: number, colorOverride: number | null): void {
+    const t = this._partTypes.get(typeId); if (!t) return;
+    const life = Math.round(randf(t.life[0], t.life[1])); if (life <= 0) return;
+    const spd = randf(t.speed[0], t.speed[1]);
+    const dir = randf(t.direction[0], t.direction[1]) * Math.PI / 180;
+    const size = randf(t.size[0], t.size[1]);
+    const angle = randf(t.orientation[0], t.orientation[1]);
+    s.particles.push({
+      x, y, vx: Math.cos(dir) * spd, vy: -Math.sin(dir) * spd,
+      life, maxLife: life, typeId, colorOverride,
+      size, angle, sizeInc: t.size[2], angleInc: t.orientation[2],
+      speedInc: t.speed[2],
+      sizeWiggle: t.size[3], angleWiggle: t.orientation[3], speedWiggle: t.speed[3],
+    });
+  }
+  private _emitterPoint(e: { x1: number; y1: number; x2: number; y2: number; shape: number; dist: number }): [number, number] {
+    // shape: 0=rectangle, 1=ellipse, 2=diamond, 3=line
+    const cx = (e.x1 + e.x2) / 2, cy = (e.y1 + e.y2) / 2;
+    const rw = Math.abs(e.x2 - e.x1) / 2, rh = Math.abs(e.y2 - e.y1) / 2;
+    if (e.shape === 1 || e.shape === 2) {
+      const angle = Math.random() * Math.PI * 2;
+      return [cx + Math.cos(angle) * rw * Math.random(), cy + Math.sin(angle) * rh * Math.random()];
+    } else if (e.shape === 3) {
+      const t = Math.random();
+      return [e.x1 + (e.x2 - e.x1) * t, e.y1 + (e.y2 - e.y1) * t];
+    }
+    return [randf(e.x1, e.x2), randf(e.y1, e.y2)];
+  }
+  _partUpdate(s: PartSystem): void {
+    // Stream emitters
+    for (const [, e] of s.emitters) {
+      const st = (e as any).stream;
+      if (st && st.num > 0) {
+        for (let i = 0; i < st.num; i++) {
+          const [px, py] = this._emitterPoint(e);
+          this._spawnParticle(s, px, py, st.typeId, null);
+        }
+      }
+    }
+    // Update particles
+    for (let i = s.particles.length - 1; i >= 0; i--) {
+      const p = s.particles[i]!;
+      const t = this._partTypes.get(p.typeId);
+      const [gx, gy] = t?.gravity ?? [0, 0];
+      p.vx += gx + randf(-p.speedWiggle, p.speedWiggle);
+      p.vy += gy + randf(-p.speedWiggle, p.speedWiggle);
+      if (p.speedInc !== 0) { const spd = Math.hypot(p.vx, p.vy); if (spd > 0) { const ns = spd + p.speedInc; p.vx = p.vx / spd * ns; p.vy = p.vy / spd * ns; } }
+      p.x += p.vx + s.pos[0]; p.y += p.vy + s.pos[1];
+      p.size = Math.max(0, p.size + p.sizeInc + randf(-p.sizeWiggle, p.sizeWiggle));
+      p.angle += p.angleInc + randf(-p.angleWiggle, p.angleWiggle);
+      p.life--;
+      if (p.life <= 0) s.particles.splice(i, 1);
+    }
+  }
+  _partDraw(s: PartSystem): void {
+    const ctx = this._gfx.ctx;
+    for (const p of s.particles) {
+      const t = this._partTypes.get(p.typeId); if (!t) continue;
+      const frac = 1 - p.life / p.maxLife;
+      // Color interpolation
+      let col = p.colorOverride ?? t.colors[0] ?? 0xffffff;
+      if (!p.colorOverride && t.colors.length > 1) {
+        if (t.colors.length === 2) col = lerpColor(t.colors[0]!, t.colors[1]!, frac);
+        else { const seg = frac < 0.5 ? [t.colors[0]!, t.colors[1]!, frac * 2] : [t.colors[1]!, t.colors[2]!, (frac - 0.5) * 2]; col = lerpColor(seg[0] as number, seg[1] as number, seg[2] as number); }
+      }
+      // Alpha interpolation
+      let alpha = t.alphas[0] ?? 1;
+      if (t.alphas.length > 1) {
+        if (t.alphas.length === 2) alpha = t.alphas[0]! + (t.alphas[1]! - t.alphas[0]!) * frac;
+        else { alpha = frac < 0.5 ? t.alphas[0]! + (t.alphas[1]! - t.alphas[0]!) * (frac * 2) : t.alphas[1]! + (t.alphas[2]! - t.alphas[1]!) * ((frac - 0.5) * 2); }
+      }
+      const r = col & 0xff, g = (col >> 8) & 0xff, b = (col >> 16) & 0xff;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      ctx.translate(p.x, p.y);
+      if (p.angle !== 0) ctx.rotate(p.angle * Math.PI / 180);
+      ctx.scale(t.scale[0], t.scale[1]);
+      const [xs, ys] = t.sizeX && t.sizeY ? [t.sizeX[0], t.sizeY[0]] : [p.size, p.size];
+      if (t.sprite) {
+        // Draw as sprite
+        this.drawSprite(t.sprite.spr, t.sprite.random ? Math.floor(Math.random() * (this.sprites[t.sprite.spr]?.textures.length ?? 1)) : 0, 0, 0, { image_alpha: alpha, image_xscale: xs / 32, image_yscale: ys / 32 });
+      } else {
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        const h = xs / 2, v = ys / 2;
+        switch (t.shape) {
+          case 0: ctx.fillRect(-0.5, -0.5, 1, 1); break; // pixel
+          case 1: case 5: ctx.beginPath(); ctx.ellipse(0, 0, h, v, 0, 0, Math.PI * 2); ctx.fill(); break; // disk/circle
+          case 2: ctx.fillRect(-h, -v, xs, ys); break; // square
+          case 3: ctx.beginPath(); ctx.moveTo(-h, 0); ctx.lineTo(h, 0); ctx.strokeStyle = `rgb(${r},${g},${b})`; ctx.stroke(); break; // line
+          case 4: { // star — 5 points
+            ctx.beginPath();
+            for (let i = 0; i < 10; i++) { const a = i * Math.PI / 5 - Math.PI / 2; const r2 = i % 2 === 0 ? h : h / 2; ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2); }
+            ctx.closePath(); ctx.fill(); break;
+          }
+          case 6: ctx.beginPath(); ctx.ellipse(0, 0, h, v, 0, 0, Math.PI * 2); ctx.strokeStyle = `rgb(${r},${g},${b})`; ctx.stroke(); break; // ring
+          default: ctx.beginPath(); ctx.ellipse(0, 0, h, v, 0, 0, Math.PI * 2); ctx.fill(); break;
+        }
+      }
+      ctx.restore();
+    }
+  }
 
   // ---- DS (Data Structure) API — backed by JS Map / Array ----
 
@@ -938,17 +1187,96 @@ export class GameRuntime {
     }
     return best === Infinity ? 0 : best;
   }
-  collision_line(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any {
-    throw new Error("collision_line: requires collision system implementation");
+
+  // ---- Collision helpers (AABB) ----
+  private _getBBox(obj: GMLObject, ox?: number, oy?: number): { x1: number; y1: number; x2: number; y2: number } | null {
+    const spr = this.sprites[obj.sprite_index];
+    if (!spr || !spr.bbox) return null;
+    const xs = obj.image_xscale ?? 1, ys = obj.image_yscale ?? 1;
+    const bx = ox ?? obj.x, by = oy ?? obj.y;
+    return {
+      x1: bx + spr.bbox.left * xs,
+      y1: by + spr.bbox.top * ys,
+      x2: bx + spr.bbox.right * xs,
+      y2: by + spr.bbox.bottom * ys,
+    };
   }
-  collision_rectangle(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any {
-    throw new Error("collision_rectangle: requires collision system implementation");
+  private _bboxOverlap(a: { x1: number; y1: number; x2: number; y2: number }, b: { x1: number; y1: number; x2: number; y2: number }): boolean {
+    return a.x1 <= b.x2 && a.x2 >= b.x1 && a.y1 <= b.y2 && a.y2 >= b.y1;
   }
-  place_meeting(_x: number, _y: number, _classIndex: number): boolean {
-    throw new Error("place_meeting: requires collision system implementation");
+  private _bboxContainsPoint(b: { x1: number; y1: number; x2: number; y2: number }, x: number, y: number): boolean {
+    return x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2;
   }
-  instance_place(_x: number, _y: number, _classIndex: number): any {
-    throw new Error("instance_place: requires collision system implementation");
+  private _bboxOverlapsRect(b: { x1: number; y1: number; x2: number; y2: number }, rx1: number, ry1: number, rx2: number, ry2: number): boolean {
+    return b.x1 <= rx2 && b.x2 >= rx1 && b.y1 <= ry2 && b.y2 >= ry1;
+  }
+  private _bboxOverlapsCircle(b: { x1: number; y1: number; x2: number; y2: number }, cx: number, cy: number, r: number): boolean {
+    const nearX = Math.max(b.x1, Math.min(cx, b.x2));
+    const nearY = Math.max(b.y1, Math.min(cy, b.y2));
+    return Math.hypot(nearX - cx, nearY - cy) <= r;
+  }
+  private _getCandidates(classIndex: number, notme: boolean): GMLObject[] {
+    let candidates: GMLObject[];
+    if (classIndex === -1 || classIndex === -3) { // all / other
+      candidates = this.roomVariables;
+    } else {
+      const clazz = this.classes[classIndex];
+      candidates = clazz ? this._getInstances(clazz) : [];
+    }
+    const deact = this._deactivatedInstances;
+    return notme && this._self
+      ? candidates.filter((o) => o !== this._self && !deact.has(o))
+      : candidates.filter((o) => !deact.has(o));
+  }
+
+  collision_line(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (!bb) continue;
+      // Line-rect intersection: check all 4 edges + point containment
+      if (this._bboxContainsPoint(bb, x1, y1) || this._bboxContainsPoint(bb, x2, y2)) return inst;
+      // Check if line segment crosses any edge of bbox
+      const edges: [number, number, number, number][] = [
+        [bb.x1, bb.y1, bb.x2, bb.y1], [bb.x2, bb.y1, bb.x2, bb.y2],
+        [bb.x2, bb.y2, bb.x1, bb.y2], [bb.x1, bb.y2, bb.x1, bb.y1],
+      ];
+      for (const [ex1, ey1, ex2, ey2] of edges) {
+        const d1x = x2 - x1, d1y = y2 - y1, d2x = ex2 - ex1, d2y = ey2 - ey1;
+        const denom = d1x * d2y - d1y * d2x;
+        if (denom === 0) continue;
+        const t = ((ex1 - x1) * d2y - (ey1 - y1) * d2x) / denom;
+        const u = ((ex1 - x1) * d1y - (ey1 - y1) * d1x) / denom;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return inst;
+      }
+    }
+    return -4;
+  }
+  collision_rectangle(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlapsRect(bb, x1, y1, x2, y2)) return inst;
+    }
+    return -4;
+  }
+  place_meeting(x: number, y: number, classIndex: number): boolean {
+    if (!this._self) return false;
+    const selfBB = this._getBBox(this._self, x, y);
+    if (!selfBB) return false;
+    for (const inst of this._getCandidates(classIndex, true)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlap(selfBB, bb)) return true;
+    }
+    return false;
+  }
+  instance_place(x: number, y: number, classIndex: number): any {
+    if (!this._self) return -4;
+    const selfBB = this._getBBox(this._self, x, y);
+    if (!selfBB) return -4;
+    for (const inst of this._getCandidates(classIndex, true)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlap(selfBB, bb)) return inst;
+    }
+    return -4;
   }
   instance_find(classIndex: number, n: number): any {
     const clazz = this.classes[classIndex];
@@ -1167,16 +1495,6 @@ export class GameRuntime {
   getObjectName(classIndex: number): string {
     return this.object_get_name(classIndex);
   }
-
-  // ---- Particle extra ----
-  part_system_automatic_draw(_syst: number, _on: boolean): void { /* no-op: particle system not implemented */ }
-  part_type_exists(_part: number): boolean { return false; }
-  part_type_shape(_type: number, _shape: number): void { throw new Error("part_type_shape: particle system not yet implemented"); }
-  part_type_death(_type: number, _kind: number, _step: number): void { throw new Error("part_type_death: particle system not yet implemented"); }
-  part_type_color_hsv(_type: number, _hmin: number, _hmax: number, _smin: number, _smax: number, _vmin: number, _vmax: number): void { throw new Error("part_type_color_hsv: particle system not yet implemented"); }
-  part_type_clear(_type: number): void { throw new Error("part_type_clear: particle system not yet implemented"); }
-  part_type_size_x(_type: number, _xmin: number, _xmax: number, _xinc: number, _xwiggle: number): void { throw new Error("part_type_size_x: particle system not yet implemented"); }
-  part_type_size_y(_type: number, _ymin: number, _ymax: number, _yinc: number, _ywiggle: number): void { throw new Error("part_type_size_y: particle system not yet implemented"); }
 
   // ---- Instance activation/deactivation ----
   instance_activate_object(classIndex: number): void {
@@ -1403,36 +1721,94 @@ export class GameRuntime {
     };
     return map[code] ?? "english";
   }
-  steam_inventory_result_destroy(_result: number): void { throw new Error("steam_inventory_result_destroy: not yet implemented"); }
-  steam_ugc_get_item_install_info(_id: number, _arr: any): boolean { throw new Error("steam_ugc_get_item_install_info: not yet implemented"); }
-  steam_ugc_get_subscribed_items(_arr: any): number { throw new Error("steam_ugc_get_subscribed_items: not yet implemented"); }
-  steam_lobby_get_lobby_id(): number { throw new Error("steam_lobby_get_lobby_id: not yet implemented"); }
-  steam_lobby_join_id(_id: number): void { throw new Error("steam_lobby_join_id: not yet implemented"); }
-  steam_lobby_set_data(_key: string, _val: string, _lobby?: number): void { throw new Error("steam_lobby_set_data: not yet implemented"); }
-  steam_lobby_get_data(_key: string, _lobby?: number): string { throw new Error("steam_lobby_get_data: not yet implemented"); }
+  steam_inventory_result_destroy(_result: number): void { /* no-op — Steam inventory not available in browser */ }
+  steam_ugc_get_item_install_info(_id: number, _arr: any): boolean { return false; /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_get_subscribed_items(_arr: any): number { return 0; /* no-op — Steam UGC not available in browser */ }
+  steam_lobby_get_lobby_id(): number { return 0; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_join_id(_id: number): void { /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_set_data(_key: string, _val: string, _lobby?: number): void { /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_get_data(_key: string, _lobby?: number): string { return ""; /* no-op — Steam lobbies not available in browser */ }
   steam_activate_overlay_store(_app: number): void { /* no-op */ }
   steam_input_get_digital_action_handle(_name: string): number { return 0; }
   steam_is_cloud_enabled_for_account(): boolean { return false; }
-  steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { throw new Error("steam_inventory_result_get_items: not yet implemented"); }
-  steam_lobby_get_member_id(_index: number, _lobby?: number): number { throw new Error("steam_lobby_get_member_id: not yet implemented"); }
+  steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { return []; /* no-op — Steam inventory not available in browser */ }
+  steam_lobby_get_member_id(_index: number, _lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
   steam_input_get_action_set_handle(_name: string): number { return 0; }
   steam_get_stat_float(_name: string): number { return parseFloat(loadItem(this._persistence, this._steamStatKey(_name)) ?? "0"); }
   steam_get_global_stat_int(_name: string): number { return 0; }
   steam_get_user_account_id(): number { return 0; }
   steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { return false; }
   steam_input_enable_device_callbacks(): void { /* no-op */ }
-  steam_lobby_get_chat_message_text(_index: number, _lobby?: number): string { throw new Error("steam_lobby_get_chat_message_text: not yet implemented"); }
-  steam_lobby_get_owner_id(_lobby?: number): number { throw new Error("steam_lobby_get_owner_id: not yet implemented"); }
+  steam_lobby_get_chat_message_text(_index: number, _lobby?: number): string { return ""; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_get_owner_id(_lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
   steam_request_friend_rich_presence(_steamid: number): void { /* no-op */ }
-  steam_ugc_get_item_update_info(_handle: number, _arr: any): boolean { throw new Error("steam_ugc_get_item_update_info: not yet implemented"); }
-  steam_ugc_submit_item_update(_handle: number, _note: string): void { throw new Error("steam_ugc_submit_item_update: not yet implemented"); }
+  steam_ugc_get_item_update_info(_handle: number, _arr: any): boolean { return false; /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_submit_item_update(_handle: number, _note: string): void { /* no-op — Steam UGC not available in browser */ }
 
   // ---- More collision ----
-  collision_point(_x: number, _y: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_point: requires collision system implementation"); }
-  collision_circle(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_circle: requires collision system implementation"); }
-  collision_ellipse(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean): any { throw new Error("collision_ellipse: requires collision system implementation"); }
-  collision_line_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: number | boolean = 0): number { throw new Error("collision_line_list: requires collision system implementation"); }
-  collision_rectangle_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_rectangle_list: requires collision system implementation"); }
+  collision_point(x: number, y: number, classIndex: number, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxContainsPoint(bb, x, y)) return inst;
+    }
+    return -4;
+  }
+  collision_circle(x: number, y: number, r: number, classIndex: number, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlapsCircle(bb, x, y, r)) return inst;
+    }
+    return -4;
+  }
+  collision_ellipse(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
+    // Approximate with circle using average radius
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (!bb) continue;
+      const nx = Math.max(bb.x1, Math.min(cx, bb.x2));
+      const ny = Math.max(bb.y1, Math.min(cy, bb.y2));
+      const dx = (nx - cx) / rx, dy = (ny - cy) / ry;
+      if (dx * dx + dy * dy <= 1) return inst;
+    }
+    return -4;
+  }
+  collision_line_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: number | boolean = 0): number {
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (!bb) continue;
+      let hit = this._bboxContainsPoint(bb, x1, y1) || this._bboxContainsPoint(bb, x2, y2);
+      if (!hit) {
+        const edges: [number, number, number, number][] = [
+          [bb.x1, bb.y1, bb.x2, bb.y1], [bb.x2, bb.y1, bb.x2, bb.y2],
+          [bb.x2, bb.y2, bb.x1, bb.y2], [bb.x1, bb.y2, bb.x1, bb.y1],
+        ];
+        const d1x = x2 - x1, d1y = y2 - y1;
+        for (const [ex1, ey1, ex2, ey2] of edges) {
+          const d2x = ex2 - ex1, d2y = ey2 - ey1;
+          const denom = d1x * d2y - d1y * d2x;
+          if (denom === 0) continue;
+          const t = ((ex1 - x1) * d2y - (ey1 - y1) * d2x) / denom;
+          const u = ((ex1 - x1) * d1y - (ey1 - y1) * d1x) / denom;
+          if (t >= 0 && t <= 1 && u >= 0 && u <= 1) { hit = true; break; }
+        }
+      }
+      if (hit) { this.ds_list_add(list, inst); count++; }
+    }
+    return count;
+  }
+  collision_rectangle_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlapsRect(bb, x1, y1, x2, y2)) {
+        this.ds_list_add(list, inst); count++;
+      }
+    }
+    return count;
+  }
   distance_to_point(x: number, y: number): number {
     if (!this._self) return 0;
     return Math.hypot(x - this._self.x, y - this._self.y);
@@ -1722,7 +2098,27 @@ export class GameRuntime {
   display_reset(_antialias: number, _vsync: boolean): void { /* no-op */ }
 
   // ---- Font extras ----
-  font_add_sprite_ext(_spr: number, _str: string, _prop: boolean, _sep: number): number { throw new Error("font_add_sprite_ext: not yet implemented"); }
+  font_add_sprite_ext(spr: number, str: string, _prop: boolean, sep: number): number {
+    // Each character in str maps to one sub-image of the sprite
+    const sprite = this.sprites[spr]; if (!sprite) return -1;
+    const chars: any[] = [];
+    for (let i = 0; i < str.length; i++) {
+      const texIdx = sprite.textures[i];
+      if (texIdx === undefined) break;
+      const tex = this.textures[texIdx]; if (!tex) continue;
+      chars.push({
+        char: str.charCodeAt(i),
+        frame: { x: tex.src.x, y: tex.src.y, width: tex.src.w, height: tex.src.h },
+        shift: tex.dest.w + sep,
+        offset: 0,
+      });
+    }
+    const fontIdx = this.fonts.length;
+    // Use the first texture's sheet as the font texture (they should all share a sheet)
+    const firstTex = sprite.textures[0] !== undefined ? this.textures[sprite.textures[0]] : undefined;
+    this.fonts.push({ name: `__sprite_font_${spr}`, texture: sprite.textures[0] ?? 0, chars } as any);
+    return fontIdx;
+  }
 
   // ---- String extras ----
   string_byte_length(str: string): number { return new TextEncoder().encode(str).length; }
@@ -1784,10 +2180,10 @@ export class GameRuntime {
   steam_get_global_stat_history_int(_name: string, _days?: number): number { return 0; }
   steam_is_overlay_activated(): boolean { return false; }
   steam_image_get_size(_image: number): [number, number] { return [0, 0]; }
-  steam_lobby_get_member_count(_lobby?: number): number { throw new Error("steam_lobby_get_member_count: not yet implemented"); }
-  steam_lobby_list_add_string_filter(_key: string, _val: string, _type: number): void { throw new Error("steam_lobby_list_add_string_filter: not yet implemented"); }
-  steam_lobby_get_chat_message_data(_msg: number, _buf: number, _lobby?: number): number { throw new Error("steam_lobby_get_chat_message_data: not yet implemented"); }
-  steam_ugc_subscribe_item(_id: number): void { throw new Error("steam_ugc_subscribe_item: not yet implemented"); }
+  steam_lobby_get_member_count(_lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_list_add_string_filter(_key: string, _val: string, _type: number): void { /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_get_chat_message_data(_msg: number, _buf: number, _lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
+  steam_ugc_subscribe_item(_id: number): void { /* no-op — Steam UGC not available in browser */ }
   steam_input_run_frame(): void { /* no-op */ }
   steam_file_write(_path: string, _data: string, _length?: number): boolean {
     const data = _length !== undefined ? _data.slice(0, _length) : _data;
@@ -1845,8 +2241,13 @@ export class GameRuntime {
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  position_meeting(_x: number, _y: number, _classIndex: number): boolean {
-    throw new Error("position_meeting: requires collision system implementation");
+  position_meeting(x: number, y: number, classIndex: number): boolean {
+    // Checks if the point (x, y) is inside any instance of classIndex
+    for (const inst of this._getCandidates(classIndex, true)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxContainsPoint(bb, x, y)) return true;
+    }
+    return false;
   }
   variable_instance_set(instance: any, name: string, value: any): void {
     if (instance != null) instance[name] = value;
@@ -1863,9 +2264,7 @@ export class GameRuntime {
     const inst = this._getInstances(clazz)[0];
     return inst?.sprite_index ?? -1;
   }
-  room_duplicate(_room: number): number {
-    throw new Error("room_duplicate: not implemented");
-  }
+  room_duplicate(_room: number): number { return _room; /* shallow alias — creating separate room instances not yet supported */ }
   room_set_persistent(_room: number, _persistent: boolean): void { /* no-op: persistence state not tracked per-room */ }
   event_perform(type: number, n: number): void {
     // type 10 = user event; type 7 = alarm — dispatch on _self if available
@@ -1876,8 +2275,6 @@ export class GameRuntime {
   is_debug_overlay_open(): boolean { return false; }
   path_exists(_path: number): boolean { return false; }
   path_delete(_path: number): void { /* no-op */ }
-  part_type_gravity(_part: number, _gx: number, _gy: number): void { /* no-op */ }
-  part_system_depth(_syst: number, _depth: number): void { /* no-op */ }
   layer_background_visible(_bg: number, _visible: boolean): void { /* no-op */ }
   layer_sequence_create(_layer: any, _x: number, _y: number, _seq: number): number { return -1; }
   layer_sequence_is_finished(_seq: number): boolean { return true; }
@@ -1943,10 +2340,43 @@ export class GameRuntime {
   layer_sequence_destroy(_seq: number): void { /* no-op */ }
 
   // ---- More collision ----
-  collision_ellipse_list(_x1: number, _y1: number, _x2: number, _y2: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_ellipse_list: requires collision system implementation"); }
+  collision_ellipse_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+    const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (!bb) continue;
+      const nx = Math.max(bb.x1, Math.min(cx, bb.x2));
+      const ny = Math.max(bb.y1, Math.min(cy, bb.y2));
+      const dx = (nx - cx) / rx, dy = (ny - cy) / ry;
+      if (dx * dx + dy * dy <= 1) { this.ds_list_add(list, inst); count++; }
+    }
+    return count;
+  }
 
   // ---- Instance change ----
-  instance_change(_classIndex: number, _performEvents: boolean): void { throw new Error("instance_change: not yet implemented"); }
+  instance_change(classIndex: number, performEvents: boolean): void {
+    if (!this._self) return;
+    const NewClass = this.classes[classIndex];
+    if (!NewClass) return;
+    const old = this._self;
+    // Remove old instance and create new one at same position
+    const idx = this.roomVariables.indexOf(old);
+    const newInst = new NewClass(this);
+    newInst.x = old.x; newInst.y = old.y;
+    newInst.image_xscale = old.image_xscale; newInst.image_yscale = old.image_yscale;
+    // Remove old class tracking
+    for (let proto = Object.getPrototypeOf(old).constructor; proto !== Object; proto = Object.getPrototypeOf(proto)) {
+      const arr = this._getInstances(proto);
+      const i = arr.indexOf(old); if (i !== -1) arr.splice(i, 1);
+    }
+    if (performEvents) old.destroy?.();
+    if (idx !== -1) this.roomVariables[idx] = newInst;
+    this._getInstances(NewClass).push(newInst);
+    this._self = newInst;
+    if (performEvents) newInst.create?.();
+  }
 
   // ---- More Steam ----
   steam_initialised(): boolean { return false; }
@@ -1962,9 +2392,9 @@ export class GameRuntime {
   steam_get_achievement(_name: string): boolean { return this._steamAchSet().has(_name); }
   steam_store_stats(): void { /* no-op — stats are already persisted to localStorage immediately */ }
   steam_set_stat_int(_name: string, _val: number): void { save(this._persistence, this._steamStatKey(_name), String(Math.trunc(_val))); }
-  steam_net_packet_get_sender_id(): number { throw new Error("steam_net_packet_get_sender_id: not yet implemented"); }
+  steam_net_packet_get_sender_id(): number { return 0; /* no-op — Steam networking not available in browser */ }
   steam_is_cloud_enabled_for_app(): boolean { return false; }
-  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { throw new Error("steam_ugc_create_query_user: not yet implemented"); }
+  steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { return -1; /* no-op — Steam UGC not available in browser */ }
 
   // ---- Misc ----
   show_message_async(_str: string): void { console.log("GML show_message_async:", _str); }
@@ -1985,7 +2415,16 @@ export class GameRuntime {
     if (sx1 >= dx1 && sx2 <= dx2 && sy1 >= dy1 && sy2 <= dy2) return 2;
     return 1;
   }
-  collision_circle_list(_x: number, _y: number, _r: number, _classIndex: number, _prec: boolean, _notme: boolean, _list: number, _ordered: boolean = false): number { throw new Error("collision_circle_list: requires collision system implementation"); }
+  collision_circle_list(x: number, y: number, r: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlapsCircle(bb, x, y, r)) {
+        this.ds_list_add(list, inst); count++;
+      }
+    }
+    return count;
+  }
 
   // ---- More draw ----
   draw_roundrect(x1: number, y1: number, x2: number, y2: number, outline: number | boolean = 0): void {
@@ -2129,16 +2568,18 @@ export class GameRuntime {
     this.sprites.push(copy);
     return newIdx;
   }
-  sprite_collision_mask(_spr: number, ..._args: any[]): void { throw new Error("sprite_collision_mask: not yet implemented"); }
+  sprite_collision_mask(spr: number, sepmasks: boolean, bboxmode: number, bbleft: number, bbtop: number, bbright: number, bbbottom: number, _kind: number, _tol: number): void {
+    const s = this.sprites[spr]; if (!s || !s.bbox) return;
+    if (bboxmode === 1) { /* full image — use sprite size */
+      s.bbox = { left: 0, top: 0, right: s.size.width, bottom: s.size.height };
+    } else if (bboxmode === 2) { /* manual */
+      s.bbox = { left: bbleft, top: bbtop, right: bbright, bottom: bbbottom };
+    }
+    /* bboxmode===0: automatic — unchanged */
+  }
 
   // ---- Path ----
-  path_add(): number { return -1; /* path system not implemented */ }
   path_end(): void { /* no-op */ }
-
-  // ---- Particle system extras ----
-  part_system_exists(_syst: number): boolean { return false; }
-  part_system_position(_syst: number, _x: number, _y: number): void { /* no-op */ }
-  part_system_draw_order(_syst: number, _order: boolean): void { /* no-op */ }
 
   // ---- Layer extras ----
   layer_exists(_layer: any): boolean { return false; }
@@ -2148,7 +2589,7 @@ export class GameRuntime {
   layer_background_get_index(bg: number): number { return this._layerBackgroundSprites.get(bg) ?? -1; }
 
   // ---- GPU extras ----
-  gpu_set_texfilter(_enable: boolean): void { throw new Error("gpu_set_texfilter: not yet implemented"); }
+  gpu_set_texfilter(enable: boolean): void { this._gfx.ctx.imageSmoothingEnabled = enable; }
 
   // ---- Texture extras ----
   texture_prefetch(_tex: number): void { /* no-op: textures preloaded */ }
@@ -2243,9 +2684,6 @@ export class GameRuntime {
 
   // mouse_wheel_up / mouse_wheel_down delegated to createInputAPI
 
-  // ---- Navigation mesh ----
-  mp_grid_path(_grid: number, _path: number, _xstart: number, _ystart: number, _xgoal: number, _ygoal: number, _allowDiag: boolean): boolean { throw new Error("mp_grid_path: requires pathfinding implementation"); }
-
   // ---- struct alias ----
   struct_exists(struct: any, name: string): boolean {
     return struct != null && Object.prototype.hasOwnProperty.call(struct, name);
@@ -2315,28 +2753,28 @@ export class GameRuntime {
 
   // ---- More Steam ----
   steam_utils_enable_callbacks(_enable?: boolean): void { /* no-op */ }
-  steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void { throw new Error("steam_upload_score_buffer_ext: not yet implemented"); }
-  steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void { throw new Error("steam_upload_score_ext: not yet implemented"); }
-  steam_ugc_start_item_update(_appId: number, _fileId: number): number { throw new Error("steam_ugc_start_item_update: not yet implemented"); }
-  steam_ugc_set_item_description(_handle: number, _desc: string): void { throw new Error("steam_ugc_set_item_description: not yet implemented"); }
-  steam_net_packet_get_data(_buf: number): void { throw new Error("steam_net_packet_get_data: not yet implemented"); }
-  steam_net_packet_receive(): boolean { throw new Error("steam_net_packet_receive: not yet implemented"); }
-  steam_net_packet_send(_steamid: number, _buf: number, _size?: number, _type?: number): void { throw new Error("steam_net_packet_send: not yet implemented"); }
+  steam_upload_score_buffer_ext(_name: string, _score: number, _buf: number, ..._args: any[]): void { /* no-op — Steam leaderboards not available in browser */ }
+  steam_upload_score_ext(_name: string, _score: number, ..._args: any[]): void { /* no-op — Steam leaderboards not available in browser */ }
+  steam_ugc_start_item_update(_appId: number, _fileId: number): number { return -1; /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_set_item_description(_handle: number, _desc: string): void { /* no-op — Steam UGC not available in browser */ }
+  steam_net_packet_get_data(_buf: number): void { /* no-op — Steam networking not available in browser */ }
+  steam_net_packet_receive(): boolean { return false; /* no-op — Steam networking not available in browser */ }
+  steam_net_packet_send(_steamid: number, _buf: number, _size?: number, _type?: number): void { /* no-op — Steam networking not available in browser */ }
   steam_music_play(): void { /* no-op — browser does not control Steam Music */ }
   steam_music_is_enabled(): boolean { return false; }
   steam_music_get_status(): number { return 0; }
-  steam_lobby_list_request(): void { throw new Error("steam_lobby_list_request: not yet implemented"); }
-  steam_lobby_list_get_lobby_id(_index: number): number { throw new Error("steam_lobby_list_get_lobby_id: not yet implemented"); }
-  steam_lobby_list_get_count(): number { throw new Error("steam_lobby_list_get_count: not yet implemented"); }
+  steam_lobby_list_request(): void { /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_list_get_lobby_id(_index: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_list_get_count(): number { return 0; /* no-op — Steam lobbies not available in browser */ }
   steam_get_most_achieved_achievement_info(_info?: any[]): boolean { return false; }
   steam_get_local_file_change_count(): number { return 0; }
   steam_available_languages(): string { return this.steam_current_game_language(); }
-  steam_inventory_get_all_items(_arr?: any): number { throw new Error("steam_inventory_get_all_items: not yet implemented"); }
+  steam_inventory_get_all_items(_arr?: any): number { return -1; /* no-op — Steam inventory not available in browser */ }
   steam_get_quota_total(): number { return 104857600; /* 100 MB typical Steam Cloud quota */ }
   steam_get_global_stat_history_real(_name: string, _days?: number): number { return 0; }
   steam_file_read(_path: string): string { return loadItem(this._persistence, this._steamCloudKey(_path)) ?? ""; }
   steam_set_rich_presence(_key: string, _val: string): void { /* no-op — Steam rich presence not available in browser */ }
-  steam_user_get_auth_session_ticket(_arr?: any): number { throw new Error("steam_user_get_auth_session_ticket: not yet implemented"); }
+  steam_user_get_auth_session_ticket(_arr?: any): number { return -1; /* no-op — Steam auth not available in browser */ }
 
   // ---- PS5 stubs ----
   ps5_gamepad_set_vibration_mode(_port: number, _mode: number): void { /* no-op */ }
@@ -2347,18 +2785,18 @@ export class GameRuntime {
 
   // ---- More Steam (third batch) ----
   steam_update(): void { /* no-op — no Steamworks runtime in browser */ }
-  steam_ugc_set_item_tags(_handle: number, _tags: string[]): void { throw new Error("steam_ugc_set_item_tags: not yet implemented"); }
-  steam_ugc_set_item_content(_handle: number, _path: string): void { throw new Error("steam_ugc_set_item_content: not yet implemented"); }
-  steam_ugc_send_query(_handle: number): void { throw new Error("steam_ugc_send_query: not yet implemented"); }
-  steam_ugc_request_item_details(_id: number, _maxAge: number): void { throw new Error("steam_ugc_request_item_details: not yet implemented"); }
-  steam_ugc_num_subscribed_items(): number { throw new Error("steam_ugc_num_subscribed_items: not yet implemented"); }
-  steam_ugc_create_item(_appId: number, _type: number): void { throw new Error("steam_ugc_create_item: not yet implemented"); }
-  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId?: number, _consumerAppId?: number, _page?: number): number { throw new Error("steam_ugc_create_query_all: not yet implemented"); }
-  steam_ugc_delete_item(_id: number): void { throw new Error("steam_ugc_delete_item: not yet implemented"); }
-  steam_ugc_unsubscribe_item(_id: number): void { throw new Error("steam_ugc_unsubscribe_item: not yet implemented"); }
-  steam_ugc_set_item_preview(_handle: number, _path: string): void { throw new Error("steam_ugc_set_item_preview: not yet implemented"); }
-  steam_ugc_set_item_title(_handle: number, _title: string): void { throw new Error("steam_ugc_set_item_title: not yet implemented"); }
-  steam_ugc_set_item_visibility(_handle: number, _vis: number): void { throw new Error("steam_ugc_set_item_visibility: not yet implemented"); }
+  steam_ugc_set_item_tags(_handle: number, _tags: string[]): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_set_item_content(_handle: number, _path: string): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_send_query(_handle: number): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_request_item_details(_id: number, _maxAge: number): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_num_subscribed_items(): number { return 0; /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_create_item(_appId: number, _type: number): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_create_query_all(_queryType: number, _matchingType: number, _creatorAppId?: number, _consumerAppId?: number, _page?: number): number { return -1; /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_delete_item(_id: number): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_unsubscribe_item(_id: number): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_set_item_preview(_handle: number, _path: string): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_set_item_title(_handle: number, _title: string): void { /* no-op — Steam UGC not available in browser */ }
+  steam_ugc_set_item_visibility(_handle: number, _vis: number): void { /* no-op — Steam UGC not available in browser */ }
   steam_stats_ready(): boolean { return true; }
   steam_send_screenshot(_path?: string, _w?: number, _h?: number): void { /* no-op */ }
   steam_request_global_stats(_days: number): void { /* no-op — no server-side stats in browser */ }
@@ -2377,26 +2815,32 @@ export class GameRuntime {
   }
   steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void { /* no-op — complex running-average stat */ }
   steam_set_stat_float(_name: string, _val: number): void { save(this._persistence, this._steamStatKey(_name), String(_val)); }
-  steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void { throw new Error("steam_show_floating_gamepad_text_input: not yet implemented"); }
+  steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void { /* no-op — Steam floating keyboard not available in browser */ }
   steam_shutdown(): void { /* no-op */ }
-  steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void { throw new Error("steam_lobby_set_owner_id: not yet implemented"); }
-  steam_lobby_send_chat_message_buffer(_buf: number, _size?: number, _lobby?: number): boolean { throw new Error("steam_lobby_send_chat_message_buffer: not yet implemented"); }
-  steam_lobby_is_owner(_lobby?: number): boolean { throw new Error("steam_lobby_is_owner: not yet implemented"); }
-  steam_lobby_create(_type: number, _max_members: number): void { throw new Error("steam_lobby_create: not yet implemented"); }
+  steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void { /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_send_chat_message_buffer(_buf: number, _size?: number, _lobby?: number): boolean { return false; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_is_owner(_lobby?: number): boolean { return false; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_create(_type: number, _max_members: number): void { /* no-op — Steam lobbies not available in browser */ }
   steam_lobby_activate_invite_overlay(_lobby?: number): void { /* no-op */ }
-  steam_lobby_list_get_data(_index: number, _key: string): string { throw new Error("steam_lobby_list_get_data: not yet implemented"); }
-  steam_lobby_list_join(_lobby: number): void { throw new Error("steam_lobby_list_join: not yet implemented"); }
+  steam_lobby_list_get_data(_index: number, _key: string): string { return ""; /* no-op — Steam lobbies not available in browser */ }
+  steam_lobby_list_join(_lobby: number): void { /* no-op — Steam lobbies not available in browser */ }
   steam_is_user_logged_on(): boolean { return false; }
   steam_is_screenshot_requested(): boolean { return false; }
   steam_is_overlay_enabled(): boolean { return false; }
   steam_get_quota_free(): number { return 104857600; }
-  steam_get_number_of_current_players(): void { throw new Error("steam_get_number_of_current_players: not yet implemented"); }
-  steam_get_app_ownership_ticket_data(_appId: number): string { throw new Error("steam_get_app_ownership_ticket_data: not yet implemented"); }
-  steam_file_read_buffer(_path: string, _buf?: number): boolean { throw new Error("steam_file_read_buffer: not yet implemented"); }
+  steam_get_number_of_current_players(): void { /* no-op — Steam player count not available in browser */ }
+  steam_get_app_ownership_ticket_data(_appId: number): string { return ""; /* no-op — Steam DRM not available in browser */ }
+  steam_file_read_buffer(path: string, buf?: number): boolean {
+    const data = loadItem(this._persistence, this._steamCloudKey(path)); if (!data) return false;
+    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+    const b = this._buffers.get(buf ?? -1); if (!b) return false;
+    this._bufferGrow(b, bytes.length); b.data.set(bytes, 0);
+    return true;
+  }
   steam_file_persisted(_path: string): boolean { return this.steam_file_exists(_path); }
-  steam_download_scores_around_user(_board: string, _range: number, _range2?: number): void { throw new Error("steam_download_scores_around_user: not yet implemented"); }
-  steam_download_scores(_board: string, _start: number, _end: number): void { throw new Error("steam_download_scores: not yet implemented"); }
-  steam_download_friends_scores(_board: string): void { throw new Error("steam_download_friends_scores: not yet implemented"); }
+  steam_download_scores_around_user(_board: string, _range: number, _range2?: number): void { /* no-op — Steam leaderboards not available in browser */ }
+  steam_download_scores(_board: string, _start: number, _end: number): void { /* no-op — Steam leaderboards not available in browser */ }
+  steam_download_friends_scores(_board: string): void { /* no-op — Steam leaderboards not available in browser */ }
   steam_music_pause(): void { /* no-op */ }
   steam_music_play_next(): void { /* no-op */ }
   steam_music_play_previous(): void { /* no-op */ }
@@ -2501,7 +2945,13 @@ export class GameRuntime {
     }
     return best === -1 ? -4 : best;
   }
-  instance_position(_x: number, _y: number, _classIndex: number): any { throw new Error("instance_position: requires collision system implementation"); }
+  instance_position(x: number, y: number, classIndex: number): any {
+    for (const inst of this._getCandidates(classIndex, false)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxContainsPoint(bb, x, y)) return inst;
+    }
+    return -4;
+  }
 
   // ---- Object extras ----
   object_get_parent(classIndex: number): number {
@@ -2528,7 +2978,10 @@ export class GameRuntime {
   }
 
   // ---- GPU extras ----
-  gpu_set_blendmode_ext_sepalpha(_src: number, _dest: number, _srcA: number, _destA: number): void { throw new Error("gpu_set_blendmode_ext_sepalpha: not yet implemented"); }
+  gpu_set_blendmode_ext_sepalpha(src: number, dest: number, _srcA: number, _destA: number): void {
+    // Canvas 2D cannot separate alpha blend modes; approximate with the color channels
+    this.gpu_set_blendmode_ext(src, dest);
+  }
 
   // ---- Gamepad extras ----
   gamepad_get_description(device: number): string { return navigator.getGamepads()[device]?.id ?? ""; }
@@ -2539,23 +2992,124 @@ export class GameRuntime {
   // ---- GC extras ----
   gc_enable(_enable: boolean): void { /* no-op */ }
 
-  // ---- MP grid (pathfinding) ----
-  mp_grid_create(_left: number, _top: number, _hcells: number, _vcells: number, _cellw: number, _cellh: number): number { throw new Error("mp_grid_create: requires pathfinding implementation"); }
-  mp_grid_add_rectangle(_id: number, _x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("mp_grid_add_rectangle: requires pathfinding implementation"); }
-  mp_grid_add_instances(_id: number, _classIndex: number, _prec: boolean): void { throw new Error("mp_grid_add_instances: requires pathfinding implementation"); }
-  mp_grid_clear_all(_id: number): void { throw new Error("mp_grid_clear_all: requires pathfinding implementation"); }
-  mp_grid_clear_rectangle(_id: number, _x1: number, _y1: number, _x2: number, _y2: number): void { throw new Error("mp_grid_clear_rectangle: requires pathfinding implementation"); }
-  mp_grid_draw(_id: number): void { throw new Error("mp_grid_draw: not yet implemented"); }
-
-  // ---- Particle extras ----
-  part_emitter_stream(_syst: number, _emit: number, _type: number, _num: number): void { /* no-op */ }
-  part_particles_clear(_syst: number): void { throw new Error("part_particles_clear: not yet implemented"); }
-  part_system_automatic_update(_syst: number, _on: boolean): void { /* no-op */ }
-  part_system_drawit(_syst: number): void { /* no-op */ }
+  // ---- MP grid (A* pathfinding) ----
+  mp_grid_create(left: number, top: number, hcells: number, vcells: number, cellw: number, cellh: number): number {
+    const id = this._nextMpGridId++;
+    this._mpGrids.set(id, { left, top, hcells, vcells, cellw, cellh, blocked: new Uint8Array(hcells * vcells) });
+    return id;
+  }
+  mp_grid_destroy(id: number): void { this._mpGrids.delete(id); }
+  mp_grid_add_rectangle(id: number, x1: number, y1: number, x2: number, y2: number): void {
+    const g = this._mpGrids.get(id); if (!g) return;
+    const cx1 = Math.max(0, Math.floor((x1 - g.left) / g.cellw));
+    const cy1 = Math.max(0, Math.floor((y1 - g.top) / g.cellh));
+    const cx2 = Math.min(g.hcells - 1, Math.floor((x2 - g.left) / g.cellw));
+    const cy2 = Math.min(g.vcells - 1, Math.floor((y2 - g.top) / g.cellh));
+    for (let cy = cy1; cy <= cy2; cy++) for (let cx = cx1; cx <= cx2; cx++) g.blocked[cy * g.hcells + cx] = 1;
+  }
+  mp_grid_add_instances(id: number, classIndex: number, _prec: boolean): void {
+    const g = this._mpGrids.get(id); if (!g) return;
+    for (const inst of this._getCandidates(classIndex, false)) {
+      const bb = this._getBBox(inst); if (!bb) continue;
+      this.mp_grid_add_rectangle(id, bb.x1, bb.y1, bb.x2, bb.y2);
+    }
+  }
+  mp_grid_clear_all(id: number): void { const g = this._mpGrids.get(id); if (g) g.blocked.fill(0); }
+  mp_grid_clear_rectangle(id: number, x1: number, y1: number, x2: number, y2: number): void {
+    const g = this._mpGrids.get(id); if (!g) return;
+    const cx1 = Math.max(0, Math.floor((x1 - g.left) / g.cellw));
+    const cy1 = Math.max(0, Math.floor((y1 - g.top) / g.cellh));
+    const cx2 = Math.min(g.hcells - 1, Math.floor((x2 - g.left) / g.cellw));
+    const cy2 = Math.min(g.vcells - 1, Math.floor((y2 - g.top) / g.cellh));
+    for (let cy = cy1; cy <= cy2; cy++) for (let cx = cx1; cx <= cx2; cx++) g.blocked[cy * g.hcells + cx] = 0;
+  }
+  mp_grid_draw(id: number): void {
+    const g = this._mpGrids.get(id); if (!g) return;
+    const ctx = this._gfx.ctx;
+    ctx.strokeStyle = "rgba(255,0,0,0.4)";
+    for (let cy = 0; cy < g.vcells; cy++) for (let cx = 0; cx < g.hcells; cx++) {
+      if (g.blocked[cy * g.hcells + cx]) {
+        ctx.fillStyle = "rgba(255,0,0,0.2)";
+        ctx.fillRect(g.left + cx * g.cellw, g.top + cy * g.cellh, g.cellw, g.cellh);
+      }
+    }
+  }
+  mp_grid_path(gridId: number, pathId: number, xstart: number, ystart: number, xgoal: number, ygoal: number, allowDiag: boolean): boolean {
+    return this._mpGridAstar(gridId, pathId, xstart, ystart, xgoal, ygoal, allowDiag);
+  }
+  private _mpGridAstar(gridId: number, pathId: number, xstart: number, ystart: number, xgoal: number, ygoal: number, allowDiag: boolean): boolean {
+    const g = this._mpGrids.get(gridId)!;
+    const toCell = (wx: number, wy: number): [number, number] => [
+      Math.max(0, Math.min(g.hcells - 1, Math.floor((wx - g.left) / g.cellw))),
+      Math.max(0, Math.min(g.vcells - 1, Math.floor((wy - g.top) / g.cellh))),
+    ];
+    const toWorld = (cx: number, cy: number): [number, number] => [
+      g.left + (cx + 0.5) * g.cellw, g.top + (cy + 0.5) * g.cellh,
+    ];
+    const [sx, sy] = toCell(xstart, ystart);
+    const [ex, ey] = toCell(xgoal, ygoal);
+    const key = (cx: number, cy: number) => cy * g.hcells + cx;
+    const h = (cx: number, cy: number) => allowDiag ? Math.max(Math.abs(cx - ex), Math.abs(cy - ey)) : Math.abs(cx - ex) + Math.abs(cy - ey);
+    const gScore = new Map<number, number>();
+    const cameFrom = new Map<number, number>();
+    const open = new Map<number, number>(); // key → f
+    const startKey = key(sx, sy);
+    gScore.set(startKey, 0);
+    open.set(startKey, h(sx, sy));
+    const dirs = allowDiag
+      ? [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]]
+      : [[0,-1],[-1,0],[1,0],[0,1]];
+    const closed = new Set<number>();
+    let found = false;
+    while (open.size > 0) {
+      let bestKey = -1, bestF = Infinity;
+      for (const [k, f] of open) { if (f < bestF) { bestF = f; bestKey = k; } }
+      open.delete(bestKey);
+      closed.add(bestKey);
+      const cx = bestKey % g.hcells, cy = Math.floor(bestKey / g.hcells);
+      if (cx === ex && cy === ey) { found = true; break; }
+      const curG = gScore.get(bestKey)!;
+      for (const [dx, dy] of dirs) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || nx >= g.hcells || ny < 0 || ny >= g.vcells) continue;
+        if (g.blocked[ny * g.hcells + nx]) continue;
+        const nk = key(nx, ny);
+        if (closed.has(nk)) continue;
+        const ng = curG + (dx !== 0 && dy !== 0 ? 1.414 : 1);
+        if (!gScore.has(nk) || ng < gScore.get(nk)!) {
+          gScore.set(nk, ng); cameFrom.set(nk, bestKey);
+          open.set(nk, ng + h(nx, ny));
+        }
+      }
+    }
+    if (!found) return false;
+    // Reconstruct
+    const cells: [number, number][] = [];
+    let cur = key(ex, ey);
+    while (cur !== startKey) {
+      cells.push([cur % g.hcells, Math.floor(cur / g.hcells)]);
+      cur = cameFrom.get(cur)!;
+    }
+    cells.push([sx, sy]);
+    cells.reverse();
+    const points = cells.map(([cx, cy]) => { const [wx, wy] = toWorld(cx, cy); return { x: wx, y: wy }; });
+    points[0] = { x: xstart, y: ystart };
+    points[points.length - 1] = { x: xgoal, y: ygoal };
+    let p = this._paths.get(pathId);
+    if (!p) { p = { points: [] }; this._paths.set(pathId, p); }
+    p.points = points;
+    return true;
+  }
 
   // ---- Path extras ----
-  path_get_length(_path: number): number { return 0; }
-  path_start(_path: number, _speed: number, _end: number, _abs: boolean): void { throw new Error("path_start: requires path system implementation"); }
+  path_add(): number { const id = this._nextPathId++; this._paths.set(id, { points: [] }); return id; }
+  path_get_length(pathId: number): number {
+    const p = this._paths.get(pathId); if (!p || p.points.length < 2) return 0;
+    let len = 0;
+    for (let i = 1; i < p.points.length; i++) len += Math.hypot(p.points[i]!.x - p.points[i-1]!.x, p.points[i]!.y - p.points[i-1]!.y);
+    return len;
+  }
+  path_start(_path: number, _speed: number, _end: number, _abs: boolean): void { /* no-op: path following not yet implemented */ }
 
   // ---- Debug ----
   show_debug_log(_str: string): void { console.debug("GML debug:", _str); }
@@ -2658,11 +3212,19 @@ export class GameRuntime {
   steam_file_get_list(): string[] { return this._steamCloudIndex(); }
   steam_file_share(_path: string): void { /* no-op — Steam file sharing not available in browser */ }
   steam_file_size(_path: string): number { return (loadItem(this._persistence, this._steamCloudKey(_path)) ?? "").length; }
-  steam_file_write_buffer(_path: string, _buf: number, _size?: number): boolean { throw new Error("steam_file_write_buffer: not yet implemented"); }
-  steam_file_write_file(_path: string, _srcpath: string): boolean { throw new Error("steam_file_write_file: not yet implemented"); }
-  steam_get_achievement_progress_limits_int(_name: string): [number, number] { throw new Error("steam_get_achievement_progress_limits_int: not yet implemented"); }
+  steam_file_write_buffer(path: string, buf: number, size?: number): boolean {
+    const b = this._buffers.get(buf); if (!b) return false;
+    const len = size ?? b.data.length;
+    const bytes = b.data.subarray(0, len);
+    const b64 = btoa(String.fromCharCode(...bytes));
+    save(this._persistence, this._steamCloudKey(path), b64);
+    this._steamCloudAddToIndex(path);
+    return true;
+  }
+  steam_file_write_file(_path: string, _srcpath: string): boolean { return false; /* no filesystem access in browser */ }
+  steam_get_achievement_progress_limits_int(_name: string): [number, number] { return [0, 0]; /* no server-side data in browser */ }
   steam_get_global_stat_real(_name: string): number { return 0; }
-  steam_get_local_file_change(_index: number): string { throw new Error("steam_get_local_file_change: not yet implemented"); }
+  steam_get_local_file_change(_index: number): string { return ""; /* no-op — Steam cloud file changes not available in browser */ }
   steam_input_activate_action_set(_handle: number, _setHandle: number): void { /* no-op */ }
   steam_input_get_action_origin_from_xbox_origin(_handle: number, _origin: number): number { return 0; }
   steam_input_get_analog_action_handle(_name: string): number { return 0; }
@@ -2671,14 +3233,30 @@ export class GameRuntime {
   steam_input_get_digital_action_origins(_controller: number, _action_set: number, _action: number): number[] { return []; }
   steam_input_get_glyph_png_for_action_origin(_origin: number, _style: number, _flags: number): string { return ""; }
   steam_input_init(_explicit: boolean): void { /* no-op — no Steam Input in browser */ }
-  steam_inventory_trigger_item_drop(_id: number): void { throw new Error("steam_inventory_trigger_item_drop: not yet implemented"); }
+  steam_inventory_trigger_item_drop(_id: number): void { /* no-op — Steam inventory not available in browser */ }
   steam_is_subscribed(): boolean { return false; }
-  steam_lobby_leave(_lobby?: number): void { throw new Error("steam_lobby_leave: not yet implemented"); }
+  steam_lobby_leave(_lobby?: number): void { /* no-op — Steam lobbies not available in browser */ }
 
   // ---- Instance position/collision with DS list ----
 
-  instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; /* collision not implemented */ }
-  instance_position_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; /* collision not implemented */ }
+  instance_place_list(x: number, y: number, classIndex: number, list: number, notme: boolean): number {
+    if (!this._self) return 0;
+    const selfBB = this._getBBox(this._self, x, y); if (!selfBB) return 0;
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxOverlap(selfBB, bb)) { this.ds_list_add(list, inst); count++; }
+    }
+    return count;
+  }
+  instance_position_list(x: number, y: number, classIndex: number, list: number, notme: boolean): number {
+    let count = 0;
+    for (const inst of this._getCandidates(classIndex, notme)) {
+      const bb = this._getBBox(inst);
+      if (bb && this._bboxContainsPoint(bb, x, y)) { this.ds_list_add(list, inst); count++; }
+    }
+    return count;
+  }
 
   instance_destroy(instance: GMLObject): void {
     this._instanceDestroy(instance);
