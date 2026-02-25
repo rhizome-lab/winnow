@@ -28,6 +28,7 @@ pub fn generate_data_files(dw: &DataWin, catalog: &mut AssetCatalog, obj_names: 
     generate_sprites(dw, catalog);
     generate_fonts(dw, catalog);
     generate_sounds(dw, catalog);
+    generate_shaders(dw, catalog);
     generate_rooms(dw, catalog, obj_names);
     generate_objects(catalog, obj_names);
     generate_asset_ids(dw, catalog);
@@ -255,6 +256,53 @@ fn generate_sounds(dw: &DataWin, catalog: &mut AssetCatalog) {
         kind: AssetKind::Data,
         original_name: "sounds".into(),
         path: PathBuf::from("data/sounds.ts"),
+        size: out.len() as u64,
+        data: out.into_bytes(),
+    });
+}
+
+/// Generate `data/shaders.ts` from SHDR entries (embeds GLSL source strings).
+fn generate_shaders(dw: &DataWin, catalog: &mut AssetCatalog) {
+    let shdr = match dw.shdr() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let mut out = String::new();
+    out.push_str("// GML shader data — auto-generated, do not edit.\n");
+    out.push_str("export interface GmlShader { name: string; vertex: string; fragment: string; }\n");
+    out.push_str("export const shaders: GmlShader[] = [\n");
+
+    for entry in &shdr.shaders {
+        let name = dw.resolve_string(entry.name).unwrap_or_else(|_| "???".into());
+        let vertex = dw.resolve_string(entry.vertex).unwrap_or_default();
+        let fragment = dw.resolve_string(entry.fragment).unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "  {{ name: {}, vertex: {}, fragment: {} }},",
+            serde_json::to_string(&name).unwrap_or_else(|_| "\"\"".into()),
+            serde_json::to_string(&vertex).unwrap_or_else(|_| "\"\"".into()),
+            serde_json::to_string(&fragment).unwrap_or_else(|_| "\"\"".into()),
+        );
+    }
+
+    out.push_str("];\n");
+
+    // Also emit `Shaders` as-const enum for named access by index.
+    out.push_str("\nexport const Shaders: Record<string, number> = {\n");
+    for (i, entry) in shdr.shaders.iter().enumerate() {
+        let name = dw.resolve_string(entry.name).unwrap_or_else(|_| format!("shader_{i}"));
+        if is_valid_js_ident(&name) {
+            let _ = writeln!(out, "  {name}: {i},");
+        }
+    }
+    out.push_str("};\n");
+
+    catalog.add(Asset {
+        id: "data_shaders".into(),
+        kind: AssetKind::Data,
+        original_name: "shaders".into(),
+        path: PathBuf::from("data/shaders.ts"),
         size: out.len() as u64,
         data: out.into_bytes(),
     });
