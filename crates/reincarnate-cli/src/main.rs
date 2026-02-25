@@ -9,6 +9,9 @@ use reincarnate_core::pipeline::{Backend, BackendInput, DebugConfig, Frontend, F
 use reincarnate_core::project::{AssetMapping, EngineOrigin, ProjectManifest, TargetBackend};
 use reincarnate_core::transforms::default_pipeline;
 
+mod registry;
+use registry::{load_registry, now_iso8601, read_engine_from_manifest, save_registry, ProjectEntry};
+
 #[derive(Parser)]
 #[command(name = "reincarnate", about = "Legacy software lifting framework")]
 struct Cli {
@@ -20,9 +23,13 @@ struct Cli {
 enum Command {
     /// Display project manifest info.
     Info {
-        /// Path to the project manifest.
-        #[arg(long, default_value = "reincarnate.json")]
-        manifest: PathBuf,
+        /// Registry name, path to manifest file, or directory containing reincarnate.json.
+        /// Defaults to searching ancestor directories from the current directory.
+        #[arg(conflicts_with = "manifest")]
+        target: Option<String>,
+        /// Path to the project manifest (legacy flag; prefer positional target).
+        #[arg(long, conflicts_with = "target")]
+        manifest: Option<PathBuf>,
     },
     /// Print a JSON-serialized IR module in human-readable form.
     PrintIr {
@@ -31,18 +38,33 @@ enum Command {
     },
     /// Extract IR from a project's source files.
     Extract {
-        /// Path to the project manifest.
-        #[arg(long, default_value = "reincarnate.json")]
-        manifest: PathBuf,
+        /// Registry name, path to manifest file, or directory containing reincarnate.json.
+        /// Defaults to searching ancestor directories from the current directory.
+        #[arg(conflicts_with = "manifest")]
+        target: Option<String>,
+        /// Path to the project manifest (legacy flag; prefer positional target).
+        #[arg(long, conflicts_with = "target")]
+        manifest: Option<PathBuf>,
         /// Transform passes to skip (e.g. "type-inference", "constant-folding").
         #[arg(long = "skip-pass")]
         skip_passes: Vec<String>,
     },
     /// Run the full pipeline: extract, transform, and emit target code.
     Emit {
-        /// Path to the project manifest.
-        #[arg(long, default_value = "reincarnate.json")]
-        manifest: PathBuf,
+        /// Registry name, path to manifest file, or directory containing reincarnate.json.
+        /// Defaults to searching ancestor directories from the current directory.
+        /// Conflicts with --manifest and --all.
+        #[arg(conflicts_with_all = ["manifest", "all"])]
+        target: Option<String>,
+        /// Path to the project manifest (legacy flag; prefer positional target).
+        #[arg(long, conflicts_with_all = ["target", "all"])]
+        manifest: Option<PathBuf>,
+        /// Emit all registered projects sequentially.
+        #[arg(long, conflicts_with_all = ["target", "manifest"])]
+        all: bool,
+        /// Run --all projects concurrently (caution: high memory usage).
+        #[arg(long, requires = "all")]
+        parallel: bool,
         /// Transform passes to skip on top of the preset.
         #[arg(long = "skip-pass")]
         skip_passes: Vec<String>,
@@ -59,10 +81,45 @@ enum Command {
         #[arg(long = "dump-function")]
         dump_function: Option<String>,
     },
+    /// Add a project to the registry.
+    Add {
+        /// Path to manifest file, directory containing reincarnate.json, or omit to
+        /// search ancestor directories from the current directory.
+        path: Option<PathBuf>,
+        /// Registry name (defaults to the parent directory name of the manifest).
+        name: Option<String>,
+        /// Overwrite an existing entry with the same name.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove a project from the registry.
+    Remove {
+        /// Registry name to remove.
+        name: String,
+    },
+    /// List registered projects.
+    List {
+        /// Sort order.
+        #[arg(long, value_enum, default_value = "name")]
+        sort: SortOrder,
+        /// Output as JSON array (one object per project).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
+#[derive(clap::ValueEnum, Clone)]
+enum SortOrder {
+    Name,
+    Engine,
+    LastEmitted,
+}
+
+// ---------------------------------------------------------------------------
+// Manifest resolution helpers
+// ---------------------------------------------------------------------------
+
 /// Find `reincarnate.json` by walking up from `start` through ancestor directories.
-/// Returns the first path that exists, or `None`.
 fn find_manifest_upward(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_dir() {
         start.to_path_buf()
@@ -80,13 +137,22 @@ fn find_manifest_upward(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Resolve the manifest path: if the given path exists, use it directly;
-/// otherwise search ancestor directories from cwd.
+/// Resolve a path argument to an existing manifest file.
+/// - If the path is a `.json` file that exists, return it directly.
+/// - If it is a directory, look for `reincarnate.json` inside it.
+/// - If using the default filename and not found, search ancestor directories.
 fn resolve_manifest_path(path: &Path) -> Result<PathBuf> {
-    if path.exists() {
+    if path.exists() && path.is_file() {
         return Ok(path.to_path_buf());
     }
-    // Only search ancestors when using the default filename.
+    if path.is_dir() {
+        let candidate = path.join("reincarnate.json");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        bail!("no reincarnate.json found in directory: {}", path.display());
+    }
+    // Only ancestor-search when using the default filename (no explicit path given).
     if path.file_name().and_then(|f| f.to_str()) == Some("reincarnate.json") {
         let cwd = std::env::current_dir().context("failed to get current directory")?;
         if let Some(found) = find_manifest_upward(&cwd) {
@@ -97,15 +163,44 @@ fn resolve_manifest_path(path: &Path) -> Result<PathBuf> {
     bail!("manifest not found: {}", path.display())
 }
 
+/// Resolve the manifest for commands that accept a positional target (name or path)
+/// plus an optional legacy `--manifest` flag.
+///
+/// Resolution order:
+/// 1. `--manifest <path>` → resolve directly as a path.
+/// 2. Positional `target` → if it looks like a path (contains `/`, or exists on disk),
+///    resolve as a path; otherwise try as a registry name.
+/// 3. Neither given → ancestor scan from cwd.
+fn resolve_target(target: Option<&str>, manifest: Option<&Path>) -> Result<PathBuf> {
+    if let Some(m) = manifest {
+        return resolve_manifest_path(m);
+    }
+    if let Some(t) = target {
+        let p = Path::new(t);
+        // Treat as a path if it exists or looks like one (contains a separator).
+        if p.exists() || t.contains('/') || t.contains('\\') {
+            return resolve_manifest_path(p);
+        }
+        // Try as registry name.
+        let reg = load_registry()?;
+        if let Some(entry) = reg.projects.get(t) {
+            return Ok(PathBuf::from(&entry.manifest));
+        }
+        bail!("'{}' is not a known project name or a valid path", t);
+    }
+    // Default: ancestor scan.
+    resolve_manifest_path(Path::new("reincarnate.json"))
+}
+
 fn load_manifest(path: &Path) -> Result<ProjectManifest> {
-    let path = resolve_manifest_path(path)?;
+    let path = path.canonicalize().with_context(|| format!("failed to canonicalize: {}", path.display()))?;
     let file = File::open(&path).with_context(|| format!("failed to open manifest: {}", path.display()))?;
     let reader = BufReader::new(file);
     let mut manifest: ProjectManifest =
         serde_json::from_reader(reader).with_context(|| format!("failed to parse manifest: {}", path.display()))?;
 
     // Resolve relative paths against the manifest's parent directory.
-    if let Some(base) = path.canonicalize()?.parent() {
+    if let Some(base) = path.parent() {
         if manifest.source.is_relative() {
             manifest.source = base.join(&manifest.source);
         }
@@ -123,6 +218,10 @@ fn load_manifest(path: &Path) -> Result<ProjectManifest> {
 
     Ok(manifest)
 }
+
+// ---------------------------------------------------------------------------
+// Asset copying
+// ---------------------------------------------------------------------------
 
 /// Recursively copy a directory tree from `src` to `dst`.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64> {
@@ -142,25 +241,16 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<u64> {
     Ok(count)
 }
 
-/// Copy manifest-declared assets into each target output directory.
 fn copy_manifest_assets(assets: &[AssetMapping], output_dir: &Path) -> Result<()> {
     for mapping in assets {
         if !mapping.src.exists() {
-            eprintln!(
-                "[warn] manifest asset not found, skipping: {}",
-                mapping.src.display()
-            );
+            eprintln!("[warn] manifest asset not found, skipping: {}", mapping.src.display());
             continue;
         }
         let dest = output_dir.join(mapping.dest_name());
         if mapping.src.is_dir() {
             let count = copy_dir_recursive(&mapping.src, &dest)?;
-            eprintln!(
-                "[emit] copied {} files from {} -> {}",
-                count,
-                mapping.src.display(),
-                dest.display()
-            );
+            eprintln!("[emit] copied {} files from {} -> {}", count, mapping.src.display(), dest.display());
         } else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent)?;
@@ -171,6 +261,10 @@ fn copy_manifest_assets(assets: &[AssetMapping], output_dir: &Path) -> Result<()
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Frontend / backend / runtime resolution
+// ---------------------------------------------------------------------------
 
 fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
     match engine {
@@ -185,7 +279,6 @@ fn find_frontend(engine: &EngineOrigin) -> Option<Box<dyn Frontend>> {
 #[cfg(not(debug_assertions))]
 static EMBEDDED_RUNTIME: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../runtime");
 
-/// Release: extract embedded runtime to a temp directory.
 #[cfg(not(debug_assertions))]
 fn runtime_base_dir() -> Option<PathBuf> {
     let tmp = std::env::temp_dir().join("reincarnate-runtime");
@@ -193,7 +286,6 @@ fn runtime_base_dir() -> Option<PathBuf> {
     Some(tmp)
 }
 
-/// Debug: walk up from the executable to find the workspace root's `runtime/` dir.
 #[cfg(debug_assertions)]
 fn runtime_base_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
@@ -210,15 +302,6 @@ fn runtime_base_dir() -> Option<PathBuf> {
     }
 }
 
-/// Resolve the engine-specific runtime package.
-///
-/// In debug builds, locates `runtime/` by walking up from the executable to find
-/// the workspace root. In release builds, extracts embedded runtime files to a
-/// temp directory. Then loads `runtime.json` from `{engine}/{lang}/`.
-///
-/// When `variant` is `Some("harlowe")`, tries `runtime.harlowe.json` first,
-/// falling back to `runtime.json`. This lets a single engine directory serve
-/// multiple sub-formats with different scaffold and system module configs.
 fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend, variant: Option<&str>) -> Option<RuntimePackage> {
     let engine_name = match engine {
         EngineOrigin::Flash => "flash",
@@ -235,8 +318,6 @@ fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend, variant: Opti
     if !source_dir.is_dir() {
         return None;
     }
-    // Try variant-specific config first (e.g. runtime.harlowe.json),
-    // then fall back to runtime.json.
     let config_path = if let Some(v) = variant {
         let variant_path = source_dir.join(format!("runtime.{v}.json"));
         if variant_path.exists() { variant_path } else { source_dir.join("runtime.json") }
@@ -251,12 +332,14 @@ fn resolve_runtime(engine: &EngineOrigin, backend: &TargetBackend, variant: Opti
 
 fn find_backend(backend: &TargetBackend) -> Option<Box<dyn Backend>> {
     match backend {
-        TargetBackend::TypeScript => {
-            Some(Box::new(reincarnate_backend_typescript::TypeScriptBackend))
-        }
+        TargetBackend::TypeScript => Some(Box::new(reincarnate_backend_typescript::TypeScriptBackend)),
         _ => None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Command implementations
+// ---------------------------------------------------------------------------
 
 fn cmd_info(manifest_path: &Path) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
@@ -282,12 +365,8 @@ fn cmd_print_ir(file: &Path) -> Result<()> {
 
 fn cmd_extract(manifest_path: &Path, skip_passes: &[String]) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
-    let frontend = find_frontend(&manifest.engine);
-    let Some(frontend) = frontend else {
-        bail!(
-            "no frontend available for engine {:?}",
-            manifest.engine
-        );
+    let Some(frontend) = find_frontend(&manifest.engine) else {
+        bail!("no frontend available for engine {:?}", manifest.engine);
     };
 
     let input = FrontendInput {
@@ -295,9 +374,7 @@ fn cmd_extract(manifest_path: &Path, skip_passes: &[String]) -> Result<()> {
         engine: manifest.engine.clone(),
         options: manifest.frontend_options.clone(),
     };
-    let output = frontend
-        .extract(input)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let output = frontend.extract(input).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
     let config = PassConfig::from_skip_list(&skip_refs);
@@ -314,12 +391,8 @@ fn cmd_extract(manifest_path: &Path, skip_passes: &[String]) -> Result<()> {
 
 fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &DebugConfig) -> Result<()> {
     let manifest = load_manifest(manifest_path)?;
-    let frontend = find_frontend(&manifest.engine);
-    let Some(frontend) = frontend else {
-        bail!(
-            "no frontend available for engine {:?}",
-            manifest.engine
-        );
+    let Some(frontend) = find_frontend(&manifest.engine) else {
+        bail!("no frontend available for engine {:?}", manifest.engine);
     };
 
     let input = FrontendInput {
@@ -327,12 +400,8 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
         engine: manifest.engine.clone(),
         options: manifest.frontend_options.clone(),
     };
-    let output = frontend
-        .extract(input)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let output = frontend.extract(input).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // Resolve runtime early so we can attach type_definitions to modules
-    // before running transforms (type inference needs them).
     let runtime_variant = output.runtime_variant.as_deref();
     let first_backend = manifest.targets.first().map(|t| &t.backend);
     let early_runtime = first_backend.and_then(|b| resolve_runtime(&manifest.engine, b, runtime_variant));
@@ -363,7 +432,6 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
     }
     eprintln!("[emit] transforms done, linking...");
 
-    // Cross-module linking: validate all imports resolve.
     Linker::link(&modules).map_err(|errors| {
         let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
         anyhow::anyhow!("linking failed:\n  {}", msgs.join("\n  "))
@@ -371,8 +439,7 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
     eprintln!("[emit] linking done, emitting...");
 
     for target in &manifest.targets {
-        let backend = find_backend(&target.backend);
-        let Some(backend) = backend else {
+        let Some(backend) = find_backend(&target.backend) else {
             bail!("no backend available for {:?}", target.backend);
         };
 
@@ -386,48 +453,287 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
             persistence: manifest.persistence.clone(),
         };
         eprintln!("[emit] emitting to {}...", target.output_dir.display());
-        backend
-            .emit(input)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        backend.emit(input).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        // Copy manifest-declared asset directories into the output.
         if !manifest.assets.is_empty() {
             copy_manifest_assets(&manifest.assets, &target.output_dir)?;
         }
 
+        println!("Emitted {} output to {}", backend.name(), target.output_dir.display());
+    }
+
+    Ok(())
+}
+
+/// After a successful emit, update `last_emitted_at` for any registry entry whose
+/// manifest path matches the one we just emitted.  Best-effort — does not fail the emit.
+fn try_update_last_emitted(manifest_path: &Path) {
+    let Ok(mut reg) = load_registry() else { return };
+    let manifest_str = manifest_path.to_string_lossy();
+    let mut updated = false;
+    for entry in reg.projects.values_mut() {
+        if entry.manifest == manifest_str.as_ref() {
+            entry.last_emitted_at = Some(now_iso8601());
+            updated = true;
+            break;
+        }
+    }
+    if updated {
+        let _ = save_registry(&reg);
+    }
+}
+
+fn cmd_emit_all(skip_passes: &[String], preset: &str, debug: &DebugConfig) -> Result<()> {
+    let reg = load_registry()?;
+    if reg.projects.is_empty() {
+        println!("No projects in registry. Use `reincarnate add` to register a project.");
+        return Ok(());
+    }
+
+    let projects: Vec<(&String, &ProjectEntry)> = reg.projects.iter().collect();
+    let total = projects.len();
+    let mut failures: Vec<(String, anyhow::Error)> = Vec::new();
+
+    for (i, (name, entry)) in projects.iter().enumerate() {
+        let engine_label = entry.engine.as_deref().unwrap_or("unknown");
+        println!("\n[{}/{}] {} ({})", i + 1, total, name, engine_label);
+        println!("  manifest: {}", entry.manifest);
+
+        let manifest_path = PathBuf::from(&entry.manifest);
+        match cmd_emit(&manifest_path, skip_passes, preset, debug) {
+            Ok(()) => {
+                try_update_last_emitted(&manifest_path);
+            }
+            Err(e) => {
+                eprintln!("  [error] {e:#}");
+                failures.push((name.to_string(), e));
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        println!("\nAll {total} project(s) emitted successfully.");
+        Ok(())
+    } else {
+        println!("\n{} of {} project(s) failed:", failures.len(), total);
+        for (name, err) in &failures {
+            println!("  {name}: {err:#}");
+        }
+        bail!("{} project(s) failed to emit", failures.len())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registry commands
+// ---------------------------------------------------------------------------
+
+/// Resolve the manifest path for `add`: accepts a directory, a .json file, or None
+/// (ancestor scan from cwd).
+fn resolve_add_manifest(path: Option<&Path>) -> Result<PathBuf> {
+    match path {
+        Some(p) if p.is_file() => Ok(p.to_path_buf()),
+        Some(p) if p.is_dir() => {
+            let candidate = p.join("reincarnate.json");
+            if candidate.exists() {
+                Ok(candidate)
+            } else {
+                bail!("no reincarnate.json found in directory: {}", p.display());
+            }
+        }
+        Some(p) if p.extension().map(|e| e == "json").unwrap_or(false) => {
+            bail!("manifest file not found: {}", p.display())
+        }
+        Some(p) => {
+            bail!("'{}' is not a directory or .json file", p.display())
+        }
+        None => {
+            let cwd = std::env::current_dir().context("failed to get current directory")?;
+            find_manifest_upward(&cwd)
+                .ok_or_else(|| anyhow::anyhow!("no reincarnate.json found in current directory or ancestors"))
+        }
+    }
+}
+
+fn cmd_add(path: Option<&Path>, name: Option<&str>, force: bool) -> Result<()> {
+    let manifest_path = resolve_add_manifest(path)?;
+    let manifest_abs = manifest_path
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize: {}", manifest_path.display()))?;
+
+    // Derive default name from the manifest's parent directory.
+    let default_name = manifest_abs
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("could not derive project name from manifest path"))?
+        .to_string();
+    let project_name = name.unwrap_or(&default_name);
+
+    let engine = read_engine_from_manifest(&manifest_abs);
+
+    let mut reg = load_registry()?;
+    if reg.projects.contains_key(project_name) && !force {
+        bail!(
+            "project '{}' already exists in registry — use --force to overwrite",
+            project_name
+        );
+    }
+
+    reg.projects.insert(
+        project_name.to_string(),
+        ProjectEntry {
+            manifest: manifest_abs.to_string_lossy().into_owned(),
+            engine: engine.clone(),
+            added_at: now_iso8601(),
+            last_emitted_at: None,
+        },
+    );
+    save_registry(&reg)?;
+
+    println!(
+        "Added '{}' ({}) → {}",
+        project_name,
+        engine.as_deref().unwrap_or("unknown engine"),
+        manifest_abs.display()
+    );
+    Ok(())
+}
+
+fn cmd_remove(name: &str) -> Result<()> {
+    let mut reg = load_registry()?;
+    if reg.projects.remove(name).is_none() {
+        bail!("no project named '{}' in registry", name);
+    }
+    save_registry(&reg)?;
+    println!("Removed '{name}' from registry.");
+    Ok(())
+}
+
+fn cmd_list(sort: &SortOrder, json: bool) -> Result<()> {
+    let reg = load_registry()?;
+
+    if reg.projects.is_empty() {
+        if json {
+            println!("[]");
+        } else {
+            println!("No projects registered. Use `reincarnate add` to register a project.");
+        }
+        return Ok(());
+    }
+
+    // Collect and sort entries.
+    let mut entries: Vec<(&String, &ProjectEntry)> = reg.projects.iter().collect();
+    match sort {
+        SortOrder::Name => {} // BTreeMap iteration is already alphabetical.
+        SortOrder::Engine => entries.sort_by(|(_, a), (_, b)| {
+            a.engine.as_deref().unwrap_or("").cmp(b.engine.as_deref().unwrap_or(""))
+        }),
+        SortOrder::LastEmitted => entries.sort_by(|(_, a), (_, b)| {
+            b.last_emitted_at.as_deref().unwrap_or("").cmp(a.last_emitted_at.as_deref().unwrap_or(""))
+        }),
+    }
+
+    if json {
+        // Emit a JSON array for scripting.
+        #[derive(serde::Serialize)]
+        struct JsonEntry<'a> {
+            name: &'a str,
+            engine: Option<&'a str>,
+            manifest: &'a str,
+            added_at: &'a str,
+            last_emitted_at: Option<&'a str>,
+        }
+        let json_entries: Vec<_> = entries
+            .iter()
+            .map(|(name, e)| JsonEntry {
+                name,
+                engine: e.engine.as_deref(),
+                manifest: &e.manifest,
+                added_at: &e.added_at,
+                last_emitted_at: e.last_emitted_at.as_deref(),
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_entries)?);
+        return Ok(());
+    }
+
+    // Compute column widths.
+    let col_name_w = entries.iter().map(|(n, _)| n.len()).max().unwrap_or(4).max(4);
+    let col_engine_w = entries
+        .iter()
+        .map(|(_, e)| e.engine.as_deref().unwrap_or("-").len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let col_emitted_w = "LAST EMITTED".len();
+
+    // Header.
+    println!(
+        "{:<col_name_w$}  {:<col_engine_w$}  {:<col_emitted_w$}  MANIFEST",
+        "NAME", "ENGINE", "LAST EMITTED"
+    );
+    println!(
+        "{}  {}  {}  {}",
+        "-".repeat(col_name_w),
+        "-".repeat(col_engine_w),
+        "-".repeat(col_emitted_w),
+        "-".repeat(40)
+    );
+
+    for (name, entry) in &entries {
+        let engine = entry.engine.as_deref().unwrap_or("-");
+        // Trim ISO 8601 timestamp to a readable form: "2026-02-25 12:34" (drop seconds + tz).
+        let last_emitted = entry
+            .last_emitted_at
+            .as_deref()
+            .map(|s| s.get(..16).unwrap_or(s).replace('T', " "))
+            .unwrap_or_else(|| "never".to_string());
         println!(
-            "Emitted {} output to {}",
-            backend.name(),
-            target.output_dir.display()
+            "{:<col_name_w$}  {:<col_engine_w$}  {:<col_emitted_w$}  {}",
+            name, engine, last_emitted, entry.manifest
         );
     }
 
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
-        Command::Info { manifest } => cmd_info(manifest),
+        Command::Info { target, manifest } => {
+            let path = resolve_target(target.as_deref(), manifest.as_deref())?;
+            cmd_info(&path)
+        }
         Command::PrintIr { file } => cmd_print_ir(file),
-        Command::Extract {
-            manifest,
-            skip_passes,
-        } => cmd_extract(manifest, skip_passes),
-        Command::Emit {
-            manifest,
-            skip_passes,
-            preset,
-            dump_ir,
-            dump_ast,
-            dump_function,
-        } => {
+        Command::Extract { target, manifest, skip_passes } => {
+            let path = resolve_target(target.as_deref(), manifest.as_deref())?;
+            cmd_extract(&path, skip_passes)
+        }
+        Command::Emit { target, manifest, all, parallel: _, skip_passes, preset, dump_ir, dump_ast, dump_function } => {
             let debug = DebugConfig {
                 dump_ir: *dump_ir,
                 dump_ast: *dump_ast,
                 function_filter: dump_function.clone(),
             };
-            cmd_emit(manifest, skip_passes, preset, &debug)
+            if *all {
+                cmd_emit_all(skip_passes, preset, &debug)
+            } else {
+                let path = resolve_target(target.as_deref(), manifest.as_deref())?;
+                let result = cmd_emit(&path, skip_passes, preset, &debug);
+                if result.is_ok() {
+                    try_update_last_emitted(&path);
+                }
+                result
+            }
         }
+        Command::Add { path, name, force } => {
+            cmd_add(path.as_deref(), name.as_deref(), *force)
+        }
+        Command::Remove { name } => cmd_remove(name),
+        Command::List { sort, json } => cmd_list(sort, *json),
     }
 }

@@ -18,5 +18,8 @@ reincarnate-frontend-gamemaker = { path = "../frontends/reincarnate-frontend-gam
 reincarnate-frontend-twine = { path = "../frontends/reincarnate-frontend-twine" }
 clap = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
 include_dir = { workspace = true }

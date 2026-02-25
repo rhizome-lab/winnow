@@ -281,31 +281,43 @@ generic unknown-call spam.
   `fixture_tests.rs`, update `kaitai_validate.py`. Real-game tests in `tests/read_files.rs`
   still provide broader coverage when run with `--include-ignored`.
 
-## CLI — Project Registry (needs more design)
+## CLI — Project Registry
 
 - [ ] **Project registry** — Persistent project registry so you don't have to pass `--manifest` every time.
 
-  **Decided:**
-  - Registry file: `~/.config/reincarnate/projects.json` (global, XDG config dir — per-directory is not discoverable)
+  **Fully decided:**
+
+  **Registry storage**
+  - File: `~/.config/reincarnate/projects.json` (global, XDG config dir)
   - Schema: `{ "version": 1, "projects": { "<name>": { "manifest": "<abs-path>", "added_at": "<iso8601>", "last_emitted_at": "<iso8601> | null" } } }`
   - `last_emitted_at` enables future `--stale` / `--since` filters on `--all`
-  - `reincarnate add <path> [name]` — name defaults to folder name; error on collision with message hinting `--force`; `--force` overwrites
-  - `reincarnate remove <name>` — remove entry
-  - `reincarnate list` — tabular output; engine names colorized; columns: name | engine | manifest path | last emitted
-  - `reincarnate emit <name>` — registry lookup → manifest path → existing pipeline (no new codepath, just a lookup layer)
-  - `reincarnate emit --manifest <path>` — existing behaviour unchanged
-  - `reincarnate emit --all` — sequential by default; `--parallel` flag for concurrent (parallel risks high memory usage)
-  - `reincarnate add` verifies manifest exists at add-time (defer parseability to emit-time)
-  - Registry loaded from disk at startup when a registry-aware subcommand runs, passed as a value — no global state, no module-level mutable anything
+  - Load-time version check: if `version > 1`, error with "registry version N not supported — please upgrade reincarnate"; no auto-migration
+  - Registry loaded from disk at startup when a registry-aware subcommand runs, passed as a value — no global state
 
-  **Still needs design:**
-  - `ri emit --all` output format — interleaved? per-project sections? progress bar?
-  - Error handling in `--all` — stop on first failure, or collect all errors and report at end?
-  - `ri list` sort order — by name, by engine, by last-emitted?
-  - `ri list --json` for scripting?
-  - `ri info <name>` — show full details for one project (engine, manifest contents summary, output dir)?
-  - Should `ri add` accept a manifest file directly (not just a directory)?
-  - Registry migration strategy when schema `version` bumps
+  **`reincarnate add [path] [name]`**
+  - `path` accepts: a directory (searches for `reincarnate.json` inside), a direct `.json` file, or omitted (searches ancestors of cwd — same upward-walk as current `resolve_manifest_path`)
+  - Name defaults to the folder name of the manifest's parent directory
+  - Error on collision with message hinting `--force`; `--force` overwrites
+  - Verifies manifest file exists at add-time (defers parseability to emit-time)
+
+  **`reincarnate remove <name>`** — remove entry
+
+  **`reincarnate list`**
+  - Tabular output: name | engine | manifest path | last emitted
+  - Default sort: alphabetical by name; `--sort=engine|last-emitted` flags
+  - `--json` flag for scripting (JSON array of project objects)
+  - Output format modelled after normalize's `OutputFormat` (Compact/Pretty/Json) — use `--json` for Json mode; TTY auto-detects Pretty vs Compact
+
+  **`reincarnate emit <name>`** — registry lookup → manifest path → existing pipeline
+  **`reincarnate emit <path>`** — bare path accepted as positional; no `--manifest` required
+  **`reincarnate emit --manifest <path>`** — existing behaviour unchanged
+  **`reincarnate emit --all`** — sequential by default; `--parallel` flag for concurrent
+  - Output format: per-project sections (`[1/3] bounty (gamemaker)\n  ...`)
+  - Error handling: continue-and-collect — finish all projects, print failure summary at end
+
+  **All commands accept bare path as positional arg** (not just `--manifest <path>`) when they take a manifest input. Commands: `emit`, `extract`, `info`.
+
+  **`reincarnate info <name-or-path>`** — unified: accepts registry name, directory, or `.json` path; replaces old `--manifest`-only form
 
 ## Future
 
