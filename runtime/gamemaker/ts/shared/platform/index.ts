@@ -1,4 +1,4 @@
-export { GraphicsContext, initCanvas, createCanvas, resizeCanvas } from "./graphics";
+export { GraphicsContext, initCanvas, createCanvas, resizeCanvas, initWebGL } from "./graphics";
 export { loadImage } from "./images";
 export { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "./input";
 export { scheduleTimeout, cancelTimeout } from "./timing";

@@ -2,7 +2,7 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleTimeout } from "../shared/platform";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleTimeout, initWebGL } from "../shared/platform";
 import { PersistenceState, init as initPersistence, save, load as loadItem, remove } from "../shared/platform/persistence";
 import type { RenderRoot } from "../shared/render-root";
 import { DrawState, createDrawAPI } from "./draw";
@@ -31,6 +31,8 @@ import type { Texture } from "../../data/textures";
 import type { Font } from "../../data/fonts";
 import type { Room } from "../../data/rooms";
 import type { Sound } from "../../data/sounds";
+import type { GmlShader } from "../../data/shaders";
+import { compileProgram, orthoMatrix, makeFullscreenQuad, ShaderProgram } from "./webgl";
 
 // Re-exports for class_preamble
 export { Colors, HAligns, VAligns } from "./color";
@@ -384,8 +386,25 @@ export class GameRuntime {
   private _video: HTMLVideoElement | null = null;
 
 
+  // Shader state (WebGL2 post-process)
+  private _shaderSources: GmlShader[] = [];
+  private _shaderCache = new Map<number, ShaderProgram>();
+  private _activeShader: number | null = null;
+  private _captureCanvas: HTMLCanvasElement | null = null;
+  private _captureCtx: CanvasRenderingContext2D | null = null;
+  private _quadVAO: WebGLVertexArrayObject | null = null;
+  private _frameTexture: WebGLTexture | null = null;
+  // Uniform handle: encode (shaderIndex << 16 | uniformSlot) → uniform name
+  private _uniformHandleToName = new Map<number, { sh: number; name: string }>();
+  private _nextUniformHandle = 1;
+
+  // Vertex format state (WebGL2)
+  private _vfmtBuilding: Array<{ kind: string; size: number }> = [];
+  private _vertexFmts = new Map<number, { attrs: Array<{ kind: string; size: number }>; stride: number }>();
+  private _nextVFmtId = 1;
+
   // Vertex buffer state
-  private _vbufs = new Map<number, { verts: { x: number; y: number; col: number; alpha: number }[]; recording: boolean }>();
+  private _vbufs = new Map<number, { floats: number[]; count: number; fmt: number; glBuf: WebGLBuffer | null; recording: boolean }>();
   private _nextVbufId = 1;
   private _vbufCurrent = -1;
   private _vbufFormatDummy = 0;
@@ -793,16 +812,174 @@ export class GameRuntime {
     if (canvas) this._gfx.ctx.drawImage(canvas, left, top, w, h, x, y, w, h);
   }
 
-  // ---- Shader API — no-op (Canvas 2D has no shader support) ----
+  // ---- Shader API (WebGL2 post-process) ----
 
-  shader_is_compiled(_sh: number): boolean { return false; /* no shader support in Canvas 2D */ }
-  shader_set(_sh: number): void { /* no-op — shader execution not supported in Canvas 2D */ }
-  shader_reset(): void { /* no-op — shader execution not supported in Canvas 2D */ }
-  shader_get_uniform(_sh: number, _name: string): number { return -1; /* no shader support */ }
-  shader_set_uniform_f(_handle: number, ..._vals: number[]): void { /* no-op */ }
-  shader_set_uniform_i(_handle: number, ..._vals: number[]): void { /* no-op */ }
-  shader_get_sampler_index(_sh: number, _name: string): number { return -1; }
-  shader_set_uniform_f_array(_handle: number, _arr: number[]): void { /* no-op */ }
+  /** Compile/cache shader n; return true if successful. */
+  shader_is_compiled(sh: number): boolean {
+    if (this._shaderCache.has(sh)) return true;
+    return this._compileShader(sh) !== null;
+  }
+
+  /**
+   * Redirect all subsequent Canvas 2D drawing to a capture canvas so the
+   * active shader program can composite it as a post-process effect.
+   */
+  shader_set(sh: number): void {
+    if (!initWebGL(this._gfx)) return; // WebGL2 unavailable — stay no-op
+    const prog = this._compileShader(sh);
+    if (!prog) return;
+
+    const gl = this._gfx.gl!;
+    const w = this._gfx.canvas.width;
+    const h = this._gfx.canvas.height;
+
+    // Resize/create capture canvas.
+    if (!this._captureCanvas || this._captureCanvas.width !== w || this._captureCanvas.height !== h) {
+      this._captureCanvas = document.createElement('canvas');
+      this._captureCanvas.width = w;
+      this._captureCanvas.height = h;
+      this._captureCtx = this._captureCanvas.getContext('2d');
+    }
+    this._captureCtx!.clearRect(0, 0, w, h);
+
+    // Sync GL canvas size.
+    if (this._gfx.glCanvas!.width !== w || this._gfx.glCanvas!.height !== h) {
+      this._gfx.glCanvas!.width = w;
+      this._gfx.glCanvas!.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+
+    // Redirect drawing to capture canvas.
+    this._gfx.ctx = this._captureCtx!;
+    this._activeShader = sh;
+
+    // Activate program and set GML built-in uniforms.
+    gl.useProgram(prog.program);
+    const matLoc = gl.getUniformLocation(prog.program, 'gm_Matrices');
+    if (matLoc) {
+      // gm_Matrices[4] = MATRIX_WORLD_VIEW_PROJECTION
+      const mat = orthoMatrix(w, h);
+      // GML expects an array; we upload as a 4×4 matrix at index 4.
+      gl.uniformMatrix4fv(matLoc, false, mat);
+    }
+    const samplerLoc = gl.getUniformLocation(prog.program, 'gm_BaseTexture');
+    if (samplerLoc) gl.uniform1i(samplerLoc, 0);
+  }
+
+  /** Composite the captured frame through the active shader back to the main canvas. */
+  shader_reset(): void {
+    const gl = this._gfx.gl;
+    if (!gl || this._activeShader === null || !this._captureCanvas) {
+      this._gfx.ctx = this._gfx.mainCtx;
+      this._activeShader = null;
+      return;
+    }
+
+    // Restore main canvas as drawing target.
+    this._gfx.ctx = this._gfx.mainCtx;
+
+    // Upload captured frame as texture unit 0.
+    if (!this._frameTexture) this._frameTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this._frameTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this._captureCanvas);
+
+    // Draw fullscreen quad.
+    if (!this._quadVAO) this._quadVAO = makeFullscreenQuad(gl);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindVertexArray(this._quadVAO);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+
+    // Composite WebGL2 canvas onto main 2D canvas.
+    this._gfx.mainCtx.drawImage(this._gfx.glCanvas!, 0, 0);
+
+    gl.useProgram(null);
+    this._activeShader = null;
+  }
+
+  shader_get_uniform(sh: number, name: string): number {
+    const gl = this._gfx.gl;
+    const prog = gl ? this._shaderCache.get(sh) : undefined;
+    if (!prog) return -1;
+    const handle = this._nextUniformHandle++;
+    this._uniformHandleToName.set(handle, { sh, name });
+    return handle;
+  }
+
+  shader_set_uniform_f(handle: number, ...vals: number[]): void {
+    const gl = this._gfx.gl; if (!gl) return;
+    const info = this._uniformHandleToName.get(handle); if (!info) return;
+    const prog = this._shaderCache.get(info.sh); if (!prog) return;
+    let loc = prog.uniformLocations.get(info.name);
+    if (!loc) {
+      const l = gl.getUniformLocation(prog.program, info.name);
+      if (!l) return;
+      loc = l;
+      prog.uniformLocations.set(info.name, loc);
+    }
+    if (vals.length === 1) gl.uniform1f(loc, vals[0]!);
+    else if (vals.length === 2) gl.uniform2f(loc, vals[0]!, vals[1]!);
+    else if (vals.length === 3) gl.uniform3f(loc, vals[0]!, vals[1]!, vals[2]!);
+    else if (vals.length >= 4) gl.uniform4f(loc, vals[0]!, vals[1]!, vals[2]!, vals[3]!);
+  }
+
+  shader_set_uniform_i(handle: number, ...vals: number[]): void {
+    const gl = this._gfx.gl; if (!gl) return;
+    const info = this._uniformHandleToName.get(handle); if (!info) return;
+    const prog = this._shaderCache.get(info.sh); if (!prog) return;
+    let loc = prog.uniformLocations.get(info.name);
+    if (!loc) {
+      const l = gl.getUniformLocation(prog.program, info.name);
+      if (!l) return;
+      loc = l;
+      prog.uniformLocations.set(info.name, loc);
+    }
+    if (vals.length === 1) gl.uniform1i(loc, vals[0]!);
+    else if (vals.length === 2) gl.uniform2i(loc, vals[0]!, vals[1]!);
+    else if (vals.length === 3) gl.uniform3i(loc, vals[0]!, vals[1]!, vals[2]!);
+    else if (vals.length >= 4) gl.uniform4i(loc, vals[0]!, vals[1]!, vals[2]!, vals[3]!);
+  }
+
+  shader_set_uniform_f_array(handle: number, arr: number[]): void {
+    const gl = this._gfx.gl; if (!gl) return;
+    const info = this._uniformHandleToName.get(handle); if (!info) return;
+    const prog = this._shaderCache.get(info.sh); if (!prog) return;
+    let loc = prog.uniformLocations.get(info.name);
+    if (!loc) {
+      const l = gl.getUniformLocation(prog.program, info.name);
+      if (!l) return;
+      loc = l;
+      prog.uniformLocations.set(info.name, loc);
+    }
+    gl.uniform1fv(loc, arr);
+  }
+
+  shader_get_sampler_index(sh: number, name: string): number {
+    // Unit 0 is gm_BaseTexture; assign subsequent units starting at 1.
+    const gl = this._gfx.gl;
+    const prog = gl ? this._shaderCache.get(sh) : undefined;
+    if (!prog) return -1;
+    const handle = this._nextUniformHandle++;
+    this._uniformHandleToName.set(handle, { sh, name });
+    return handle;
+  }
+
+  /** Compile or retrieve cached ShaderProgram for index sh. */
+  private _compileShader(sh: number): ShaderProgram | null {
+    const cached = this._shaderCache.get(sh);
+    if (cached) return cached;
+    const gl = this._gfx.gl; if (!gl) return null;
+    const src = this._shaderSources[sh];
+    if (!src || !src.vertex || !src.fragment) return null;
+    const prog = compileProgram(gl, src.vertex, src.fragment);
+    if (prog) this._shaderCache.set(sh, prog);
+    return prog;
+  }
 
   // ---- GPU state API — partial Canvas 2D support ----
 
@@ -2604,16 +2781,40 @@ export class GameRuntime {
     const sheet = this.textureSheets[t.sheetId]; return sheet ? 1 / sheet.naturalWidth : 1;
   }
 
-  // ---- Vertex buffer (2D Canvas approximation — no WebGL) ----
-  vertex_create_buffer(): number {
-    const id = this._nextVbufId++;
-    this._vbufs.set(id, { verts: [], recording: false });
+  // ---- Vertex format API ----
+  vertex_format_begin(): void { this._vfmtBuilding = []; }
+  vertex_format_end(): number {
+    const id = this._nextVFmtId++;
+    const attrs = this._vfmtBuilding.slice();
+    const stride = attrs.reduce((s, a) => s + a.size, 0);
+    this._vertexFmts.set(id, { attrs, stride });
+    this._vfmtBuilding = [];
     return id;
   }
-  vertex_delete_buffer(buf: number): void { this._vbufs.delete(buf); }
-  vertex_begin(buf: number, _format: number): void {
+  vertex_format_add_position(): void    { this._vfmtBuilding.push({ kind: 'pos2',     size: 2 }); }
+  vertex_format_add_position_3d(): void { this._vfmtBuilding.push({ kind: 'pos3',     size: 3 }); }
+  vertex_format_add_normal(): void      { this._vfmtBuilding.push({ kind: 'normal',   size: 3 }); }
+  vertex_format_add_texcoord(): void    { this._vfmtBuilding.push({ kind: 'texcoord', size: 2 }); }
+  vertex_format_add_colour(): void      { this._vfmtBuilding.push({ kind: 'colour',   size: 4 }); }
+  vertex_format_add_color(): void       { this.vertex_format_add_colour(); }
+  vertex_format_add_custom(_type: number, _usage: number): void { /* custom attrs not mapped to shader attribs */ }
+  vertex_format_delete(fmt: number): void { this._vertexFmts.delete(fmt); }
+
+  // ---- Vertex buffer API ----
+  vertex_create_buffer(): number {
+    const id = this._nextVbufId++;
+    this._vbufs.set(id, { floats: [], count: 0, fmt: 0, glBuf: null, recording: false });
+    return id;
+  }
+  vertex_delete_buffer(buf: number): void {
+    const b = this._vbufs.get(buf);
+    if (b?.glBuf) this._gfx.gl?.deleteBuffer(b.glBuf);
+    this._vbufs.delete(buf);
+  }
+  vertex_begin(buf: number, format: number): void {
     const b = this._vbufs.get(buf); if (!b) return;
-    b.verts = []; b.recording = true; this._vbufCurrent = buf;
+    b.floats = []; b.count = 0; b.fmt = format; b.recording = true;
+    this._vbufCurrent = buf;
     this._draw._vbufColor = this._draw.config.color;
     this._draw._vbufAlpha = this._draw.alpha;
   }
@@ -2622,36 +2823,75 @@ export class GameRuntime {
     b.recording = false; if (this._vbufCurrent === buf) this._vbufCurrent = -1;
   }
   vertex_submit(buf: number, prim: number, _tex: number): void {
-    const b = this._vbufs.get(buf); if (!b || b.verts.length === 0) return;
-    // Reuse draw_primitive machinery
-    this.draw_primitive_begin(prim);
-    for (const v of b.verts) this._primVerts.push({ x: v.x, y: v.y });
-    this.draw_primitive_end();
+    const b = this._vbufs.get(buf); if (!b || b.count === 0) return;
+    const gl = this._gfx.gl;
+    const fmt = this._vertexFmts.get(b.fmt);
+    if (gl && this._activeShader !== null && fmt) {
+      // WebGL2 path: upload to GPU and draw.
+      const glPrim = [gl.POINTS, gl.LINES, gl.LINE_STRIP, gl.LINE_LOOP,
+                       gl.TRIANGLES, gl.TRIANGLE_STRIP, gl.TRIANGLE_FAN][prim] ?? gl.TRIANGLES;
+      if (!b.glBuf) b.glBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b.glBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(b.floats), gl.DYNAMIC_DRAW);
+
+      const stride = fmt.stride * 4; // floats → bytes
+      let offset = 0;
+      // Map GML standard attribute names to locations 0–3.
+      const attrNames: Record<string, number> = {
+        pos2: 0, pos3: 0, normal: 1, texcoord: 2, colour: 3,
+      };
+      const prog = this._shaderCache.get(this._activeShader);
+      for (const attr of fmt.attrs) {
+        const locIdx = attrNames[attr.kind] ?? -1;
+        if (locIdx >= 0 && prog) {
+          gl.enableVertexAttribArray(locIdx);
+          gl.vertexAttribPointer(locIdx, attr.size, gl.FLOAT, false, stride, offset);
+        }
+        offset += attr.size * 4;
+      }
+      gl.drawArrays(glPrim, 0, b.count);
+    } else {
+      // Canvas 2D fallback: replay as draw_primitive.
+      this.draw_primitive_begin(prim);
+      const fmt2 = fmt ?? { attrs: [{ kind: 'pos2', size: 2 }], stride: 2 };
+      let fi = 0;
+      for (let vi = 0; vi < b.count; vi++) {
+        let x = 0, y = 0;
+        for (const attr of fmt2.attrs) {
+          if (attr.kind === 'pos2' || attr.kind === 'pos3') { x = b.floats[fi] ?? 0; y = b.floats[fi + 1] ?? 0; }
+          fi += attr.size;
+        }
+        this._primVerts.push({ x, y });
+      }
+      this.draw_primitive_end();
+    }
   }
-  vertex_format_begin(): void { /* no-op: format not used in Canvas 2D */ }
-  vertex_format_end(): number { return ++this._vbufFormatDummy; }
-  vertex_format_add_position_3d(): void { /* no-op */ }
-  vertex_format_add_position(): void { /* no-op */ }
-  vertex_format_add_color(): void { /* no-op */ }
-  vertex_format_add_colour(): void { /* no-op */ }
-  vertex_format_add_texcoord(): void { /* no-op */ }
-  vertex_format_add_normal(): void { /* no-op */ }
-  vertex_format_add_custom(_type: number, _usage: number): void { /* no-op */ }
-  vertex_format_delete(_fmt: number): void { /* no-op */ }
   vertex_position(buf: number, x: number, y: number, _z: number = 0): void {
     const b = this._vbufs.get(buf); if (!b || !b.recording) return;
-    b.verts.push({ x, y, col: this._draw._vbufColor, alpha: this._draw._vbufAlpha });
+    const fmt = this._vertexFmts.get(b.fmt);
+    const posAttr = fmt?.attrs.find(a => a.kind === 'pos2' || a.kind === 'pos3');
+    if (posAttr?.kind === 'pos3') { b.floats.push(x, y, _z); }
+    else { b.floats.push(x, y); }
+    b.count++;
   }
   vertex_colour(buf: number, col: number, alpha: number): void {
     const b = this._vbufs.get(buf); if (!b || !b.recording) return;
     this._draw._vbufColor = col; this._draw._vbufAlpha = alpha;
+    // Push RGBA floats for colour attribute.
+    const r = ((col >> 16) & 0xFF) / 255;
+    const g = ((col >> 8) & 0xFF) / 255;
+    const bl = (col & 0xFF) / 255;
+    b.floats.push(r, g, bl, alpha);
   }
   vertex_color(buf: number, col: number, alpha: number): void { this.vertex_colour(buf, col, alpha); }
-  vertex_normal(buf: number, _x: number, _y: number, _z: number): void {
-    // No-op for Canvas 2D: normals not used.
-    void buf;
+  vertex_normal(buf: number, nx: number, ny: number, nz: number): void {
+    const b = this._vbufs.get(buf); if (!b || !b.recording) return;
+    b.floats.push(nx, ny, nz);
   }
-  vertex_texcoord(_buf: number, _u: number, _v: number): void { /* no-op: texture coords ignored in Canvas 2D */ }
+  vertex_texcoord(buf: number, u: number, v: number): void {
+    const b = this._vbufs.get(buf); if (!b || !b.recording) return;
+    b.floats.push(u, v);
+  }
 
   // ---- Video API (HTML <video> element) ----
   video_open(path: string, ..._args: any[]): void {
@@ -3338,6 +3578,7 @@ export class GameRuntime {
     this.textures = config.textures;
     this.fonts = config.fonts;
     this.sounds = config.sounds ?? [];
+    this._shaderSources = config.shaders ?? [];
     this.classes = config.classes;
     this._classesEnum = config.Classes;
     this.roomCreationCode = config.roomCreationCode ?? [];
@@ -3395,6 +3636,7 @@ export interface GameConfig {
   textures: Texture[];
   fonts: Font[];
   sounds?: Sound[];
+  shaders?: GmlShader[];
   classes: (typeof GMLObject)[];
   Classes: Record<string, number>;
   initialRoom: number;
