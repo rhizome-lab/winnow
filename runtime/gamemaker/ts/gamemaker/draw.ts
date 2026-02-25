@@ -15,6 +15,9 @@ export class DrawState {
   };
   fontLookups: Map<number, any>[] = [];
   colorFontCache: ImageBitmap[][] = [];
+  // Current vertex-buffer color/alpha (updated by vertex_colour)
+  _vbufColor = 0xffffff;
+  _vbufAlpha = 1;
 }
 
 export function createDrawAPI(rt: GameRuntime) {

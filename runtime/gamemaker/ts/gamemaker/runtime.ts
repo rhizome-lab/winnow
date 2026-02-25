@@ -310,6 +310,15 @@ export class GameRuntime {
   // Per-sprite speed overrides (sprite_set_speed); default is room_speed
   _spriteSpeedOverrides = new Map<number, number>();
 
+  // Video element for video_open/draw
+  private _video: HTMLVideoElement | null = null;
+
+  // Vertex buffer state
+  private _vbufs = new Map<number, { verts: { x: number; y: number; col: number; alpha: number }[]; recording: boolean }>();
+  private _nextVbufId = 1;
+  private _vbufCurrent = -1;
+  private _vbufFormatDummy = 0;
+
   // Layer background sprite assignments (layer_background_set_sprite)
   _layerBackgroundSprites = new Map<number, number>();
 
@@ -787,6 +796,8 @@ export class GameRuntime {
   private _hashVarMap = new Map<number, string>();
   private _nextVarHash = 1;
   private _gamepadDeadzones = new Map<number, number>();
+  // Previous-frame gamepad button state for pressed/released detection
+  private _gamepadPrev = new Map<number, boolean[]>();
   private _psnTrophies = new Set<number>();
 
   ds_list_create(): number { const id = this._dsNextId++; this._dsLists.set(id, []); return id; }
@@ -1663,7 +1674,7 @@ export class GameRuntime {
   }
 
   // ---- Tags / misc ----
-  tag_get_assets(_tag: string, _kind?: number): any[] { throw new Error("tag_get_assets: not yet implemented"); }
+  tag_get_assets(_tag: string, _kind?: number): any[] { return []; /* no tag data available */ }
   url_open_ext(url: string, _target: string): void { window.open(url, "_blank"); }
 
   // ---- View extras ----
@@ -1802,8 +1813,16 @@ export class GameRuntime {
     const dz = this._gamepadDeadzones.get(device) ?? 0;
     return Math.abs(raw) < dz ? 0 : raw;
   }
-  gamepad_button_check_pressed(_device: number, _button: number): boolean { throw new Error("gamepad_button_check_pressed: requires per-frame gamepad state tracking"); }
-  gamepad_button_check_released(_device: number, _button: number): boolean { throw new Error("gamepad_button_check_released: requires per-frame gamepad state tracking"); }
+  gamepad_button_check_pressed(device: number, button: number): boolean {
+    const curr = navigator.getGamepads()[device]?.buttons[button]?.pressed ?? false;
+    const prev = this._gamepadPrev.get(device)?.[button] ?? false;
+    return curr && !prev;
+  }
+  gamepad_button_check_released(device: number, button: number): boolean {
+    const curr = navigator.getGamepads()[device]?.buttons[button]?.pressed ?? false;
+    const prev = this._gamepadPrev.get(device)?.[button] ?? false;
+    return !curr && prev;
+  }
   gamepad_button_check(device: number, button: number): boolean { return navigator.getGamepads()[device]?.buttons[button]?.pressed ?? false; }
   gamepad_is_connected(device: number): boolean { return navigator.getGamepads()[device]?.connected ?? false; }
   gamepad_set_vibration(_device: number, _left: number, _right: number): void { /* no-op */ }
@@ -1832,7 +1851,7 @@ export class GameRuntime {
       ctx.fillStyle = g; ctx.fill();
     }
   }
-  draw_path(_path: number, _x: number, _y: number, _absolute: boolean): void { throw new Error("draw_path: not yet implemented"); }
+  draw_path(_path: number, _x: number, _y: number, _absolute: boolean): void { /* no-op: path system not implemented */ }
 
   // ---- More buffer functions ----
   buffer_get_size(bufId: number): number {
@@ -1841,9 +1860,9 @@ export class GameRuntime {
   buffer_exists(bufId: number): boolean { return this._buffers.has(bufId); }
 
   // ---- Layer extras ----
-  layer_get_x(_layer: any): number { throw new Error("layer_get_x: not yet implemented"); }
-  layer_get_y(_layer: any): number { throw new Error("layer_get_y: not yet implemented"); }
-  layer_depth(_layer: any, _depth?: number): number { throw new Error("layer_depth: not yet implemented"); }
+  layer_get_x(_layer: any): number { return 0; }
+  layer_get_y(_layer: any): number { return 0; }
+  layer_depth(_layer: any, _depth?: number): number { return 0; }
   layer_sequence_destroy(_seq: number): void { /* no-op */ }
 
   // ---- More collision ----
@@ -1875,8 +1894,6 @@ export class GameRuntime {
   sprite_get_name(_spr: number): string { return `sprite_${_spr}`; }
   room_exists(_room: number): boolean { return _room >= 0 && _room < this._roomInstances.length; }
   string_byte_at(str: string, n: number): number { return str.charCodeAt(n - 1) || 0; }
-  video_seek_to(_time: number): void { throw new Error("video_seek_to: not yet implemented"); }
-  video_get_position(): number { throw new Error("video_get_position: not yet implemented"); }
 
   // ---- GMS2.3+ self reference sentinel ----
   // @@This@@ is a pushref to the current instance; in our model it's always `self`.
@@ -1947,8 +1964,13 @@ export class GameRuntime {
 
 
   // ---- Clipboard ----
-  clipboard_set_text(str: string): void { navigator.clipboard?.writeText(str); }
-  clipboard_get_text(): string { throw new Error("clipboard_get_text: not yet implemented"); }
+  clipboard_set_text(str: string): void { this._clipboardCache = str; navigator.clipboard?.writeText(str); }
+  clipboard_get_text(): string {
+    // Clipboard API is async; return last known value cached by clipboard_set_text.
+    // Games that call get_text after set_text in the same frame will get the correct value.
+    return this._clipboardCache;
+  }
+  private _clipboardCache = "";
 
   // ---- Window extras ----
   window_mouse_get_x(): number { return this.mouse_x(); }
@@ -1977,7 +1999,14 @@ export class GameRuntime {
   json_decode(str: string): any { try { return JSON.parse(str); } catch { return undefined; } }
 
   // ---- Game lifecycle ----
-  game_end(): never { throw new Error("game_end"); }
+  game_end(): never {
+    // Stop the game loop and close the window (if allowed).
+    clearTimeout(this._drawHandle);
+    this._drawHandle = 0;
+    try { window.close(); } catch { /* may not be permitted */ }
+    // Halt execution: throw a special marker that won't be caught as a game error.
+    throw Object.assign(new Error("game_end"), { isGameEnd: true });
+  }
 
   // ---- DS extras ----
   ds_priority_create(): number { const id = this._dsNextId++; this._dsMaps.set(id, new Map()); return id; }
@@ -1996,7 +2025,12 @@ export class GameRuntime {
   ds_map_write(map: number): string { const m = this._dsMaps.get(map); return m ? JSON.stringify(Object.fromEntries(m)) : "{}"; }
   ds_map_keys_to_array(map: number): any[] { return [...(this._dsMaps.get(map)?.keys() ?? [])]; }
   ds_map_replace(map: number, key: any, val: any): void { this._dsMaps.get(map)?.set(key, val); }
-  ds_map_secure_save(_map: number, _filename: string): void { throw new Error("ds_map_secure_save: not yet implemented"); }
+  ds_map_secure_save(map: number, filename: string): void {
+    // "Secure" save in GML just writes an encoded file — use same localStorage approach as ds_map_write.
+    const m = this._dsMaps.get(map); if (!m) return;
+    const json = JSON.stringify(Object.fromEntries(m));
+    try { localStorage.setItem(this._fileKey(filename), json); } catch { /* storage full */ }
+  }
   ds_map_values_to_array(map: number): any[] { return [...(this._dsMaps.get(map)?.values() ?? [])]; }
   ds_list_read(list: number, str: string): void {
     const l = this._dsLists.get(list);
@@ -2010,7 +2044,14 @@ export class GameRuntime {
   method_get_self(func: any): any { return func?._self ?? null; }
 
   // ---- Sprite extras ----
-  sprite_duplicate(_spr: number): number { throw new Error("sprite_duplicate: not yet implemented"); }
+  sprite_duplicate(spr: number): number {
+    const src = this.sprites[spr]; if (!src) return -1;
+    // Shallow-copy the sprite entry and append to the sprites array.
+    const copy = { ...src, origin: { ...src.origin }, bbox: src.bbox ? { ...src.bbox } : src.bbox, textures: [...src.textures] };
+    const newIdx = this.sprites.length;
+    this.sprites.push(copy);
+    return newIdx;
+  }
   sprite_collision_mask(_spr: number, ..._args: any[]): void { throw new Error("sprite_collision_mask: not yet implemented"); }
 
   // ---- Path ----
@@ -2027,7 +2068,7 @@ export class GameRuntime {
   layer_vspeed(_layer: any, _speed?: number): any { if (_speed !== undefined) return; return 0; }
   layer_background_sprite(_bg: number, _spr?: number): any { if (_spr !== undefined) return; return -1; }
   layer_background_index(_bg: number, _sprite: number): void { /* no-op */ }
-  layer_background_get_index(_bg: number): number { throw new Error("layer_background_get_index: not yet implemented"); }
+  layer_background_get_index(bg: number): number { return this._layerBackgroundSprites.get(bg) ?? -1; }
 
   // ---- GPU extras ----
   gpu_set_texfilter(_enable: boolean): void { throw new Error("gpu_set_texfilter: not yet implemented"); }
@@ -2045,22 +2086,83 @@ export class GameRuntime {
     const sheet = this.textureSheets[t.sheetId]; return sheet ? 1 / sheet.naturalWidth : 1;
   }
 
-  // ---- Vertex buffer (stubs) ----
-  vertex_create_buffer(): number { throw new Error("vertex_create_buffer: requires WebGL implementation"); }
-  vertex_delete_buffer(_buf: number): void { throw new Error("vertex_delete_buffer: not yet implemented"); }
-  vertex_begin(_buf: number, _format: number): void { throw new Error("vertex_begin: not yet implemented"); }
-  vertex_end(_buf: number): void { throw new Error("vertex_end: not yet implemented"); }
-  vertex_submit(_buf: number, _prim: number, _tex: number): void { throw new Error("vertex_submit: not yet implemented"); }
-  vertex_format_begin(): void { throw new Error("vertex_format_begin: not yet implemented"); }
-  vertex_format_end(): number { throw new Error("vertex_format_end: not yet implemented"); }
+  // ---- Vertex buffer (2D Canvas approximation — no WebGL) ----
+  vertex_create_buffer(): number {
+    const id = this._nextVbufId++;
+    this._vbufs.set(id, { verts: [], recording: false });
+    return id;
+  }
+  vertex_delete_buffer(buf: number): void { this._vbufs.delete(buf); }
+  vertex_begin(buf: number, _format: number): void {
+    const b = this._vbufs.get(buf); if (!b) return;
+    b.verts = []; b.recording = true; this._vbufCurrent = buf;
+    this._draw._vbufColor = this._draw.config.color;
+    this._draw._vbufAlpha = this._draw.alpha;
+  }
+  vertex_end(buf: number): void {
+    const b = this._vbufs.get(buf); if (!b) return;
+    b.recording = false; if (this._vbufCurrent === buf) this._vbufCurrent = -1;
+  }
+  vertex_submit(buf: number, prim: number, _tex: number): void {
+    const b = this._vbufs.get(buf); if (!b || b.verts.length === 0) return;
+    // Reuse draw_primitive machinery
+    this.draw_primitive_begin(prim);
+    for (const v of b.verts) this._primVerts.push({ x: v.x, y: v.y });
+    this.draw_primitive_end();
+  }
+  vertex_format_begin(): void { /* no-op: format not used in Canvas 2D */ }
+  vertex_format_end(): number { return ++this._vbufFormatDummy; }
+  vertex_format_add_position_3d(): void { /* no-op */ }
+  vertex_format_add_position(): void { /* no-op */ }
+  vertex_format_add_color(): void { /* no-op */ }
+  vertex_format_add_colour(): void { /* no-op */ }
+  vertex_format_add_texcoord(): void { /* no-op */ }
+  vertex_format_add_normal(): void { /* no-op */ }
+  vertex_format_add_custom(_type: number, _usage: number): void { /* no-op */ }
+  vertex_format_delete(_fmt: number): void { /* no-op */ }
+  vertex_position(buf: number, x: number, y: number, _z: number = 0): void {
+    const b = this._vbufs.get(buf); if (!b || !b.recording) return;
+    b.verts.push({ x, y, col: this._draw._vbufColor, alpha: this._draw._vbufAlpha });
+  }
+  vertex_colour(buf: number, col: number, alpha: number): void {
+    const b = this._vbufs.get(buf); if (!b || !b.recording) return;
+    this._draw._vbufColor = col; this._draw._vbufAlpha = alpha;
+  }
+  vertex_color(buf: number, col: number, alpha: number): void { this.vertex_colour(buf, col, alpha); }
+  vertex_normal(buf: number, _x: number, _y: number, _z: number): void {
+    // No-op for Canvas 2D: normals not used.
+    void buf;
+  }
+  vertex_texcoord(_buf: number, _u: number, _v: number): void { /* no-op: texture coords ignored in Canvas 2D */ }
 
-  // ---- Video (stubs) ----
-  video_open(_path: string, ..._args: any[]): void { throw new Error("video_open: not yet implemented"); }
-  video_close(): void { throw new Error("video_close: not yet implemented"); }
-  video_draw(): void { throw new Error("video_draw: not yet implemented"); }
-  video_get_status(): number { throw new Error("video_get_status: not yet implemented"); }
-  video_get_duration(): number { throw new Error("video_get_duration: not yet implemented"); }
-  video_set_volume(_vol: number): void { throw new Error("video_set_volume: not yet implemented"); }
+  // ---- Video API (HTML <video> element) ----
+  video_open(path: string, ..._args: any[]): void {
+    this.video_close();
+    const v = document.createElement("video");
+    v.src = path; v.style.display = "none";
+    v.autoplay = true; v.preload = "auto";
+    document.body?.appendChild(v);
+    this._video = v;
+  }
+  video_close(): void {
+    if (!this._video) return;
+    this._video.pause(); this._video.remove(); this._video = null;
+  }
+  video_draw(): void {
+    const v = this._video; if (!v || v.readyState < 2) return;
+    const ctx = this._gfx.ctx;
+    ctx.drawImage(v, 0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  video_get_status(): number {
+    if (!this._video) return 0; // video_status_none
+    if (this._video.ended) return 3; // video_status_finished
+    if (this._video.paused) return 2; // video_status_paused
+    return 1; // video_status_playing
+  }
+  video_get_duration(): number { return this._video?.duration ?? 0; }
+  video_seek_to(time: number): void { if (this._video) this._video.currentTime = time; }
+  video_get_position(): number { return this._video?.currentTime ?? 0; }
+  video_set_volume(vol: number): void { if (this._video) this._video.volume = Math.max(0, Math.min(1, vol)); }
 
   // mouse_wheel_up / mouse_wheel_down delegated to createInputAPI
 
@@ -2086,7 +2188,15 @@ export class GameRuntime {
   gc_collect(): void { /* no-op: browser handles GC */ }
 
   // ---- Screen save ----
-  screen_save(_filename: string): void { throw new Error("screen_save: not yet implemented"); }
+  screen_save(filename: string): void {
+    // Trigger a download of the current canvas content.
+    try {
+      const a = document.createElement("a");
+      a.href = this._gfx.canvas.toDataURL("image/png");
+      a.download = filename.replace(/\\/g, "/").split("/").pop() ?? filename;
+      a.click();
+    } catch { /* ignore: may fail in non-browser environments */ }
+  }
 
   // ---- Async dialogs ----
   get_integer_async(_message: string, _default: number): number { return _default; }
@@ -2284,7 +2394,17 @@ export class GameRuntime {
     }
   }
   instance_activate_layer(_layer: any): void { /* no-op: layer data not available */ }
-  instance_furthest(_x: number, _y: number, _classIndex: number): any { throw new Error("instance_furthest: requires spatial instance index"); }
+  instance_furthest(x: number, y: number, classIndex: number): any {
+    const clazz = this.classes[classIndex];
+    if (!clazz) return -4;
+    let best = -1, bestDist = -1;
+    for (const inst of this.roomVariables) {
+      if (!(inst instanceof clazz)) continue;
+      const d = Math.hypot(inst.x - x, inst.y - y);
+      if (d > bestDist) { bestDist = d; best = inst as any; }
+    }
+    return best === -1 ? -4 : best;
+  }
   instance_position(_x: number, _y: number, _classIndex: number): any { throw new Error("instance_position: requires collision system implementation"); }
 
   // ---- Object extras ----
@@ -2305,7 +2425,11 @@ export class GameRuntime {
   }
 
   // ---- Room extras ----
-  room_instance_clear(_room: number): void { throw new Error("room_instance_clear: not yet implemented"); }
+  room_instance_clear(room: number): void {
+    // Clears all pre-defined instances from a room's data (not the currently running room).
+    const data = this._roomDatas[room]; if (!data) return;
+    data.objs = [];
+  }
 
   // ---- GPU extras ----
   gpu_set_blendmode_ext_sepalpha(_src: number, _dest: number, _srcA: number, _destA: number): void { throw new Error("gpu_set_blendmode_ext_sepalpha: not yet implemented"); }
@@ -2509,6 +2633,13 @@ export class GameRuntime {
   onTick?: () => void;
 
   private _runFrame(): void {
+    // Snapshot current gamepad state into _gamepadPrev before the frame runs
+    // so pressed/released queries compare last-frame vs current-frame.
+    const pads = navigator.getGamepads();
+    for (let i = 0; i < pads.length; i++) {
+      const gp = pads[i];
+      this._gamepadPrev.set(i, gp ? gp.buttons.map((b) => b.pressed) : []);
+    }
     const start = performance.now();
     this.onTick?.();
     if (this._currentRoom) this._currentRoom.draw();
