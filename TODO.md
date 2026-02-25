@@ -321,11 +321,9 @@ generic unknown-call spam.
 
 ## CLI — Build Configuration
 
-- [ ] **Feature-gate frontends, backends, and checkers in the CLI** — Currently all frontends
-  (Flash, GameMaker, Twine), the TypeScript backend, and the TypeScript checker are unconditionally
-  compiled into the CLI binary. Each should be behind a Cargo feature flag so users can build a
-  slimmer binary with only the engines they need. Pattern: `features = ["flash", "gamemaker", "twine", "ts-backend", "ts-checker"]`,
-  all enabled by default.
+- [x] **Feature-gate frontends, backends, and checkers in the CLI** — All 5 plugin crates are behind
+  Cargo feature flags (`frontend-flash`, `frontend-gamemaker`, `frontend-twine`, `backend-typescript`,
+  `checker-typescript`), all enabled by default. Build with `--no-default-features` for a minimal binary.
 
 ## Future
 
@@ -344,8 +342,8 @@ generic unknown-call spam.
 - [x] **`reincarnate check` subcommand** — Implemented: Checker trait in core, TsChecker crate
   (tsgo via bunx), CLI wiring with `--no-emit`, `--json`, `--all` flags. Supports registry names,
   paths, and bare positional args. Prints per-code and per-file breakdown.
-- [ ] **`--baseline <file>` for check** — Compare against a saved snapshot and report regressions/improvements.
-  Not yet implemented.
+- [x] **`--baseline <file>` for check** — `--save-baseline <path>` saves check results as JSON;
+  `--baseline <path>` compares against it and reports per-code/per-file deltas. Exits non-zero on regression.
 
 ## Diagnostics
 
