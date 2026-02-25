@@ -31,6 +31,12 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 
 ---
 
+## TODO.md Staleness Audit (HIGH PRIORITY)
+
+- [ ] **Audit TODO.md for stale items** — Many items were written months ago and may already be implemented, superseded, or no longer relevant. Go through each open `[ ]` item, check against the codebase, and either mark `[x]` with a note, update the description, or delete if obsolete. Known example: `IR-level closure representation` was stale (now marked done). `withBegin`/withEnd design debt references "no closure construct" which is now resolved but the debt itself is still live.
+
+---
+
 ## End-to-End Regression Tests
 
 - [ ] **Snapshot tests for both frontends** — No snapshot infrastructure yet.
@@ -275,9 +281,39 @@ generic unknown-call spam.
   `fixture_tests.rs`, update `kaitai_validate.py`. Real-game tests in `tests/read_files.rs`
   still provide broader coverage when run with `--include-ignored`.
 
+## CLI — Project Registry (needs more design)
+
+- [ ] **Project registry** — Persistent project registry so you don't have to pass `--manifest` every time.
+
+  **Decided:**
+  - Registry file: `~/.config/reincarnate/projects.json` (global, XDG config dir — per-directory is not discoverable)
+  - Schema: `{ "version": 1, "projects": { "<name>": { "manifest": "<abs-path>", "added_at": "<iso8601>", "last_emitted_at": "<iso8601> | null" } } }`
+  - `last_emitted_at` enables future `--stale` / `--since` filters on `--all`
+  - `reincarnate add <path> [name]` — name defaults to folder name; error on collision with message hinting `--force`; `--force` overwrites
+  - `reincarnate remove <name>` — remove entry
+  - `reincarnate list` — tabular output; engine names colorized; columns: name | engine | manifest path | last emitted
+  - `reincarnate emit <name>` — registry lookup → manifest path → existing pipeline (no new codepath, just a lookup layer)
+  - `reincarnate emit --manifest <path>` — existing behaviour unchanged
+  - `reincarnate emit --all` — sequential by default; `--parallel` flag for concurrent (parallel risks high memory usage)
+  - `reincarnate add` verifies manifest exists at add-time (defer parseability to emit-time)
+  - Registry loaded from disk at startup when a registry-aware subcommand runs, passed as a value — no global state, no module-level mutable anything
+
+  **Still needs design:**
+  - `ri emit --all` output format — interleaved? per-project sections? progress bar?
+  - Error handling in `--all` — stop on first failure, or collect all errors and report at end?
+  - `ri list` sort order — by name, by engine, by last-emitted?
+  - `ri list --json` for scripting?
+  - `ri info <name>` — show full details for one project (engine, manifest contents summary, output dir)?
+  - Should `ri add` accept a manifest file directly (not just a directory)?
+  - Registry migration strategy when schema `version` bumps
+
 ## Future
 
-- [ ] **IR-level closure representation** — `MethodKind::Closure` exists as a tag but captures are implicit (lexical scoping in TS handles it today). Design: `Op::MakeClosure { func: FuncId, captures: Vec<(ValueId, CaptureMode)> }` with `CaptureMode` = `ByValue | ByRef`; closure function gets capture params prepended to its signature. Also needed for correct DCE (currently can't see that a closure body keeps an outer-scope value live). **Prerequisite for Rust backend AND for correct SugarCube `<<capture>>` semantics** — without explicit capture lists, the SugarCube frontend's lift-then-inline round-trip can't model captured temp vars (outer-scope ValueIds are inaccessible from a lifted function). `<<capture _i>>` maps directly: snapshot `_i` → `ValueId`, any `Op::MakeClosure` inside the block lists it as a `ByValue` capture.
+- [ ] **Split OPFS out of localStorage backend** — `runtime/gamemaker/ts/shared/platform/persistence.ts` currently bakes OPFS in as a fire-and-forget side effect of localStorage writes. Per the persistence design, OPFS should be its own backend composed via `tee(localStorage, opfs)`. Split into `persistence/localstorage.ts` + `persistence/opfs.ts`, wire with `tee()` in `platform/index.ts`. Twine platform (`runtime/twine/ts/platform/persistence.ts`) is localStorage-only and will benefit from the same split.
+
+- [ ] **Cloud save backends** — Platform persistence interface already abstracts save/load/remove; swapping the backend is just a different platform implementation. Candidates: OneDrive, Google Drive, Dropbox, S3/R2/B2. Design: `platform/onedrive.ts`, `platform/gdrive.ts`, etc., each re-exporting the same persistence interface. Config: deployer switches backend by changing re-export in `platform/index.ts`.
+
+- [x] **IR-level closure representation** — `Op::MakeClosure { func, captures }`, `CaptureMode::ByValue`/`ByRef`, `CaptureParam`, and `add_capture_params` on `FunctionBuilder` are all implemented. SugarCube, Harlowe, and GML frontends emit `MakeClosure` with explicit capture lists. TypeScript backend rewrites to IIFE-with-captures (by value) or plain arrow (no captures). DCE tracks captures as uses. `<<capture>>` is a correct no-op — our IIFE pattern already snapshots by value, making SugarCube's workaround unnecessary. Remaining gaps: (1) Flash closures still use `MethodKind::Closure` + TS lexical closure rather than `Op::MakeClosure` — see "Inline closures" below; (2) `CaptureMode::ByRef` is defined but unused.
 - [ ] Rust codegen backend (emit `.rs` files from typed IR — **blocked on multi-typed locals**)
 - [ ] wgpu + winit renderer system implementation
 - [ ] Web Audio system implementation
@@ -577,13 +613,7 @@ had two distinct bugs in the frontend translator, both now fixed:
   loop-back case (sentinel >= 0) and the break-out case (sentinel < 0) now fall through.
   Commit: 7832b3a.
 
-**Design debt**: The `withBegin`/`withEnd` bracket is an IR anti-pattern. The IR uses a pair of
-`SystemCall` nodes as implicit delimiters, relying on the backend's `collapse_with_blocks` AST
-pass to pattern-match and reconstruct `withInstances(target, callback)`. The correct design
-would emit the with-body as a nested IR closure and call `withInstances` directly from the IR —
-but the IR currently has no closure/lambda construct (see "IR-level closure representation" item
-above). The current approach produces correct output but is fragile: any IR transform pass that
-reorders or splits the bracket would silently break the pattern.
+**Design debt — RESOLVED**: The `withBegin`/`withEnd` bracket anti-pattern turned out to already be fixed — the GML frontend already emitted `Op::MakeClosure` + `withInstances` directly (not `withBegin`/`withEnd`). `collapse_with_blocks` was dead code only exercised by its own tests. Deleted `collapse_with_blocks`, `try_extract_with_loop_body`, `make_with_instances`, `replace_this_in_stmts`, `replace_this_in_expr`, the `withBegin` canonicalization map entry, and all associated tests.
 
 ### GML Short-Circuit AND Condition Bug — FIXED (2026-02-22)
 
