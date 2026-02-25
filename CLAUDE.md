@@ -253,6 +253,12 @@ Test projects live under `~/reincarnate/<engine>/<game>/`:
 bunx @typescript/native-preview --noEmit  # from ~/reincarnate/twine/mygame/ — always exits 0
 ```
 
+**TS error summary:** After running tsgo, use this to get a categorized breakdown:
+```bash
+(cd ~/reincarnate/<engine>/<game>/out && bunx @typescript/native-preview --noEmit 2>&1 | grep -oP 'error TS\d+' | sort | uniq -c | sort -rn)
+```
+When reporting TS error counts (e.g. in TODO.md), always include the total count AND the per-code breakdown. This replaces eyeballing raw tsgo output.
+
 ## Crate Structure
 
 All crates use the `reincarnate-` prefix:

@@ -331,6 +331,15 @@ generic unknown-call spam.
 - [ ] Web Audio system implementation
 - [ ] Native binary decompilation (C/C++, DirectX games with no scripting layer) — requires disassembly + decompilation pipeline rather than bytecode decoding; far harder than any current target; no timeline
 
+## CLI — `reincarnate check` (language-agnostic output validation)
+
+- [ ] **`reincarnate check` subcommand** — Runs the appropriate type-checker on emitted output and
+  prints a categorized error summary. Language-agnostic: TypeScript backend runs tsgo (`@typescript/native-preview --noEmit`),
+  future Rust backend runs `cargo clippy`. Output: total error count + per-error-code breakdown table.
+  Should support `--manifest` (or bare path / registry name once project registry lands).
+  Optional `--baseline <file>` to compare against a saved snapshot and report regressions/improvements.
+  The manifest's `backend` field (or output dir contents) determines which checker to invoke.
+
 ## Diagnostics
 
 - [ ] **External type member validation** — 90 member warnings from types
@@ -484,31 +493,31 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 4151 as of 2026-02-24
+### 7. Dead Estate remaining TS errors — 3341 as of 2026-02-25
 
-Progress: 12350 → 4151 (66% reduction). Error breakdown by category:
+Progress: 12350 → 4151 → 3341 (73% reduction). 1 translation error (RunLoader::step stack underflow — see Bug 8 below).
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 2047 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
-| TS2339 | 887 | Property doesn't exist — field access on insufficiently typed struct/object |
-| TS7053 | 518 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
-| TS2322 | 310 | Type not assignable |
+| TS2345 | 2043 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
+| TS7053 | 454 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
+| TS2322 | 308 | Type not assignable |
 | TS7027 | 207 | Unreachable code — code after `return` (game author style) |
-| TS2554 | 7 | Wrong argument count — remaining are game-author errors or decompiler arg-count mismatches |
+| TS2339 | 149 | Property doesn't exist — field access on insufficiently typed struct/object |
 | TS2367 | 54 | Comparison always false — type mismatch in `===` (game author errors) |
 | TS2365 | 39 | Operator not applicable — bitwise/arithmetic on wrong type |
 | TS2362 | 33 | Left side of `**`/arithmetic must be number |
 | TS2304 | 17 | Cannot find name — undeclared `vNNN` identifiers (known linearizer bug) |
 | TS18050 | 13 | Value of type `void` is not callable |
 | TS2363 | 6 | Right side of `**` must be number |
+| TS2554 | 5 | Wrong argument count — game-author errors or decompiler arg-count mismatches |
 | TS2416 | 4 | Property not assignable to same in base type |
 | TS2308 | 3 | Module not found |
-| TS2307 | 3 | Cannot find module |
 | TS2300 | 2 | Duplicate identifier |
 | TS2552 | 1 | Cannot find name `sarr` (with-body self-reference bug) |
-| TS18047 | 1 | Object is possibly null |
 | TS2740 | 1 | Type missing properties from interface |
+| TS2307 | 1 | Cannot find module |
+| TS18047 | 1 | Object is possibly null |
 
 Fixed this session (2026-02-24):
 - TS2393 (14→0): Duplicate method blocks in runtime.ts removed
@@ -546,6 +555,17 @@ Fixed this session (2026-02-24):
   Adjacent references correctly use `self.sarr[...]` — one reference dropped the `self.` prefix.
   This is a with-body codegen bug; needs investigation in GML translator.
 
+### 8. RunLoader::step stack underflow on Popz at 0x19c — Dead Estate translation error
+
+- [ ] **`compute_block_stack_depths` uses `or_insert` — first path to reach a join point wins** —
+  `RunLoader::step` fails with `0x19c: stack underflow on Popz`. The depth pre-computation walk
+  sets `terminated = true` on `Bt`/`Bf`, which is correct since fall-through is always a block
+  start. But `or_insert` means if two converging paths have different stack depths, only the first
+  recorded depth is used. If the true runtime path arrives with fewer items than the recorded depth,
+  subsequent pops underflow. Investigation needs bytecode dump of RunLoader::step to see which
+  join point has inconsistent depths. Consider: (a) asserting stack depth consistency at join
+  points, (b) using a worklist-based depth propagation instead of linear walk.
+
 ### New game inventory
 
 | Game | Source | Status |
@@ -554,7 +574,7 @@ Fixed this session (2026-02-24):
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 4151 TS errors (2026-02-24) |
+| Dead Estate | `data.win` 192MB | ⚠️ 3341 TS errors + 1 translation error (2026-02-25) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
