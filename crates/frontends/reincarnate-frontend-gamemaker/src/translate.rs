@@ -2112,6 +2112,34 @@ fn translate_push_variable(
         if ctx.has_self && target == fb.param(0) {
             let val = fb.get_field(target, &var_name, Type::Dynamic);
             stack.push(val);
+        } else if let Some(Constant::Int(obj_idx)) = fb.try_resolve_const(target) {
+            // Constant integer target = object index pushed before stacktop access.
+            // Resolve to getOn(objName, field) for clean class-based access.
+
+            if obj_idx >= 0 {
+                let obj_id = if let Some(name) = ctx.obj_names.get(obj_idx as usize) {
+                    fb.const_string(name)
+                } else {
+                    fb.const_int(obj_idx)
+                };
+                let name_val = fb.const_string(&var_name);
+                let val = fb.system_call(
+                    "GameMaker.Instance",
+                    "getOn",
+                    &[obj_id, name_val],
+                    Type::Dynamic,
+                );
+                stack.push(val);
+            } else {
+                let name_val = fb.const_string(&var_name);
+                let val = fb.system_call(
+                    "GameMaker.Instance",
+                    "getField",
+                    &[target, name_val],
+                    Type::Dynamic,
+                );
+                stack.push(val);
+            }
         } else {
             let name_val = fb.const_string(&var_name);
             let val = fb.system_call(
@@ -2365,6 +2393,32 @@ fn translate_push_variable(
                 // Self-field read in struct method — use get_field for clean output.
                 let val = fb.get_field(target, &var_name, Type::Dynamic);
                 stack.push(val);
+            } else if let Some(Constant::Int(obj_idx)) = fb.try_resolve_const(target) {
+    
+                if obj_idx >= 0 {
+                    let obj_id = if let Some(name) = ctx.obj_names.get(obj_idx as usize) {
+                        fb.const_string(name)
+                    } else {
+                        fb.const_int(obj_idx)
+                    };
+                    let name_val = fb.const_string(&var_name);
+                    let val = fb.system_call(
+                        "GameMaker.Instance",
+                        "getOn",
+                        &[obj_id, name_val],
+                        Type::Dynamic,
+                    );
+                    stack.push(val);
+                } else {
+                    let name_val = fb.const_string(&var_name);
+                    let val = fb.system_call(
+                        "GameMaker.Instance",
+                        "getField",
+                        &[target, name_val],
+                        Type::Dynamic,
+                    );
+                    stack.push(val);
+                }
             } else {
                 let name_val = fb.const_string(&var_name);
                 let val = fb.system_call(
@@ -2463,6 +2517,32 @@ fn translate_pop(
             };
             if ctx.has_self && target == fb.param(0) {
                 fb.set_field(target, &var_name, value);
+            } else if let Some(Constant::Int(obj_idx)) = fb.try_resolve_const(target) {
+                // Constant integer target = object index pushed before stacktop access.
+                // Resolve to setOn(objName, field, value) for clean class-based access.
+    
+                if obj_idx >= 0 {
+                    let obj_id = if let Some(name) = ctx.obj_names.get(obj_idx as usize) {
+                        fb.const_string(name)
+                    } else {
+                        fb.const_int(obj_idx)
+                    };
+                    let name_val = fb.const_string(&var_name);
+                    fb.system_call(
+                        "GameMaker.Instance",
+                        "setOn",
+                        &[obj_id, name_val, value],
+                        Type::Void,
+                    );
+                } else {
+                    let name_val = fb.const_string(&var_name);
+                    fb.system_call(
+                        "GameMaker.Instance",
+                        "setField",
+                        &[target, name_val, value],
+                        Type::Void,
+                    );
+                }
             } else {
                 let name_val = fb.const_string(&var_name);
                 fb.system_call(
@@ -2709,6 +2789,30 @@ fn translate_pop(
                 } else if ctx.has_self && target == fb.param(0) {
                     // Self-field write in struct method — use set_field for clean output.
                     fb.set_field(target, &var_name, value);
+                } else if let Some(Constant::Int(obj_idx)) = fb.try_resolve_const(target) {
+        
+                    if obj_idx >= 0 {
+                        let obj_id = if let Some(name) = ctx.obj_names.get(obj_idx as usize) {
+                            fb.const_string(name)
+                        } else {
+                            fb.const_int(obj_idx)
+                        };
+                        let name_val = fb.const_string(&var_name);
+                        fb.system_call(
+                            "GameMaker.Instance",
+                            "setOn",
+                            &[obj_id, name_val, value],
+                            Type::Void,
+                        );
+                    } else {
+                        let name_val = fb.const_string(&var_name);
+                        fb.system_call(
+                            "GameMaker.Instance",
+                            "setField",
+                            &[target, name_val, value],
+                            Type::Void,
+                        );
+                    }
                 } else {
                     let name_val = fb.const_string(&var_name);
                     fb.system_call(
