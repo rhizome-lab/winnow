@@ -32,7 +32,8 @@ import type { Font } from "../../data/fonts";
 import type { Room } from "../../data/rooms";
 import type { Sound } from "../../data/sounds";
 import type { GmlShader } from "../../data/shaders";
-import { compileProgram, orthoMatrix, makeFullscreenQuad, ShaderProgram } from "./webgl";
+import { compileProgram, orthoMatrix, makeFullscreenQuad } from "./webgl";
+import type { ShaderProgram } from "./webgl";
 
 // Re-exports for class_preamble
 export { Colors, HAligns, VAligns } from "./color";
@@ -43,6 +44,7 @@ export { ACTIVE } from "./constants";
 const __baseproto = Object.getPrototypeOf(class {});
 
 export class GMLObject {
+  static instances: GMLObject[];
   // GML objects are open — instance variables are set dynamically in event handlers.
   [key: string]: any;
   _rt!: GameRuntime;
@@ -323,7 +325,7 @@ function randf(min: number, max: number): number { return min + Math.random() * 
 function hsv2rgb(h: number, s: number, v: number): number {
   const hi = Math.floor(h / 60) % 6, f = h / 60 - Math.floor(h / 60);
   const [p, q, t] = [v * (1 - s), v * (1 - f * s), v * (1 - (1 - f) * s)];
-  let [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][hi]!;
+  const [r, g, b] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][hi] as [number, number, number];
   return ((r * 255) << 16) | ((g * 255) << 8) | (b * 255 | 0);
 }
 function lerpColor(c1: number, c2: number, t: number): number {
@@ -413,7 +415,7 @@ export class GameRuntime {
   _layerBackgroundSprites = new Map<number, number>();
 
   // Particle system state
-  private _partSystems = new Map<number, PartSystem>();
+  _partSystems = new Map<number, PartSystem>();
   private _partTypes = new Map<number, PartTypeConfig>();
   private _nextPartId = 1;
 
@@ -515,6 +517,9 @@ export class GameRuntime {
   ini_open!: (path: string) => void;
   ini_close!: () => string;
   ini_write_real!: (section: string, key: string, value: number) => void;
+  ini_read_real!: (section: string, key: string, defaultVal: number) => number;
+  ini_read_string!: (section: string, key: string, defaultVal: string) => string;
+  ini_write_string!: (section: string, key: string, value: string) => void;
 
   // Global API (from createGlobalAPI)
   variable_global_exists!: (key: string) => boolean;
@@ -1367,6 +1372,7 @@ export class GameRuntime {
 
   // ---- Collision helpers (AABB) ----
   private _getBBox(obj: GMLObject, ox?: number, oy?: number): { x1: number; y1: number; x2: number; y2: number } | null {
+    if (obj.sprite_index === undefined) return null;
     const spr = this.sprites[obj.sprite_index];
     if (!spr || !spr.bbox) return null;
     const xs = obj.image_xscale ?? 1, ys = obj.image_yscale ?? 1;
@@ -2540,7 +2546,8 @@ export class GameRuntime {
     const old = this._self;
     // Remove old instance and create new one at same position
     const idx = this.roomVariables.indexOf(old);
-    const newInst = new NewClass(this);
+    const newInst = new NewClass();
+    newInst._rt = this;
     newInst.x = old.x; newInst.y = old.y;
     newInst.image_xscale = old.image_xscale; newInst.image_yscale = old.image_yscale;
     // Remove old class tracking
@@ -3296,7 +3303,7 @@ export class GameRuntime {
     const startKey = key(sx, sy);
     gScore.set(startKey, 0);
     open.set(startKey, h(sx, sy));
-    const dirs = allowDiag
+    const dirs: [number, number][] = allowDiag
       ? [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]]
       : [[0,-1],[-1,0],[1,0],[0,1]];
     const closed = new Set<number>();
@@ -3583,6 +3590,14 @@ export class GameRuntime {
     this._classesEnum = config.Classes;
     this.roomCreationCode = config.roomCreationCode ?? [];
 
+    // Wire up static `instances` getter on each class so ObjName.instances works
+    for (const cls of config.classes) {
+      Object.defineProperty(cls, 'instances', {
+        get: () => this._getInstances(cls),
+        configurable: true,
+      });
+    }
+
     // Populate Sprites enum from sprite data
     for (let i = 0; i < config.sprites.length; i++) {
       this.Sprites[config.sprites[i]!.name] = i;
@@ -3618,7 +3633,7 @@ export class GameRuntime {
     }
     const [sheets] = await Promise.all([
       Promise.all(sheetPromises),
-      loadAudio(this._audio, config.sounds),
+      loadAudio(this._audio, config.sounds ?? []),
     ]);
     this.textureSheets.push(...sheets);
 

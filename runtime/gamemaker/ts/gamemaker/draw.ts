@@ -5,11 +5,11 @@ import { Colors, HAligns, VAligns, gmlColorToCss } from "./color";
 
 export class DrawState {
   alpha = 1;
-  config = {
-    color: Colors.c_white!,
+  config: { color: number; font: number; valign: number; halign: number; ext: { sep: number; w: number }; transform: { xscale: number; yscale: number; angle: number } } = {
+    color: Colors.c_white as number,
     font: 0,
-    valign: VAligns.fa_top,
-    halign: HAligns.fa_left,
+    valign: VAligns.fa_top as number,
+    halign: HAligns.fa_left as number,
     ext: { sep: -1, w: -1 },
     transform: { xscale: 1, yscale: 1, angle: 0 },
   };
