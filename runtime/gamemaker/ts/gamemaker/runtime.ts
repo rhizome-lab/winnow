@@ -1220,7 +1220,6 @@ export class GameRuntime {
     if (method && method !== noop) { const prev = this._self; method.call(prev); this._self = prev; }
   }
   sprite_create_from_surface(_srf: number, _x: number, _y: number, _w: number, _h: number, _removeback: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { throw new Error("sprite_create_from_surface: not yet implemented"); }
-  vertex_normal(_vbuf: number, _x: number, _y: number, _z: number): void { throw new Error("vertex_normal: not yet implemented"); }
 
   // ---- ds_exists ----
   ds_exists(id: number, type: number): boolean {
@@ -1766,8 +1765,6 @@ export class GameRuntime {
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  vertex_position(_vbuf: number, _x: number, _y: number, _z: number = 0): void { throw new Error("vertex_position: not yet implemented"); }
-  vertex_colour(_vbuf: number, _col: number, _alpha: number): void { throw new Error("vertex_colour: not yet implemented"); }
   position_meeting(_x: number, _y: number, _classIndex: number): boolean {
     throw new Error("position_meeting: requires collision system implementation");
   }
@@ -2055,7 +2052,7 @@ export class GameRuntime {
   sprite_collision_mask(_spr: number, ..._args: any[]): void { throw new Error("sprite_collision_mask: not yet implemented"); }
 
   // ---- Path ----
-  path_add(): number { throw new Error("path_add: not yet implemented"); }
+  path_add(): number { return -1; /* path system not implemented */ }
   path_end(): void { /* no-op */ }
 
   // ---- Particle system extras ----
@@ -2333,8 +2330,27 @@ export class GameRuntime {
   steam_utils_is_steam_running_on_steam_deck(): boolean { return false; }
 
   // ---- More sprite/font ----
-  sprite_save(_spr: number, _sub: number, _fname: string): void { throw new Error("sprite_save: not yet implemented"); }
-  sprite_add(_path: string, _frames: number, _removebg: boolean, _smooth: boolean, _xorig: number, _yorig: number): number { throw new Error("sprite_add: not yet implemented"); }
+  sprite_save(spr: number, sub: number, fname: string): void {
+    // Draw the sprite frame to a temporary canvas and trigger a download.
+    const sprite = this.sprites[spr]; if (!sprite) return;
+    const texIdx = sprite.textures[sub] ?? sprite.textures[0]; if (texIdx === undefined) return;
+    const tex = this.textures[texIdx]; if (!tex) return;
+    const sheet = this.textureSheets[tex.sheetId]; if (!sheet) return;
+    try {
+      const tmp = document.createElement("canvas");
+      tmp.width = tex.src.w; tmp.height = tex.src.h;
+      tmp.getContext("2d")!.drawImage(sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h, 0, 0, tex.src.w, tex.src.h);
+      const a = document.createElement("a");
+      a.href = tmp.toDataURL("image/png");
+      a.download = fname.replace(/\\/g, "/").split("/").pop() ?? fname;
+      a.click();
+    } catch { /* ignore */ }
+  }
+  sprite_add(_path: string, _frames: number, _removebg: boolean, _smooth: boolean, _xorig: number, _yorig: number): number {
+    // Loading runtime sprites from URLs requires async fetch — not implementable synchronously.
+    // Return -1 to signal "sprite not loaded", game code typically checks for -1.
+    console.warn("sprite_add: runtime sprite loading not supported"); return -1;
+  }
   sprite_get_uvs(spr: number, sub: number): number[] {
     const sprite = this.sprites[spr]; if (!sprite) return [0, 0, 1, 1, 0, 0, 1, 1];
     const texIdx = sprite.textures[sub] ?? sprite.textures[0]; if (texIdx === undefined) return [0, 0, 1, 1, 0, 0, 1, 1];
@@ -2458,7 +2474,7 @@ export class GameRuntime {
   part_system_drawit(_syst: number): void { /* no-op */ }
 
   // ---- Path extras ----
-  path_get_length(_path: number): number { throw new Error("path_get_length: requires path system implementation"); }
+  path_get_length(_path: number): number { return 0; }
   path_start(_path: number, _speed: number, _end: number, _abs: boolean): void { throw new Error("path_start: requires path system implementation"); }
 
   // ---- Debug ----
@@ -2469,7 +2485,7 @@ export class GameRuntime {
   get_string_async(_message: string, _default: string): string { return _default; }
 
   // ---- Video extras ----
-  video_get_format(): string { throw new Error("video_get_format: not yet implemented"); }
+  video_get_format(): string { return this._video ? "MPEG4" : ""; }
 
   // ---- PSN — mapped to browser equivalents ----
   // Trophy state is stored under __psn_trophy_<gameName> (distinct from __gml_fs_ ini saves).
@@ -2581,8 +2597,8 @@ export class GameRuntime {
 
   // ---- Instance position/collision with DS list ----
 
-  instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { throw new Error("instance_place_list: not yet implemented"); }
-  instance_position_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { throw new Error("instance_position_list: not yet implemented"); }
+  instance_place_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; /* collision not implemented */ }
+  instance_position_list(_x: number, _y: number, _classIndex: number, _list: number, _notme: boolean): number { return 0; /* collision not implemented */ }
 
   instance_destroy(instance: GMLObject): void {
     this._instanceDestroy(instance);
