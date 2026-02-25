@@ -349,7 +349,8 @@ fn collect_expr_vars(expr: &JsExpr, out: &mut HashSet<String>) {
         | JsExpr::PostIncrement(e)
         | JsExpr::Spread(e)
         | JsExpr::TypeOf(e)
-        | JsExpr::GeneratorResume(e) => collect_expr_vars(e, out),
+        | JsExpr::GeneratorResume(e)
+        | JsExpr::NonNull(e) => collect_expr_vars(e, out),
         JsExpr::Field { object, .. } => collect_expr_vars(object, out),
         JsExpr::Index { collection, index } => {
             collect_expr_vars(collection, out);
@@ -526,7 +527,8 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
         | JsExpr::PostIncrement(e)
         | JsExpr::Spread(e)
         | JsExpr::TypeOf(e)
-        | JsExpr::GeneratorResume(e) => rewrite_this_to_prototype(e, class_name),
+        | JsExpr::GeneratorResume(e)
+        | JsExpr::NonNull(e) => rewrite_this_to_prototype(e, class_name),
         JsExpr::Index { collection, index } => {
             rewrite_this_to_prototype(collection, class_name);
             rewrite_this_to_prototype(index, class_name);
@@ -866,6 +868,8 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             lhs: Box::new(rewrite_expr(*lhs, ctx)),
             rhs: Box::new(rewrite_expr(*rhs, ctx)),
         },
+
+        JsExpr::NonNull(inner) => JsExpr::NonNull(Box::new(rewrite_expr(*inner, ctx))),
 
         JsExpr::Unary { op, expr: inner } => JsExpr::Unary {
             op,
@@ -1314,7 +1318,8 @@ fn bind_method_refs_expr(expr: &mut JsExpr, bindable: &HashSet<String>, in_calle
         | JsExpr::PostIncrement(e)
         | JsExpr::Spread(e)
         | JsExpr::TypeOf(e)
-        | JsExpr::GeneratorResume(e) => {
+        | JsExpr::GeneratorResume(e)
+        | JsExpr::NonNull(e) => {
             bind_method_refs_expr(e, bindable, false);
         }
         JsExpr::Field { object, .. } => {
@@ -1407,7 +1412,8 @@ fn expr_references_var(expr: &JsExpr, name: &str) -> bool {
         | JsExpr::PostIncrement(e)
         | JsExpr::Spread(e)
         | JsExpr::TypeOf(e)
-        | JsExpr::GeneratorResume(e) => expr_references_var(e, name),
+        | JsExpr::GeneratorResume(e)
+        | JsExpr::NonNull(e) => expr_references_var(e, name),
         JsExpr::Field { object, .. } => expr_references_var(object, name),
         JsExpr::Index { collection, index } => {
             expr_references_var(collection, name) || expr_references_var(index, name)
@@ -1636,7 +1642,8 @@ fn eliminate_dead_activations_in_expr(expr: &mut JsExpr) {
         | JsExpr::PostIncrement(e)
         | JsExpr::Spread(e)
         | JsExpr::TypeOf(e)
-        | JsExpr::GeneratorResume(e) => eliminate_dead_activations_in_expr(e),
+        | JsExpr::GeneratorResume(e)
+        | JsExpr::NonNull(e) => eliminate_dead_activations_in_expr(e),
         JsExpr::Field { object, .. } => eliminate_dead_activations_in_expr(object),
         JsExpr::Index { collection, index } => {
             eliminate_dead_activations_in_expr(collection);

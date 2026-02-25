@@ -214,6 +214,7 @@ fn rewrite_expr_children(expr: &mut JsExpr, closures: &HashMap<String, JsFunctio
                 rewrite_expr(e, closures);
             }
         }
+        JsExpr::NonNull(inner) => rewrite_expr(inner, closures),
         JsExpr::Activation => {}
         JsExpr::SystemCall { args, .. } => {
             for arg in args {

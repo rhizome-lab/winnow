@@ -807,6 +807,8 @@ fn print_expr(expr: &JsExpr) -> String {
             )
         }
 
+        JsExpr::NonNull(inner) => format!("{}!", print_expr(inner)),
+
         JsExpr::Activation => "({})".to_string(),
 
         JsExpr::ArrowFunction {

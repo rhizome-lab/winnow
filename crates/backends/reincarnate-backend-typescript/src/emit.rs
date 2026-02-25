@@ -2173,7 +2173,7 @@ fn rewrite_late_bound_expr(
         }
         JsExpr::Unary { expr: inner, .. } | JsExpr::Not(inner)
         | JsExpr::PostIncrement(inner) | JsExpr::Spread(inner) | JsExpr::TypeOf(inner)
-        | JsExpr::GeneratorResume(inner) => {
+        | JsExpr::GeneratorResume(inner) | JsExpr::NonNull(inner) => {
             rewrite_late_bound_expr(inner, late_bound, short_to_qualified);
         }
         JsExpr::Cast { expr: inner, .. } | JsExpr::TypeCheck { expr: inner, .. } => {
@@ -3139,6 +3139,7 @@ fn prepend_rt_arg_expr(
         | JsExpr::PostIncrement(inner)
         | JsExpr::Spread(inner)
         | JsExpr::TypeOf(inner)
+        | JsExpr::NonNull(inner)
         | JsExpr::Cast { expr: inner, .. }
         | JsExpr::TypeCheck { expr: inner, .. } => {
             prepend_rt_arg_expr(inner, free_func_names, from_class);

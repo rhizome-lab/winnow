@@ -141,6 +141,8 @@ pub enum JsExpr {
         prop: String,
         value: Box<JsExpr>,
     },
+    /// Non-null assertion: `expr!`.
+    NonNull(Box<JsExpr>),
     /// Activation object: `({})`.
     Activation,
     /// Arrow function: `(params) => { body }`.
