@@ -1994,22 +1994,14 @@ fn translate_instruction(
                         stack.push(is_null);
                     }
                     0xFFF5 => {
-                        // pushref — push function reference onto stack.
-                        // The extra Int32 operand is a direct FUNC table index (not
-                        // a linked-list offset like Call operands). Look up the name
-                        // in function_names using the extra value as the index.
-                        // Fall back to func_ref_map (for GMS1 compatibility) and
-                        // then to a placeholder.
+                        // pushref — push asset reference onto stack.
+                        // The extra Int32 operand encodes (type_tag << 24) | asset_index.
+                        // Type 0 = OBJT (object), 1 = SPRT, 2 = SOND, 3 = ROOM, etc.
+                        // All types are resolved via asset_ref_names. Fall back to
+                        // func_ref_map (for GMS1 compatibility) and then to a placeholder.
                         let func_name = if let Operand::Break { extra: Some(idx), .. } = inst.operand {
                             let key = idx as u32;
-                            let type_tag = key >> 24;
-                            if type_tag == 0 {
-                                // Type 0: direct FUNC index.
-                                ctx.function_names.get(&key).cloned()
-                            } else {
-                                // Non-zero type tag: look up named asset (sprite, sound, font, etc.).
-                                ctx.asset_ref_names.get(&key).cloned()
-                            }
+                            ctx.asset_ref_names.get(&key).cloned()
                         } else {
                             None
                         }

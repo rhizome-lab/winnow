@@ -657,7 +657,7 @@ fn strip_script_prefix(name: &str) -> &str {
 ///
 /// The type tag matches the GML `asset_get_type()` / `asset_*` constant enumeration:
 ///
-///   Type 0 → FUNC entries (handled separately via `function_names`)
+///   Type 0 → OBJT objects          (asset_object)
 ///   Type 1 → SPRT sprites          (asset_sprite)
 ///   Type 2 → SOND sounds           (asset_sound)
 ///   Type 3 → ROOM rooms            (asset_room)
@@ -675,6 +675,15 @@ fn strip_script_prefix(name: &str) -> &str {
 /// Returns a map of `(type_tag << 24) | asset_index → raw GML asset name`.
 fn build_asset_ref_names(dw: &DataWin, scpt: &datawin::chunks::scpt::Scpt) -> HashMap<u32, String> {
     let mut map = HashMap::new();
+
+    // Type 0: objects (OBJT).
+    if let Ok(objt) = dw.objt() {
+        for (i, entry) in objt.objects.iter().enumerate() {
+            if let Ok(name) = dw.resolve_string(entry.name) {
+                map.insert(i as u32, name); // type_tag=0, so (0 << 24) | i == i
+            }
+        }
+    }
 
     // Type 1: sprites.
     if let Ok(sprt) = dw.sprt() {
