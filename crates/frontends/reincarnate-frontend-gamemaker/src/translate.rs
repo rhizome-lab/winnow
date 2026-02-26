@@ -1059,9 +1059,9 @@ fn run_translation_loop(
     // the stack (compound assignment Dup pattern). The subsequent Pop must use
     // reversed pop order: value on top, dim1 below, _dim2 at bottom.
     let mut compound_2d_pending = false;
-    // Array reference captured by pushac (0xFFFC) for use by popaf (0xFFFD).
-    // pushac pops the top-of-stack array reference and stores it here so that
-    // popaf can use it without popping a third item from the stack.
+    // Array INDEX captured by pushac (0xFFFC) for use by popaf (0xFFFD).
+    // pushac saves the index so popaf can pop ARRAY and VALUE from the
+    // stack independently, then write ARRAY[INDEX] = VALUE.
     let mut pushac_array: Option<ValueId> = None;
     // When Some(n), skip instructions with index < n (with-body instructions
     // that have been extracted into a closure).
@@ -1938,32 +1938,48 @@ fn translate_instruction(
                 match signal {
                     0xFFFF => {} // chkindex — nop for decompilation
                     0xFFFE => {
-                        // pushaf — array get
+                        // pushaf — array element get.
+                        // Stack: [..., ARRAY, INDEX] with INDEX on top.
+                        // Strip Conv.v.i32 from the index (VM artifact).
                         let index = pop(stack, inst)?;
+                        let index = fb.try_peel_int_coerce(index);
                         let array = pop(stack, inst)?;
                         let val = fb.get_index(array, index, Type::Dynamic);
                         gml_sizes.insert(val, 4); // Variable (16 bytes)
                         stack.push(val);
                     }
                     0xFFFD => {
-                        // popaf — array set.
-                        // The array reference was captured by the preceding pushac.
-                        // Pop value (top) and index; use the pushac-stored array.
+                        // popaf — array element set.
+                        //
+                        // Stack layout: [..., INDEX, ARRAY, VALUE] with VALUE
+                        // on top.  When pushac precedes this, it already
+                        // captured the INDEX, leaving [ARRAY, VALUE] on the
+                        // stack.  Without pushac, all three are on the stack.
+                        //
+                        // Either way the semantic is: ARRAY[INDEX] = VALUE.
                         let value = pop(stack, inst)?;
-                        let index = pop(stack, inst)?;
-                        let array = pushac_array.take().unwrap_or_else(|| {
-                            pop(stack, inst).unwrap_or_else(|_| fb.const_int(-6))
-                        });
+                        let array = pop(stack, inst)?;
+                        let index = if let Some(idx) = pushac_array.take() {
+                            idx
+                        } else {
+                            pop(stack, inst)
+                                .unwrap_or_else(|_| fb.const_int(-6))
+                        };
                         fb.set_index(array, index, value);
                     }
                     0xFFFC => {
-                        // pushac — capture the array reference for the upcoming popaf.
-                        // GMS2.3+ uses this to anchor the array variable before the
-                        // value and index are pushed onto the stack.  We pop the
-                        // reference off the stack and stash it in pushac_array so
-                        // that popaf can retrieve it without over-popping.
-                        let arr = pop(stack, inst)?;
-                        *pushac_array = Some(arr);
+                        // pushac — capture the array INDEX for the upcoming popaf.
+                        // GMS2.3+ uses this to save the index before the array
+                        // reference and value are pushed onto the stack.  popaf
+                        // then pops VALUE (top) and ARRAY (second), using the
+                        // saved index: ARRAY[INDEX] = VALUE.
+                        //
+                        // The GML VM often emits Conv.v.i32 before pushac to
+                        // ensure the index is an integer.  Strip the coerce so
+                        // the index stays Dynamic (JS arrays accept any key).
+                        let idx = pop(stack, inst)?;
+                        let idx = fb.try_peel_int_coerce(idx);
+                        *pushac_array = Some(idx);
                     }
                     0xFFFB => {
                         // setowner — pops the owner instance ID from the stack.

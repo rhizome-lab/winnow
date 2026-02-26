@@ -179,6 +179,23 @@ impl FunctionBuilder {
         self.func.value_names.contains_key(&v)
     }
 
+    /// If `value` was produced by a `Cast` with `CastKind::Coerce` to an
+    /// integer type, return the inner (pre-cast) value.  This is used to
+    /// strip GML `Conv.v.i32` instructions that the VM emits for internal
+    /// byte-layout reasons before `pushac`/`pushaf`, where the array
+    /// reference should remain `Dynamic` at the decompilation level.
+    pub fn try_peel_int_coerce(&self, value: ValueId) -> ValueId {
+        for inst in self.func.insts.values() {
+            if inst.result == Some(value) {
+                if let Op::Cast(inner, Type::Int(_), CastKind::Coerce) = &inst.op {
+                    return *inner;
+                }
+                return value;
+            }
+        }
+        value
+    }
+
     /// If `value` was produced by a `Const` instruction, return the constant.
     pub fn try_get_const(&self, value: ValueId) -> Option<&Constant> {
         for inst in self.func.insts.values() {
