@@ -2210,7 +2210,7 @@ impl TranslateCtx {
 
         self.emit_content(body);
         // Implicit return void if no (output:) was reached.
-        // Using ret(None) prevents BoolLiteralReturn from inferring Bool return type.
+        // Using ret(None) prevents IntToBoolPromotion from inferring Bool return type.
         self.fb.ret(None);
 
         let cb_fb = std::mem::replace(&mut self.fb, saved_fb);

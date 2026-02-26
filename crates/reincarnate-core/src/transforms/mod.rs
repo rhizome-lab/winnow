@@ -1,4 +1,3 @@
-pub mod bool_literal_return;
 pub mod cfg_simplify;
 pub mod const_fold;
 pub mod constraint_solve;
@@ -10,7 +9,6 @@ pub mod red_cast_elim;
 pub mod type_infer;
 pub mod util;
 
-pub use bool_literal_return::BoolLiteralReturn;
 pub use cfg_simplify::CfgSimplify;
 pub use const_fold::ConstantFolding;
 pub use constraint_solve::ConstraintSolve;
@@ -58,9 +56,6 @@ pub fn default_pipeline(config: &PassConfig) -> TransformPipeline {
     }
     if config.int_to_bool_promotion {
         pipeline.add(Box::new(IntToBoolPromotion));
-    }
-    if config.bool_literal_return {
-        pipeline.add(Box::new(BoolLiteralReturn));
     }
     if config.redundant_cast_elimination {
         pipeline.add(Box::new(RedundantCastElimination));

@@ -41,7 +41,6 @@ pub struct PassConfig {
     pub coroutine_lowering: bool,
     pub redundant_cast_elimination: bool,
     pub int_to_bool_promotion: bool,
-    pub bool_literal_return: bool,
     pub mem2reg: bool,
     pub dead_code_elimination: bool,
     /// When enabled, the pipeline repeats all passes until none report changes.
@@ -58,7 +57,6 @@ impl Default for PassConfig {
             coroutine_lowering: true,
             redundant_cast_elimination: true,
             int_to_bool_promotion: true,
-            bool_literal_return: false,
             mem2reg: true,
             dead_code_elimination: true,
             fixpoint: false,
@@ -77,7 +75,6 @@ impl PassConfig {
     /// - `"coroutine-lowering"`
     /// - `"redundant-cast-elimination"`
     /// - `"int-to-bool-promotion"`
-    /// - `"bool-literal-return"`
     /// - `"mem2reg"`
     /// - `"dead-code-elimination"`
     /// - `"fixpoint"` — toggles pipeline fixpoint iteration
@@ -92,7 +89,6 @@ impl PassConfig {
                 "coroutine-lowering" => config.coroutine_lowering = false,
                 "redundant-cast-elimination" => config.redundant_cast_elimination = false,
                 "int-to-bool-promotion" => config.int_to_bool_promotion = false,
-                "bool-literal-return" => config.bool_literal_return = false,
                 "mem2reg" => config.mem2reg = false,
                 "dead-code-elimination" => config.dead_code_elimination = false,
                 "fixpoint" => config.fixpoint = false,
@@ -183,7 +179,6 @@ impl Preset {
                     cfg_simplify: false,
                     redundant_cast_elimination: true,
                     int_to_bool_promotion: true,
-                    bool_literal_return: false,
                     dead_code_elimination: false,
                     fixpoint: false,
                 },
@@ -203,7 +198,6 @@ impl Preset {
                 "coroutine-lowering" => pass.coroutine_lowering = false,
                 "redundant-cast-elimination" => pass.redundant_cast_elimination = false,
                 "int-to-bool-promotion" => pass.int_to_bool_promotion = false,
-                "bool-literal-return" => pass.bool_literal_return = false,
                 "mem2reg" => pass.mem2reg = false,
                 "dead-code-elimination" => pass.dead_code_elimination = false,
                 "fixpoint" => pass.fixpoint = false,
@@ -251,7 +245,6 @@ mod tests {
             "coroutine-lowering",
             "redundant-cast-elimination",
             "int-to-bool-promotion",
-            "bool-literal-return",
             "mem2reg",
             "dead-code-elimination",
             "fixpoint",
@@ -263,7 +256,6 @@ mod tests {
         assert!(!config.coroutine_lowering);
         assert!(!config.redundant_cast_elimination);
         assert!(!config.int_to_bool_promotion);
-        assert!(!config.bool_literal_return);
         assert!(!config.mem2reg);
         assert!(!config.dead_code_elimination);
         assert!(!config.fixpoint);

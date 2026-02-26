@@ -43,7 +43,7 @@ The pipeline is fully operational. Test project: `~/reincarnate/flash/cc/`.
 
 ### Transform pass completeness
 
-All passes implemented: TypeInference → ConstraintSolve → ConstantFolding → CfgSimplify → CoroutineLowering → Mem2Reg → ConstantFolding(2) → BoolLiteralReturn → RedCastElim → DCE.
+All passes implemented: TypeInference → ConstraintSolve → ConstantFolding → CfgSimplify → CoroutineLowering → Mem2Reg → ConstantFolding(2) → IntToBoolPromotion → RedCastElim → DCE.
 
 Remaining quality issues:
 - ⚠️ Some while-loop bodies have unreachable code after `continue`

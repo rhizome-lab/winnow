@@ -16,7 +16,7 @@ use crate::project::ExternalMethodSig;
 /// promoted to Bool.
 ///
 /// Also infers Bool return types for functions that only return 0/1 constants
-/// (subsuming the `BoolLiteralReturn` pass).
+/// (replaces the former `BoolLiteralReturn` pass).
 pub struct IntToBoolPromotion;
 
 /// Trace a value backward through the SSA graph to find all leaf constants.

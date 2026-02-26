@@ -13,7 +13,7 @@ use crate::ir::{FuncId, Type, Visibility};
 use crate::pipeline::Transform;
 use crate::transforms::util::test_helpers::assert_well_formed;
 use crate::transforms::{
-    BoolLiteralReturn, CfgSimplify, ConstantFolding, ConstraintSolve, DeadCodeElimination,
+    CfgSimplify, ConstantFolding, ConstraintSolve, DeadCodeElimination, IntToBoolPromotion,
     Mem2Reg, RedundantCastElimination, TypeInference,
 };
 
@@ -369,11 +369,11 @@ fn stress_red_cast_elim_cast_chains() {
     }
 }
 
-// ---- BoolLiteralReturn stress tests ----
+// ---- IntToBoolPromotion stress tests ----
 
 #[test]
-fn stress_bool_literal_return() {
-    let pass = BoolLiteralReturn;
+fn stress_int_to_bool_promotion() {
+    let pass = IntToBoolPromotion;
     stress_pass(&pass, build_bool_return());
     // Non-bool functions should be untouched.
     for ty in TYPES {
