@@ -1055,7 +1055,9 @@ export class GameRuntime {
   part_system_exists(sys: number): boolean { return this._partSystems.has(sys); }
   part_system_position(sys: number, x: number, y: number): void { const s = this._partSystems.get(sys); if (s) s.pos = [x, y]; }
   part_system_draw_order(sys: number, order: boolean): void { const s = this._partSystems.get(sys); if (s) (s as any).drawOrder = order; }
+  part_system_automatic_draw(sys: number, on: boolean): void { const s = this._partSystems.get(sys); if (s) s.autoDraw = on; }
   part_system_automatic_update(sys: number, on: boolean): void { const s = this._partSystems.get(sys); if (s) s.autoUpdate = on; }
+  part_system_depth(sys: number, depth: number): void { const s = this._partSystems.get(sys); if (s) s.depth = depth; }
   part_system_drawit(sys: number): void { const s = this._partSystems.get(sys); if (s) this._partDraw(s); }
   part_type_create(): number {
     const id = this._nextPartId++;
