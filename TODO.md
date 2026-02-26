@@ -498,33 +498,134 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 3341 as of 2026-02-25
+### 7. Dead Estate remaining TS errors — 2112 as of 2026-02-26
 
-Progress: 12350 → 4151 → 3341 (73% reduction). 1 translation error (RunLoader::step stack underflow — see Bug 8 below).
+Progress: 12350 → 4151 → 3341 → 2112 (83% reduction). 1 translation error (RunLoader::step stack underflow — see Bug 8 below).
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 2043 | Argument type mismatch — type inference gaps; `any` passed where typed param expected |
-| TS7053 | 454 | Element implicitly has `any` type — struct field access on number-typed instance variable (see Bug 7 below) |
-| TS2322 | 308 | Type not assignable |
-| TS7027 | 207 | Unreachable code — code after `return` (game author style) |
-| TS2339 | 149 | Property doesn't exist — field access on insufficiently typed struct/object |
-| TS2367 | 54 | Comparison always false — type mismatch in `===` (game author errors) |
-| TS2365 | 39 | Operator not applicable — bitwise/arithmetic on wrong type |
-| TS2362 | 33 | Left side of `**`/arithmetic must be number |
-| TS2304 | 17 | Cannot find name — undeclared `vNNN` identifiers (known linearizer bug) |
+| TS2345 | 846 | Argument type mismatch (see detailed breakdown below) |
+| TS7053 | 454 | Element implicitly has `any` type — `int(x)[field]` indexing number (see below) |
+| TS2322 | 303 | Type not assignable |
+| TS7027 | 207 | Unreachable code — **structurizer/emitter bug** (see Bug 7c below) |
+| TS2339 | 149 | Property doesn't exist — `part_system_depth` (55), `part_system_automatic_draw` (52), `length` (12), plus scattered built-in fields |
+| TS2367 | 53 | Comparison always false — type mismatch in `===` (game author errors) |
+| TS2365 | 27 | Operator not applicable — bitwise/arithmetic on wrong type |
+| TS2362 | 20 | Left side of `**`/arithmetic must be number |
+| TS2304 | 17 | Cannot find name — **linearizer/structurizer bugs** (see Bug 7d below) |
 | TS18050 | 13 | Value of type `void` is not callable |
 | TS2363 | 6 | Right side of `**` must be number |
 | TS2554 | 5 | Wrong argument count — game-author errors or decompiler arg-count mismatches |
 | TS2416 | 4 | Property not assignable to same in base type |
 | TS2308 | 3 | Module not found |
 | TS2300 | 2 | Duplicate identifier |
-| TS2552 | 1 | Cannot find name `sarr` (with-body self-reference bug) |
-| TS2740 | 1 | Type missing properties from interface |
+| TS2552 | 1 | Cannot find name (with-body self-reference bug) |
 | TS2307 | 1 | Cannot find module |
 | TS18047 | 1 | Object is possibly null |
 
-Fixed this session (2026-02-24):
+#### TS2345 Detailed Breakdown (2043 errors, by type pair)
+
+| Count | Source type → Expected type | Root cause |
+|------:|----------------------------|------------|
+| 505 | `(_rt, self) => void` → `number` | **pushref name resolution (Bug 7a)**: GMS2.3+ constructor refs resolved to imported function values instead of numeric asset indices |
+| 432 | `number` → `boolean` | **GML calling convention (Bug 7b)**: GML has no boolean type; `0`/`1` used everywhere for boolean params (`audio_play_sound(..., loop)`, `sprite_create_from_surface(..., removeback, smooth)`) |
+| 116 | `() => string` → `number` | **pushref name resolution (Bug 7a)**: e.g. `instance_exists(steam_current_game_language)` — `steam_current_game_language` is a runtime function but should be a numeric object ID |
+| 111 | `(_rt, self, arg0?, arg1?) => any` → `number` | **pushref name resolution (Bug 7a)**: multi-arg function refs where object index expected |
+| 58 | `(_rt, self) => void` → `GMLObject` | Same pushref issue, different target type |
+| 55 | `(_rt, self, ...) => void` → `number` | Same pushref issue, various arities |
+| 50 | `(_rt, self, arg0?) => any` → `number` | Same |
+| 47 | `(_rt, self, arg0?) => void` → `number` | Same |
+| 41 | `(_result: number) => void` → `number` | **pushref name resolution**: e.g. `collision_line(..., steam_inventory_result_destroy, ...)` — clearly wrong name for a collision object |
+| 33 | `string` → `number` | Mixed: some genuine type mismatches, some asset name resolution |
+| 28 | `(_rt, self, ..4 args) => void` → `number` | Same pushref issue |
+| 24 | `(_rt, self, ..4 args) => void` → `GMLObject` | Same |
+| 23 | `(font: number) => void` → `number` | Same pushref issue |
+| 22 | `Record<string, any>` → `number` | Struct objects used as numeric IDs |
+| 22 | `GMLObject \| null` → `number` | Instance refs used as numeric IDs |
+| 21 | `() => void` → `number` | Same pushref issue |
+| 17 | `(s: string) => number` → `number` | Same |
+| 16 | `boolean` → `number` | Reverse of Bug 7b |
+| 14 | `() => number` → `number` | Same pushref issue |
+| ~400 | (remaining long tail) | Mix of pushref, type inference gaps, game author errors |
+
+**~900 errors are pushref name resolution (Bug 7a)**, **~450 are number↔boolean (Bug 7b)**.
+
+#### Bug 7a: FIXED — pushref type_tag=0 is OBJT, not FUNC (2026-02-26)
+
+Root cause: pushref type_tag=0 was treated as FUNC chunk index, but UndertaleModTool confirms
+type 0 = Object (OBJT) in all GameMaker versions. Fix: added OBJT names to `build_asset_ref_names`
+at type_tag=0, removed special-case FUNC lookup, added Objects group to `generate_asset_ids`.
+Result: TS2345 2043 → 846, total errors 4151 → 2112.
+
+#### Bug 7b: GML number↔boolean calling convention (~450 TS2345)
+
+GML has no boolean type — all boolean parameters receive `0` or `1` (sometimes computed values).
+Runtime signatures correctly type these as `boolean` (matching the GML spec), but emitted code
+passes `number` values. This is standard GML calling convention, not game author errors.
+
+Examples: `sprite_create_from_surface(srf, x, y, w, h, 0, 0, xo, yo)` — args 6+7 are
+`removeback: boolean, smooth: boolean` receiving numeric `0`.
+
+Fix options:
+- (a) Emitter inserts `!!x` or `Boolean(x)` casts when passing `number` to `boolean` params
+- (b) Type inference recognizes `0`/`1` literals in boolean context as `boolean`
+- (c) Change runtime signatures from `boolean` to `number` (loses type info — not preferred)
+
+#### Bug 7c: Unreachable code after return/continue (207 TS7027)
+
+Two distinct patterns:
+
+1. **`break` after `return`/`continue` in switch cases** — The structurizer/emitter emits both
+   a `continue`/`return` AND a trailing `break` for the same switch case. The `break` is dead code.
+   Example: `case 2: ... continue; break;` — the `break` is unreachable. This is a code quality
+   bug in the switch-case emitter: when a case body ends with `return`/`continue`, the `break`
+   should be suppressed.
+
+2. **`return 0 as any;` after all-paths-return functions** — The `ends_with_terminal` fallback
+   adds a trailing return to satisfy TS2366, but when all switch/if branches already return,
+   it's unreachable. This is cosmetic — the trailing return is a safety net, not a semantic error.
+
+Fix for pattern 1: in the switch-case emitter, check whether the last statement in a case body
+is a `return`, `continue`, or `break`, and suppress the auto-generated `break` if so.
+
+#### Bug 7d: Undeclared variables — `vNNN` and named vars (17 TS2304)
+
+Three distinct sub-patterns:
+
+1. **SSA register names in ternary chains** (10 errors) — `v33`, `v29`, `v12`, `v14`, `v418`, `v40`,
+   `v247`, `v264`, `v4`, `v2` appear in complex conditional expressions. The structurizer creates
+   ternary expressions that reference SSA values from different CFG branches, but those values were
+   never declared in the emitted scope. Example: `chance(0.05 * ...) ? v33 : (chance(0.5 * ...) ?
+   ... : v29)` — `v33` and `v29` are values from predecessor blocks that weren't properly hoisted.
+   Root cause: the structurizer's ternary/select lowering doesn't ensure all referenced values have
+   declarations in the enclosing scope.
+
+2. **`spd` in with-body** (2 errors, Barnacle.ts:142-143) — `lengthdir_x(spd, d)` where `spd` was
+   never declared. The preceding line `random_range(2, 4)` is a bare expression (result discarded).
+   In the original bytecode, this was likely `spd = random_range(2, 4)` but the linearizer dropped
+   the assignment, leaving only the bare function call. The with-body closure then references `spd`
+   which doesn't exist. Root cause: linearizer or translator lost the assignment target.
+
+3. **`pass` in controller objects** (3 errors, OAnya*Controller.ts) — `pass` used as a variable
+   but never declared. Same category as `spd` — assignment dropped by linearizer.
+
+All 17 are **correctness bugs**, not cosmetic issues — the emitted code references variables
+that don't exist, meaning these functions would crash at runtime.
+
+#### TS7053: `int(x)[field]` indexing number (454 errors)
+
+Pattern: `int(global.argument0)[AceDoll.instances[0]!.items] = 0` — `int()` returns `number`,
+which can't be indexed. These are 2D array access patterns where the array variable is coerced
+to `int` before being used as an array target. Root cause: the 2D array access codegen wraps
+the array in `int()` (from a `coerce i32` instruction) when it should be accessing the array directly.
+
+#### TS2339: Missing particle system properties (107 of 149)
+
+`part_system_depth` (55) and `part_system_automatic_draw` (52) are not declared on the particle
+system type. These are standard GML particle system properties that need to be added to the
+GMLObject type definition or the particle system type.
+
+Fixed in previous sessions (2026-02-24):
 - TS2393 (14→0): Duplicate method blocks in runtime.ts removed
 - TS2454 (204→0): `let v!: T;` definite-assignment assertion in ast_printer.rs
 - TS2552 (150→1): Added ~50 missing runtime stubs + registered in runtime.json
@@ -532,7 +633,17 @@ Fixed this session (2026-02-24):
 - TS2769 (417→0): Reclassified as TS2345 after adding type signatures to runtime.json
 - TS2554 (512→7): Variadic scripts get rest param; game-script shadowing fix; ~80 signature corrections
 
-**Highest-leverage next targets:**
+**Highest-leverage next targets (by error reduction potential):**
+
+- [x] **Bug 7a: pushref type_tag=0 is OBJT (~1200 TS2345 fixed)** — Fixed 2026-02-26.
+
+- [ ] **Bug 7b: number→boolean casting (~450 TS2345)** — Emitter should insert `!!x` casts
+  when passing `number` to `boolean`-typed parameters. Requires matching call-site arg types
+  against callee param types during emission.
+
+- [ ] **TS7053 (454): int() wrapping array access targets** — The `coerce i32` instruction
+  before a 2D array access should not wrap the array variable in `int()`. Fix in GML translator
+  or as a rewrite pass.
 
 - [ ] **TS7053 (518): struct field access on number-typed vars** — `v['fieldName']` where `v` is
   typed as `number` rather than `any`. Root cause: instance variables that hold object references
@@ -541,15 +652,14 @@ Fixed this session (2026-02-24):
   This was the original "102k error" regression from `7c4dc61` — it had briefly been worse but
   type inference improvements have since reduced it.
 
-- [ ] **TS2554 (7): Remaining runtime signature mismatches** — 7 remaining. All are either
+- [ ] **TS2339 (107): particle system properties** — Add `part_system_depth` and
+  `part_system_automatic_draw` to the GMLObject type definition or particle system type.
+
+- [ ] **TS2554 (5): Remaining runtime signature mismatches** — 5 remaining. All are either
   game-author errors (`gamepad_set_axis_deadzone` called with 2 args, `draw_roundrect_color` called
   with 7 args) or decompiler arg-count mismatches (functions that read fewer args than callers pass;
   e.g. `getScreenType`, `loadSetting`, `getPiecesWidth`/`getPiecesHeight`/`drawTextPieces`). The
   decompiler issue requires a new emit to fix (arg count determined by reads in function body).
-
-- [ ] **TS2339 (887) + TS2345 (2047): type inference gaps** — Most are consequences of
-  missing instance type propagation (fields typed as `any` or wrong struct type).
-  The GML instance ID type propagation item (Type System section) is the root fix.
 
 - [x] **TS2454 (204→0): used before assigned** — Fixed with `let v!: T;` definite-assignment assertion in ast_printer.rs.
 
@@ -579,7 +689,7 @@ Fixed this session (2026-02-24):
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 3341 TS errors + 1 translation error (2026-02-25) |
+| Dead Estate | `data.win` 192MB | ⚠️ 2112 TS errors + 1 translation error (2026-02-26) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
