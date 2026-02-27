@@ -95,7 +95,7 @@ pub fn parse_type_notation(s: &str) -> Type {
         "boolean" => Type::Bool,
         "string" => Type::String,
         "void" => Type::Void,
-        "*" | "any" | "Function" | "Object" | "Class" => Type::Dynamic,
+        "*" | "any" | "dynamic" | "Function" | "Object" | "Class" => Type::Dynamic,
         "Array" => Type::Array(Box::new(Type::Dynamic)),
         name => Type::Struct(name.to_string()),
     }
