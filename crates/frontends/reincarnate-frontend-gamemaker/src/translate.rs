@@ -97,16 +97,9 @@ pub fn translate_code_entry(
     // rest parameter `...args: any[]` so TypeScript call sites are not flagged for
     // passing extra arguments.
     if scan.uses_dynamic_args {
-        // Scripts that use argument_count/dynamic argument access are explicitly
-        // variadic — callers may pass fewer args than the highest argumentN
-        // referenced in the body.  Make all argument params optional.  GML
-        // initializes missing args to 0, so Float(0.0) is the correct semantic
-        // default — it's what the GML runtime provides for unspecified arguments.
-        let arg_start = if ctx.has_self { 1 } else { 0 }
-            + if ctx.has_other { 1 } else { 0 };
-        for i in arg_start..sig.defaults.len() {
-            sig.defaults[i] = Some(Constant::Float(0.0));
-        }
+        // Mark as variadic with a rest param.  Type-appropriate defaults for the
+        // fixed argument params are set later by GmlDefaultArgRecovery (which runs
+        // post-inference and can match defaults to narrowed param types).
         sig.params.push(Type::Array(Box::new(Type::Dynamic)));
         sig.defaults.push(None);
         sig.has_rest_param = true;

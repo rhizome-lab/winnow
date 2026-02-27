@@ -31,6 +31,7 @@
 
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::inst::CmpKind;
+use reincarnate_core::ir::ty::Type;
 use reincarnate_core::ir::{BlockId, Constant, Function, Module, Op, ValueId};
 use reincarnate_core::pipeline::{Transform, TransformResult};
 
@@ -45,6 +46,7 @@ impl Transform for GmlDefaultArgRecovery {
         let mut changed = false;
         for func in module.functions.values_mut() {
             changed |= recover_defaults(func);
+            changed |= set_variadic_defaults(func);
         }
         Ok(TransformResult { module, changed })
     }
@@ -78,6 +80,67 @@ fn recover_defaults(func: &mut Function) -> bool {
     }
 
     true
+}
+
+/// For variadic functions (has_rest_param), set type-appropriate defaults on all
+/// fixed argument params that don't already have one.  This runs after type
+/// inference, so `sig.params[i]` reflects the narrowed type — the default
+/// matches it: `0.0` for Float, `""` for String, `false` for Bool, etc.
+fn set_variadic_defaults(func: &mut Function) -> bool {
+    if !func.sig.has_rest_param {
+        return false;
+    }
+
+    // Ensure defaults vec covers all params.
+    while func.sig.defaults.len() < func.sig.params.len() {
+        func.sig.defaults.push(None);
+    }
+
+    let mut changed = false;
+    // Skip self/other (they're never optional), skip the rest param at the end.
+    // Fixed argument params are between the instance params and the rest param.
+    let rest_idx = func.sig.params.len() - 1; // last param is ...args
+    for i in 0..rest_idx {
+        if func.sig.defaults[i].is_some() {
+            continue;
+        }
+        // Skip self/other params — they have Struct or Dynamic type but aren't arguments.
+        // Argument params are named "argument*" or are the positional args after self/other.
+        // Heuristic: self is always index 0 (Struct type or Dynamic for untyped),
+        // but we can't distinguish self from args by type alone.  Use the entry block
+        // param names if available.
+        let param_value = func.blocks[func.entry].params.get(i).map(|p| p.value);
+        if let Some(val) = param_value {
+            if let Some(name) = func.value_names.get(&val) {
+                if name == "self" || name == "other" {
+                    continue;
+                }
+            }
+        }
+        // Use the narrowed type from value_types (set by type inference) rather
+        // than sig.params (which stays as the original Dynamic).
+        let ty = func.blocks[func.entry]
+            .params
+            .get(i)
+            .map(|p| &func.value_types[p.value])
+            .unwrap_or(&func.sig.params[i]);
+        func.sig.defaults[i] = Some(zero_for_type(ty));
+        changed = true;
+    }
+    changed
+}
+
+/// Return the type-appropriate zero/default constant for a given IR type.
+fn zero_for_type(ty: &Type) -> Constant {
+    match ty {
+        Type::Bool => Constant::Bool(false),
+        Type::Int(_) => Constant::Int(0),
+        Type::UInt(_) => Constant::UInt(0),
+        Type::Float(_) => Constant::Float(0.0),
+        Type::String => Constant::String(String::new()),
+        // For Dynamic, Struct, Array, or anything else, use 0.0 — GML's missing-arg value.
+        _ => Constant::Float(0.0),
+    }
 }
 
 /// Walk the entry block chain looking for the `if (arg === undefined) arg = default` pattern.
