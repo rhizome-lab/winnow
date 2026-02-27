@@ -1165,10 +1165,19 @@ fn run_translation_loop(
                 let outer_arg_offset = if ctx.has_self { 1 } else { 0 }
                     + if ctx.has_other { 1 } else { 0 };
                 for n in scan_body_argument_indices(body_insts, ctx) {
-                    let outer_idx = outer_arg_offset + n;
-                    if outer_idx < fb.param_count() {
-                        captured_names.push(format!("_argument{n}"));
-                        capture_vals.push(fb.param(outer_idx));
+                    let captured_key = format!("_argument{n}");
+                    // In a nested with-body, the outer argument is already in
+                    // locals as `_argumentN` (an alloc slot).  Load from there.
+                    if let Some(&slot) = locals.get(&captured_key) {
+                        captured_names.push(captured_key);
+                        capture_vals.push(fb.load(slot, Type::Dynamic));
+                    } else {
+                        // Top-level: argument is a formal param of the outer function.
+                        let outer_idx = outer_arg_offset + n;
+                        if outer_idx < fb.param_count() {
+                            captured_names.push(captured_key);
+                            capture_vals.push(fb.param(outer_idx));
+                        }
                     }
                 }
                 for name in &scanned_names {
