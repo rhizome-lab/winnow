@@ -1,5 +1,6 @@
 mod assets;
 mod data;
+mod default_arg;
 mod logical_op;
 pub mod naming;
 mod object;
@@ -164,6 +165,7 @@ impl Frontend for GameMakerFrontend {
             assets,
             runtime_variant: None,
             extra_passes: vec![
+                Box::new(default_arg::GmlDefaultArgRecovery),
                 Box::new(reincarnate_core::transforms::IntToBoolPromotion),
                 Box::new(logical_op::GmlLogicalOpNormalize),
             ],
