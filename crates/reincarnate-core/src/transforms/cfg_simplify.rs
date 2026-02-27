@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::CoreError;
-use crate::ir::{BlockId, Function, Inst, InstId, Module, Op, Type, ValueId};
+use crate::ir::{BlockId, Constant, Function, Inst, InstId, Module, Op, Type, ValueId};
 use crate::pipeline::{Transform, TransformResult};
 
 use super::util::{branch_targets, substitute_values_in_op};
@@ -478,14 +478,32 @@ fn collect_all_branch_args(op: &Op, target: BlockId) -> Vec<&Vec<ValueId>> {
 
 /// Phase 3: Eliminate trivial block parameters.
 ///
-/// A block parameter is "trivial" when every incoming edge passes the same ValueId
-/// for that parameter position. In that case the parameter can be removed and all
-/// uses of the parameter value can be replaced with the single incoming value.
+/// A block parameter is "trivial" when every incoming edge passes the same value
+/// for that parameter position. "Same value" means either:
+/// - the same ValueId, or
+/// - different ValueIds that all resolve to equal constants (e.g. two separate
+///   `Const(false)` instructions both producing `false`).
+///
+/// In either case the parameter can be removed and all uses replaced with the
+/// representative incoming value.
 ///
 /// Returns true if any changes were made.
 fn eliminate_trivial_params(func: &mut Function) -> bool {
     let reachable = find_reachable_blocks(func);
     let mut subst: HashMap<ValueId, ValueId> = HashMap::new();
+
+    // Build a const map so we can detect same-constant-different-ValueId cases.
+    let const_map: HashMap<ValueId, Constant> = func
+        .insts
+        .iter()
+        .filter_map(|(_, inst)| {
+            if let (Op::Const(c), Some(result)) = (&inst.op, inst.result) {
+                Some((result, c.clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Collect removals: (block, param indices to remove in reverse order).
     let mut removals: Vec<(BlockId, Vec<usize>)> = Vec::new();
@@ -528,6 +546,7 @@ fn eliminate_trivial_params(func: &mut Function) -> bool {
 
         for (i, param) in params.iter().enumerate() {
             let mut uniform_value: Option<ValueId> = None;
+            let mut uniform_const: Option<&Constant> = None;
             let mut is_trivial = true;
 
             for args in &incoming {
@@ -537,11 +556,20 @@ fn eliminate_trivial_params(func: &mut Function) -> bool {
                 }
                 let val = args[i];
                 match uniform_value {
-                    None => uniform_value = Some(val),
+                    None => {
+                        uniform_value = Some(val);
+                        uniform_const = const_map.get(&val);
+                    }
                     Some(v) if v == val => {}
                     Some(_) => {
-                        is_trivial = false;
-                        break;
+                        // Different ValueIds — still trivial if both are the same constant.
+                        match (uniform_const, const_map.get(&val)) {
+                            (Some(uc), Some(vc)) if uc == vc => {}
+                            _ => {
+                                is_trivial = false;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -728,8 +756,12 @@ fn simplify_cfg(func: &mut Function) -> bool {
         let mut changed = false;
         changed |= forward_empty_blocks(func);
         changed |= merge_blocks(func);
-        changed |= collapse_same_target_brif(func);
+        // Trivial param elimination runs before same-target BrIf collapse so that
+        // when all arms pass the same constant (same-constant different-ValueId case),
+        // the param is eliminated first.  This avoids inserting an unnecessary
+        // Select(cond, false, false) that would require a second fold to remove.
         changed |= eliminate_trivial_params(func);
+        changed |= collapse_same_target_brif(func);
         changed |= cleanup_unreachable(func);
         if !changed {
             break;
@@ -1392,6 +1424,157 @@ mod tests {
 
         let func = apply_cfg_simplify(fb.build());
         assert!(func.blocks[dead].insts.is_empty(), "unreachable block should be cleared");
+    }
+
+    /// Same-constant different-ValueId: BrIf → then(Const false_1) → merge(false_1)
+    ///                                        → else(Const false_2) → merge(false_2)
+    /// Both incoming args are different ValueIds but the same constant (false).
+    /// The merge param must be eliminated and replaced with a single false constant.
+    /// This is the `X && false` pattern where game authors disabled a code block.
+    ///
+    /// Note: CfgSimplify eliminates merge's param (the main goal), but cannot
+    /// fully forward then_b/else_b because they have 2 instructions after param
+    /// elimination — the dead Const remains. DCE cleans that up separately.
+    #[test]
+    fn same_const_different_value_id_trivial() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+
+        let then_b = fb.create_block();
+        let else_b = fb.create_block();
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Bool]);
+
+        fb.br_if(cond, then_b, &[], else_b, &[]);
+
+        // then_b: Const(false), Br(merge, false_1)
+        fb.switch_to_block(then_b);
+        let false_1 = fb.const_bool(false);
+        fb.br(merge, &[false_1]);
+
+        // else_b: Const(false), Br(merge, false_2) — different ValueId, same constant
+        fb.switch_to_block(else_b);
+        let false_2 = fb.const_bool(false);
+        fb.br(merge, &[false_2]);
+
+        // merge(p0): return p0
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // merge's param must be eliminated — both arms pass the same constant.
+        assert_eq!(
+            func.blocks[merge].params.len(),
+            0,
+            "same-constant trivial param should be eliminated from merge"
+        );
+
+        // merge's Return should use false_1 (the representative constant).
+        let last_inst = *func.blocks[merge].insts.last().unwrap();
+        let ret_val = match &func.insts[last_inst].op {
+            Op::Return(Some(v)) => *v,
+            other => panic!("expected Return(Some(false)) in merge, got {:?}", other),
+        };
+        let ret_const = func
+            .insts
+            .iter()
+            .find(|(_, inst)| inst.result == Some(ret_val))
+            .and_then(|(_, inst)| {
+                if let Op::Const(c) = &inst.op {
+                    Some(c.clone())
+                } else {
+                    None
+                }
+            });
+        assert_eq!(
+            ret_const,
+            Some(Constant::Bool(false)),
+            "merge's return value should be the eliminated constant (false)"
+        );
+    }
+
+    /// Same-constant via single-instruction forwarders: when then_b and else_b are
+    /// pure forwarders (single Br), forward_empty_blocks fires first, then
+    /// eliminate_trivial_params (extended) collapses the same-constant param.
+    ///
+    /// Structure:
+    ///   entry: Const(false_1), Const(false_2), BrIf(cond, then_b, else_b)
+    ///   then_b: {Br(merge, false_1)}  ← 1 instruction, forwardable
+    ///   else_b: {Br(merge, false_2)}  ← 1 instruction, forwardable
+    ///   merge(p0): Return(p0)
+    ///
+    /// Expected: merge param eliminated via same-constant detection, then the
+    /// BrIf collapses (same-target), merge merges into entry.
+    #[test]
+    fn same_const_forwarders_fully_collapse() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool],
+            return_ty: Type::Bool,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let cond = fb.param(0);
+
+        let then_b = fb.create_block();
+        let else_b = fb.create_block();
+        let (merge, merge_params) = fb.create_block_with_params(&[Type::Bool]);
+
+        // Define both constants in entry so then_b/else_b can be pure forwarders.
+        let false_1 = fb.const_bool(false);
+        let false_2 = fb.const_bool(false);
+        fb.br_if(cond, then_b, &[], else_b, &[]);
+
+        // then_b: single Br — forwardable
+        fb.switch_to_block(then_b);
+        fb.br(merge, &[false_1]);
+
+        // else_b: single Br — forwardable
+        fb.switch_to_block(else_b);
+        fb.br(merge, &[false_2]);
+
+        // merge(p0): return p0
+        fb.switch_to_block(merge);
+        fb.ret(Some(merge_params[0]));
+
+        let func = apply_cfg_simplify(fb.build());
+
+        // After forwarding, the BrIf targets merge from both arms with same-constant
+        // different-ValueId args → eliminate_trivial_params fires → param eliminated.
+        // The BrIf then has same-target merge → collapse → Br(merge) → merge merged.
+        // Final: entry should end with Return using a false constant.
+        let entry = func.entry;
+        let last_inst = *func.blocks[entry].insts.last().unwrap();
+        // After full collapse, entry ends with Return(false).
+        // The return value is either false_1 or false_2 (both are Const(false)).
+        let ret_val = match &func.insts[last_inst].op {
+            Op::Return(Some(v)) => *v,
+            other => panic!(
+                "expected Return(Some(false)) after full collapse, got {:?}",
+                other
+            ),
+        };
+        // Verify the returned value is Const(false).
+        let ret_const = func
+            .insts
+            .iter()
+            .find(|(_, inst)| inst.result == Some(ret_val))
+            .and_then(|(_, inst)| {
+                if let Op::Const(c) = &inst.op {
+                    Some(c.clone())
+                } else {
+                    None
+                }
+            });
+        assert_eq!(
+            ret_const,
+            Some(Constant::Bool(false)),
+            "same-constant forwarders should fully collapse to Return(false)"
+        );
     }
 
     // ---- Adversarial tests ----
