@@ -1,6 +1,7 @@
 mod assets;
 mod data;
 mod default_arg;
+mod instance_type_flow;
 mod logical_op;
 pub mod naming;
 mod object;
@@ -160,6 +161,8 @@ impl Frontend for GameMakerFrontend {
 
         let module = mb.build();
 
+        let obj_names_set: HashSet<String> = obj_names.iter().cloned().collect();
+
         Ok(FrontendOutput {
             modules: vec![module],
             assets,
@@ -168,6 +171,9 @@ impl Frontend for GameMakerFrontend {
                 Box::new(default_arg::GmlDefaultArgRecovery),
                 Box::new(reincarnate_core::transforms::IntToBoolPromotion),
                 Box::new(logical_op::GmlLogicalOpNormalize),
+                Box::new(instance_type_flow::GmlInstanceTypeFlow {
+                    obj_names: obj_names_set,
+                }),
             ],
         })
     }
@@ -689,10 +695,12 @@ fn build_asset_ref_names(dw: &DataWin, scpt: &datawin::chunks::scpt::Scpt) -> Ha
     let mut map = HashMap::new();
 
     // Type 0: objects (OBJT).
+    // Use PascalCase names (same as resolve_object_names) so that GlobalRef
+    // identifiers match the emitted TypeScript class names.
     if let Ok(objt) = dw.objt() {
         for (i, entry) in objt.objects.iter().enumerate() {
             if let Ok(name) = dw.resolve_string(entry.name) {
-                map.insert(i as u32, name); // type_tag=0, so (0 << 24) | i == i
+                map.insert(i as u32, naming::object_name_to_pascal(&name)); // type_tag=0, so (0 << 24) | i == i
             }
         }
     }

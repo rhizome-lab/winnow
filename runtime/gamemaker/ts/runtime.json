@@ -751,9 +751,9 @@
       "params": [
         "number",
         "number",
-        "int"
+        "*"
       ],
-      "returns": "int"
+      "returns": "*"
     },
     "instance_exists": {
       "params": [
@@ -779,26 +779,26 @@
     },
     "instance_find": {
       "params": [
-        "int",
+        "*",
         "int"
       ],
-      "returns": "int"
+      "returns": "*"
     },
     "instance_nearest": {
       "params": [
         "number",
         "number",
-        "int"
+        "*"
       ],
-      "returns": "int"
+      "returns": "*"
     },
     "instance_furthest": {
       "params": [
         "number",
         "number",
-        "int"
+        "*"
       ],
-      "returns": "int"
+      "returns": "*"
     },
     "place_meeting": {
       "params": [

@@ -960,53 +960,64 @@ fn setup_blocks(
     (block_map, block_params, block_entry_depths)
 }
 
-/// Extract a `with`-block body as a standalone closure [`Function`].
+/// Context for translating a `with`-body closure.
 ///
-/// The closure has signature `(_self: Dynamic, cap0: Dynamic, ...) -> Void`
-/// where `_self` receives the iterated instance at call time and `cap0..` are
-/// captured outer locals (ByValue).
-#[allow(clippy::too_many_arguments)]
-fn translate_with_body(
-    body_insts: &[Instruction],
-    inner_name: &str,
-    ctx: &TranslateCtx<'_>,
-    captured_names: &[String],
+/// Bundles the parameters needed by [`translate_with_body`] so the function
+/// stays under Clippy's 7-argument limit.
+struct WithBodyCtx<'a> {
+    body_insts: &'a [Instruction],
+    inner_name: &'a str,
+    ctx: &'a TranslateCtx<'a>,
+    captured_names: &'a [String],
     has_outer_self: bool,
+    /// Class name of the `with`-target if it was a typed OBJT pushref.
+    /// When set, the `_self` parameter and `inner_ctx.class_name` are typed accordingly.
+    instance_class: Option<&'a str>,
+}
+
+fn translate_with_body(
+    wctx: &WithBodyCtx<'_>,
     extra_funcs: &mut Vec<Function>,
 ) -> Result<Function, String> {
     use reincarnate_core::ir::ty::FunctionSig;
 
+    let self_ty = wctx
+        .instance_class
+        .map(|n| Type::Struct(n.to_string()))
+        .unwrap_or(Type::Dynamic);
     let sig = FunctionSig {
-        params: vec![Type::Dynamic], // _self
+        params: vec![self_ty], // _self
         return_ty: Type::Void,
         ..Default::default()
     };
-    let mut fb = FunctionBuilder::new(inner_name, sig, Visibility::Public);
+    let mut fb = FunctionBuilder::new(wctx.inner_name, sig, Visibility::Public);
     fb.name_value(fb.param(0), "_self".to_string());
 
     // Declare capture parameters (ByValue snapshots of outer locals).
-    let capture_ids = if captured_names.is_empty() {
+    let capture_ids = if wctx.captured_names.is_empty() {
         vec![]
     } else {
         fb.add_capture_params(
-            captured_names
+            wctx.captured_names
                 .iter()
                 .map(|n| (n.clone(), Type::Dynamic, CaptureMode::ByValue))
                 .collect(),
         )
     };
 
-    let inner_with_ranges = find_with_ranges(body_insts);
-    let entry_offset = body_insts.first().map_or(0, |inst| inst.offset);
+    let inner_with_ranges = find_with_ranges(wctx.body_insts);
+    let entry_offset = wctx.body_insts.first().map_or(0, |inst| inst.offset);
     let (block_map, block_params, block_entry_depths) =
-        setup_blocks(&mut fb, body_insts, &inner_with_ranges, entry_offset);
+        setup_blocks(&mut fb, wctx.body_insts, &inner_with_ranges, entry_offset);
+
+    let ctx = wctx.ctx;
 
     // Allocate outer local variable slots (reusing the outer ctx's local names).
     let mut locals = allocate_locals(&mut fb, ctx);
 
     // Allocate alloc slots for captured argument variables (_argument0, _argument1, …).
     // These are not GML locals so they aren't in ctx.local_names / allocate_locals.
-    for name in captured_names {
+    for name in wctx.captured_names {
         if name.starts_with("_argument") && !locals.contains_key(name) {
             let slot = fb.alloc(Type::Dynamic);
             locals.insert(name.clone(), slot);
@@ -1014,7 +1025,7 @@ fn translate_with_body(
     }
 
     // Pre-store captured values into their alloc slots so the body can read them.
-    for (i, name) in captured_names.iter().enumerate() {
+    for (i, name) in wctx.captured_names.iter().enumerate() {
         if let Some(&slot) = locals.get(name) {
             fb.store(slot, capture_ids[i]);
         }
@@ -1023,9 +1034,10 @@ fn translate_with_body(
     // Inner context: same VARI/FUNC tables but no declared args, class-typed self.
     let inner_ctx = TranslateCtx {
         has_self: true,
-        has_other: has_outer_self,
+        has_other: wctx.has_outer_self,
         arg_count: 0,
-        class_name: None,
+        // Use the class name from the with-target so field-type lookups work.
+        class_name: wctx.instance_class,
         function_names: ctx.function_names,
         asset_ref_names: ctx.asset_ref_names,
         variables: ctx.variables,
@@ -1045,8 +1057,8 @@ fn translate_with_body(
 
     fb.switch_to_block(fb.entry_block());
     let terminated = run_translation_loop(
-        body_insts,
-        inner_name,
+        wctx.body_insts,
+        wctx.inner_name,
         &mut fb,
         &block_map,
         &block_params,
@@ -1104,6 +1116,9 @@ fn run_translation_loop(
     // When Some(n), skip instructions with index < n (with-body instructions
     // that have been extracted into a closure).
     let mut skip_until: Option<usize> = None;
+    // Track pushref OBJT values: ValueId → class name. Populated by translate_instruction
+    // for signal 0xFFF5 with type_tag==0, consumed at PushEnv to type the with-body _self.
+    let mut obj_ref_values: HashMap<ValueId, String> = HashMap::new();
 
     for (inst_idx, inst) in instructions.iter().enumerate() {
         // Skip instructions that belong to a with-body extracted as a closure.
@@ -1191,14 +1206,21 @@ fn run_translation_loop(
                     capture_vals.push(fb.load(slot, Type::Dynamic));
                 }
 
+                // Determine the class of the with-target (if it's a typed OBJT pushref).
+                let instance_class: Option<&str> =
+                    obj_ref_values.get(&target_obj).map(String::as_str);
+
                 // Build the inner closure function (may recursively extract nested withs).
                 let inner_name = format!("{func_name}_with_{:04x}", inst.offset);
                 let inner_func = translate_with_body(
-                    body_insts,
-                    &inner_name,
-                    ctx,
-                    &captured_names,
-                    has_outer_self,
+                    &WithBodyCtx {
+                        body_insts,
+                        inner_name: &inner_name,
+                        ctx,
+                        captured_names: &captured_names,
+                        has_outer_self,
+                        instance_class,
+                    },
                     extra_funcs,
                 )?;
                 extra_funcs.push(inner_func);
@@ -1252,6 +1274,7 @@ fn run_translation_loop(
             &mut compound_2d_pending,
             &mut pushac_array,
             global_arg_count,
+            &mut obj_ref_values,
         )?;
     }
 
@@ -1561,6 +1584,7 @@ fn translate_instruction(
     compound_2d_pending: &mut bool,
     pushac_array: &mut Option<ValueId>,
     global_arg_count: u16,
+    obj_ref_values: &mut HashMap<ValueId, String>,
 ) -> Result<(), String> {
     match inst.opcode {
         // ============================================================
@@ -2064,6 +2088,11 @@ fn translate_instruction(
                         // Type 0 = OBJT (object), 1 = SPRT, 2 = SOND, 3 = ROOM, etc.
                         // All types are resolved via asset_ref_names. Fall back to
                         // func_ref_map (for GMS1 compatibility) and then to a placeholder.
+                        let is_objt = if let Operand::Break { extra: Some(idx), .. } = inst.operand {
+                            (idx as u32) >> 24 == 0
+                        } else {
+                            false
+                        };
                         let func_name = if let Operand::Break { extra: Some(idx), .. } = inst.operand {
                             let key = idx as u32;
                             ctx.asset_ref_names.get(&key).cloned()
@@ -2083,6 +2112,10 @@ fn translate_instruction(
                         let val = fb.global_ref(&func_name, Type::Dynamic);
                         gml_sizes.insert(val, 4); // Variable (16 bytes)
                         stack.push(val);
+                        // Track OBJT references so with-body closures can be typed.
+                        if is_objt {
+                            obj_ref_values.insert(val, func_name);
+                        }
                     }
                     _ => {
                         // Unknown break signal, emit as system call.

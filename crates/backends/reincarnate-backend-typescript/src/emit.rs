@@ -1734,6 +1734,20 @@ fn collect_type_refs_from_function(
                     _ => {}
                 }
             }
+            // GlobalRef to a known class (OBJT in GameMaker) → runtime value ref
+            // (class constructor import). Previously these were declared as
+            // `declare const OEnemy: number` in asset_ids.d.ts; now they are class
+            // constructors imported from their object module.
+            Op::GlobalRef(name) if registry.lookup(name).is_some() => {
+                collect_type_ref(
+                    &Type::Struct(name.clone()),
+                    self_name,
+                    registry,
+                    external_imports,
+                    &mut refs.value_refs,
+                    &mut refs.ext_value_refs,
+                );
+            }
             _ => {}
         }
     }

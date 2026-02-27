@@ -415,13 +415,10 @@ fn generate_asset_ids(dw: &DataWin, catalog: &mut AssetCatalog) {
         out.push('\n');
     };
 
-    // Objects (type=0 in pushref encoding).
-    let object_names: Vec<String> = dw.objt()
-        .map(|objt| {
-            objt.objects.iter().filter_map(|e| dw.resolve_string(e.name).ok()).collect()
-        })
-        .unwrap_or_default();
-    emit_group("Objects", object_names);
+    // Note: OBJT (object classes) are NOT declared as numeric constants here.
+    // Object names (OEnemy, Player, etc.) are class constructors in emitted TypeScript,
+    // imported by name from ./objects/<ClassName>. Declaring them as `number` would
+    // break the generic instance_create_* and withInstances APIs.
 
     // Sprites.
     let sprite_names: Vec<String> = dw.sprt()

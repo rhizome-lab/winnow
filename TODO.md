@@ -537,9 +537,12 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 1622 as of 2026-02-27
+### 7. Dead Estate remaining TS errors — 2108 as of 2026-02-27 (post-Bug-7e)
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622. GmlDefaultArgRecovery
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 (Bug 7e: OBJT as class constructors).
+Note: 2108 > 1622 because the OBJT constructor change surfaces ~524 new game-author TS2345 errors
+(user scripts that typed OBJT params as `number` from arithmetic context). The gain is typed
+`instance_create_*` returns and typed `with`-body `_self`. GmlDefaultArgRecovery
 pass folds GMS2.3+ `if (arg === undefined) arg = val` patterns into FunctionSig.defaults;
 variadic scripts get `= 0.0` on fixed params. TS2554: 2069→859, TS2555: 149→0.
 
@@ -625,22 +628,34 @@ Two bugs in `IntToBoolPromotion`:
    as `number` even though the field was `Type::Bool`, causing ~12 TS2322 `boolean → number` errors.
 Result: TS2322 319 → 187, total errors 879 → 743.
 
-#### Bug 7e: HIGH PRIORITY — Object indices exposed as bare numbers (176 TS2345)
+#### Bug 7e: FIXED — Object indices exposed as bare numbers (2026-02-27)
 
-All 176 `number → GMLObject` errors are at `instance_destroy(objName)` call sites. The object
-constants (from pushref type_tag=0 OBJT) are declared as `number` in `asset_ids.d.ts`. GML's
-`instance_destroy` accepts both instances and object indices.
+All `instance_destroy(objName)` TS2345 errors and related patterns fixed by changing OBJT names
+from numeric constants to typed class constructors throughout.
 
-**Design decision:** Object indices should NOT be exposed as bare numbers. Passing numbers
-around instead of objects is bad for maintainability and type safety. Instead:
-- [ ] Pushref OBJT references should resolve to class references (constructor functions), not numeric indices
-- [ ] Runtime functions (`instance_destroy`, `instance_create_depth`, `instance_exists`,
-  `instance_find`, `instance_nearest`, etc.) should accept class constructors, not numeric indices
-- [ ] `asset_ids.d.ts` object entries should be typed as class refs, not `number`
-- [ ] The runtime internally can still use numeric indices, but the external API hides them
+Changes:
+- [x] Pushref OBJT references resolve to class constructors (PascalCase via `object_name_to_pascal`)
+- [x] Runtime functions (`instance_destroy`, `instance_create_depth`, `instance_exists`, `instance_find`,
+  `instance_nearest`, all collision functions, etc.) accept class constructors instead of numeric indices
+- [x] `asset_ids.d.ts` no longer declares OBJT names — they are imported as classes
+- [x] `collect_type_refs_from_function` registers OBJT `GlobalRef` as class value imports
+- [x] `GmlInstanceTypeFlow` pass: narrows `instance_create_*` return types from `Dynamic` to `Struct(ClassName)`;
+  rewrites `object_index == OEnemy` comparisons to `Op::TypeCheck` (instanceof)
+- [x] With-body `_self` typed from OBJT pushref in `translate.rs` (Phase 4)
+- [x] `runtime.json` signatures for `instance_create/find/nearest/furthest` use `"*"` (not `"int"`)
+- [x] `getInstanceField`/`setInstanceField` accept `typeof GMLObject | number`
 
-This is a significant refactor touching: pushref resolution in translator, asset_ids generation,
-runtime function signatures, and emitter import generation for object classes.
+Result: TS2345 `number → GMLObject` at instance_destroy: resolved.
+
+**Residual TS2345 (524 `typeof Class → number`):** User-defined GML scripts that typed their
+parameters as `number` (from arithmetic context) now receive `typeof ClassName` (class constructor).
+These are game-author errors — GML game code using object indices as plain numbers in user scripts.
+TypeScript correctly flags them. Fixing would require GML call-site type inference to propagate
+class constructor types into user script params (future work).
+
+**Residual TS2304 (238):** `dynamic` (GML built-in keyword used as identifier), `isType` (TypeCheck
+emits `isType(x, T)` but no such GML runtime function exists — should emit `x instanceof T`; tracked
+as separate bug), `v12`/`v34` etc. (SSA variable names not hoisted, pre-existing Bug 7d).
 
 #### Bug 7c: Unreachable code after return/continue (207 TS7027)
 
@@ -689,6 +704,36 @@ Pattern: `int(global.argument0)[AceDoll.instances[0]!.items] = 0` — `int()` re
 which can't be indexed. These are 2D array access patterns where the array variable is coerced
 to `int` before being used as an array target. Root cause: the 2D array access codegen wraps
 the array in `int()` (from a `coerce i32` instruction) when it should be accessing the array directly.
+
+#### Bug 7f: `isType` not defined in GML TypeScript output (TS2304, ~4 errors)
+
+`Op::TypeCheck(value, Type::Struct("ClassName"))` emits `isType(value, ClassName)` in the
+TypeScript backend (`ast_printer.rs` line ~908). But `isType` is not a GML runtime function
+— it's a Flash runtime concept. For GML, `TypeCheck` should emit `value instanceof ClassName`.
+
+Fix: in `ast_printer.rs`, add an engine-specific check — when engine is GameMaker and the type
+is `Struct(name)`, emit `value instanceof name` instead of `isType(value, name)`.
+Alternatively, add `isType` as a runtime helper that wraps `instanceof`.
+
+Affected: functions that contain `Op::TypeCheck` from `GmlInstanceTypeFlow`'s Step C (object_index
+→ instanceof rewrite).
+
+#### TS2304: `dynamic` identifier (Dead Estate, ~10 errors)
+
+GML has a `dynamic` keyword for struct literals. Some game code uses `dynamic` as an identifier
+(likely from GML 2.3+ struct definitions). The translator emits `dynamic` as a bare identifier
+which TypeScript doesn't recognize. Needs investigation — may be a translator keyword lookup bug.
+
+#### TS2345: OBJT class constructors passed to user scripts typed as `number` (~524 errors)
+
+Game-author pattern: user scripts like `hurt(Player, damage)` pass OBJT class constructors to
+functions that inferred `argument0: number` from arithmetic context (e.g., comparisons to `-4`,
+arithmetic expressions). These are correctly surfaced as type errors — GML game code relied on
+object indices being plain integers, but class constructors are not numbers.
+
+Future: could resolve by having CallSiteTypeFlow propagate `typeof GMLObject` into user script
+params, changing their inferred type from `number` to `typeof GMLObject | number`. Would require
+tracking that the value came from a `GlobalRef` of an OBJT class.
 
 #### TS2339: Missing particle system properties (107 of 149)
 

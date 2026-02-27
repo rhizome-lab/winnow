@@ -464,7 +464,7 @@ export class GameRuntime {
   setInstanceFieldIndex!: (objId: number, field: string, index: number, value: any) => void;
   getAllField!: (field: string) => any;
   setAllField!: (field: string, value: any) => void;
-  withInstances!: (target: number, callback: (inst: GMLObject) => void) => void;
+  withInstances!: <T extends GMLObject>(target: (new(...args: any[]) => T) | T | number, callback: (inst: T) => void) => void;
   drawSprite!: (
     spriteIndex: number, imageIndex: number, x: number, y: number,
     opts?: { image_alpha?: number; image_xscale?: number; image_yscale?: number },
@@ -559,8 +559,8 @@ export class GameRuntime {
 
   // ---- Instance management (internal) ----
 
-  _instanceCreate(x: number, y: number, clazz: typeof GMLObject, roomStart = false): GMLObject {
-    const instance = new (clazz as any)();
+  _instanceCreate<T extends GMLObject>(x: number, y: number, cls: new(...args: any[]) => T, roomStart = false): T {
+    const instance = new cls();
     instance._rt = this;
     // Walk prototype chain and push to per-runtime instance tracking
     let c: any = instance.constructor;
@@ -607,27 +607,22 @@ export class GameRuntime {
   /** GML `other` — the "other" instance in collision/with events. Set by withInstances. */
   other: any = null;
 
-  instance_create(x: number, y: number, classIndex: number): GMLObject {
-    const clazz = this.classes[classIndex]!;
-    return this._instanceCreate(x, y, clazz);
+  instance_create<T extends GMLObject>(x: number, y: number, cls: new() => T): T {
+    return this._instanceCreate(x, y, cls);
   }
 
-  instance_create_depth(x: number, y: number, depth: number, classIndex: number): GMLObject {
-    const clazz = this.classes[classIndex]!;
-    const inst = this._instanceCreate(x, y, clazz);
+  instance_create_depth<T extends GMLObject>(x: number, y: number, depth: number, cls: new() => T): T {
+    const inst = this._instanceCreate(x, y, cls);
     inst.depth = depth;
     return inst;
   }
 
-  instance_create_layer(x: number, y: number, _layer: any, classIndex: number): GMLObject {
-    const clazz = this.classes[classIndex]!;
-    return this._instanceCreate(x, y, clazz);
+  instance_create_layer<T extends GMLObject>(x: number, y: number, _layer: any, cls: new() => T): T {
+    return this._instanceCreate(x, y, cls);
   }
 
-  instance_nearest(x: number, y: number, classIndex: number): GMLObject | null {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return null;
-    const instances = this._getInstances(clazz);
+  instance_nearest<T extends GMLObject>(x: number, y: number, cls: new() => T): T | null {
+    const instances = this._getInstances(cls);
     if (instances.length === 0) return null;
     let nearest = instances[0]!;
     let minDist = Math.hypot(nearest.x - x, nearest.y - y);
@@ -636,14 +631,11 @@ export class GameRuntime {
       const d = Math.hypot(inst.x - x, inst.y - y);
       if (d < minDist) { minDist = d; nearest = inst; }
     }
-    return nearest;
+    return nearest as T;
   }
 
-  object_is_ancestor(classIndex: number, parentIndex: number): boolean {
-    const clazz = this.classes[classIndex];
-    const parent = this.classes[parentIndex];
-    if (!clazz || !parent) return false;
-    let proto = Object.getPrototypeOf(clazz);
+  object_is_ancestor(cls: typeof GMLObject, parent: typeof GMLObject): boolean {
+    let proto = Object.getPrototypeOf(cls);
     while (proto && proto !== __baseproto) {
       if (proto === parent) return true;
       proto = Object.getPrototypeOf(proto);
@@ -1323,9 +1315,10 @@ export class GameRuntime {
   // ---- Method binding ----
   // GML method(instance, func) binds `instance` as the self context for func.
   // Our functions take (_rt, self, ...args), so we partially-apply both.
-  method(_instance: any, func: (...args: any[]) => any): (...args: any[]) => any {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  method(_instance: any, func: ((...args: any[]) => any) | Function): (...args: any[]) => any {
     const rt = this;
-    return (...args: any[]) => func(rt, _instance, ...args);
+    return (...args: any[]) => (func as (...args: any[]) => any)(rt, _instance, ...args);
   }
 
   // ---- Variable struct helpers ----
@@ -1357,15 +1350,16 @@ export class GameRuntime {
   point_in_rectangle(px: number, py: number, x1: number, y1: number, x2: number, y2: number): boolean {
     return px >= x1 && px <= x2 && py >= y1 && py <= y2;
   }
-  distance_to_object(classIndex: number): number {
+  distance_to_object(cls: typeof GMLObject | GMLObject): number {
     if (!this._self) return 0;
     const sx = this._self.x, sy = this._self.y;
-    const clazz = this.classes[classIndex];
-    if (!clazz) return 0;
+    if (cls instanceof GMLObject) {
+      return Math.hypot(cls.x - sx, cls.y - sy);
+    }
     let best = Infinity;
     for (const inst of this.roomVariables) {
       if (inst === this._self) continue;
-      if (!(inst instanceof clazz)) continue;
+      if (!(inst instanceof cls)) continue;
       const d = Math.hypot(inst.x - sx, inst.y - sy);
       if (d < best) best = d;
     }
@@ -1400,13 +1394,15 @@ export class GameRuntime {
     const nearY = Math.max(b.y1, Math.min(cy, b.y2));
     return Math.hypot(nearX - cx, nearY - cy) <= r;
   }
-  private _getCandidates(classIndex: number, notme: boolean): GMLObject[] {
+  private _getCandidates(cls: typeof GMLObject | GMLObject | -1 | -3, notme: boolean): GMLObject[] {
     let candidates: GMLObject[];
-    if (classIndex === -1 || classIndex === -3) { // all / other
+    if (cls === -1 || cls === -3) { // all / other
       candidates = this.roomVariables;
+    } else if (cls instanceof GMLObject) {
+      // specific instance passed directly
+      candidates = [cls];
     } else {
-      const clazz = this.classes[classIndex];
-      candidates = clazz ? this._getInstances(clazz) : [];
+      candidates = this._getInstances(cls as typeof GMLObject);
     }
     const deact = this._deactivatedInstances;
     return notme && this._self
@@ -1414,8 +1410,8 @@ export class GameRuntime {
       : candidates.filter((o) => !deact.has(o));
   }
 
-  collision_line(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
-    for (const inst of this._getCandidates(classIndex, notme)) {
+  collision_line(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (!bb) continue;
       // Line-rect intersection: check all 4 edges + point containment
@@ -1436,47 +1432,44 @@ export class GameRuntime {
     }
     return -4;
   }
-  collision_rectangle(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
-    for (const inst of this._getCandidates(classIndex, notme)) {
+  collision_rectangle(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlapsRect(bb, x1, y1, x2, y2)) return inst;
     }
     return -4;
   }
-  place_meeting(x: number, y: number, classIndex: number): boolean {
+  place_meeting(x: number, y: number, cls: typeof GMLObject | GMLObject | -1): boolean {
     if (!this._self) return false;
     const selfBB = this._getBBox(this._self, x, y);
     if (!selfBB) return false;
-    for (const inst of this._getCandidates(classIndex, true)) {
+    for (const inst of this._getCandidates(cls, true)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlap(selfBB, bb)) return true;
     }
     return false;
   }
-  instance_place(x: number, y: number, classIndex: number): any {
+  instance_place(x: number, y: number, cls: typeof GMLObject | GMLObject | -1): any {
     if (!this._self) return -4;
     const selfBB = this._getBBox(this._self, x, y);
     if (!selfBB) return -4;
-    for (const inst of this._getCandidates(classIndex, true)) {
+    for (const inst of this._getCandidates(cls, true)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlap(selfBB, bb)) return inst;
     }
     return -4;
   }
-  instance_find(classIndex: number, n: number): any {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return -4; // noone
-    const instances = this._getInstances(clazz);
-    return instances[n] ?? -4;
+  instance_find<T extends GMLObject>(cls: new() => T, n: number): T | null {
+    const instances = this._getInstances(cls);
+    return (instances[n] as T) ?? null;
   }
 
   // ---- Object metadata ----
-  object_get_name(classIndex: number): string {
-    const clazz = this.classes[classIndex];
-    return clazz?.name ?? `object_${classIndex}`;
+  object_get_name(cls: typeof GMLObject): string {
+    return cls.name;
   }
-  object_exists(classIndex: number): boolean {
-    return classIndex >= 0 && classIndex < this.classes.length && this.classes[classIndex] != null;
+  object_exists(cls: typeof GMLObject): boolean {
+    return cls != null;
   }
 
   // ---- Color helpers ----
@@ -1677,24 +1670,20 @@ export class GameRuntime {
   }
 
   // ---- Object name registry (set by generated code) ----
-  getObjectName(classIndex: number): string {
-    return this.object_get_name(classIndex);
+  getObjectName(cls: typeof GMLObject): string {
+    return this.object_get_name(cls);
   }
 
   // ---- Instance activation/deactivation ----
-  instance_activate_object(classIndex: number): void {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return;
+  instance_activate_object(cls: typeof GMLObject): void {
     for (const inst of this._deactivatedInstances) {
-      if (inst instanceof clazz) this._deactivatedInstances.delete(inst);
+      if (inst instanceof cls) this._deactivatedInstances.delete(inst);
     }
   }
-  instance_deactivate_object(classIndex: number, notme: boolean = false): void {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return;
+  instance_deactivate_object(cls: typeof GMLObject, notme: boolean = false): void {
     for (const inst of this.roomVariables) {
       if (notme && inst === this._self) continue;
-      if (inst instanceof clazz) this._deactivatedInstances.add(inst);
+      if (inst instanceof cls) this._deactivatedInstances.add(inst);
     }
   }
   instance_deactivate_layer(_layer: any): void { /* no-op: layer data not available */ }
@@ -1931,25 +1920,25 @@ export class GameRuntime {
   steam_ugc_submit_item_update(_handle: number, _note: string): void { /* no-op — Steam UGC not available in browser */ }
 
   // ---- More collision ----
-  collision_point(x: number, y: number, classIndex: number, _prec: boolean, notme: boolean): any {
-    for (const inst of this._getCandidates(classIndex, notme)) {
+  collision_point(x: number, y: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxContainsPoint(bb, x, y)) return inst;
     }
     return -4;
   }
-  collision_circle(x: number, y: number, r: number, classIndex: number, _prec: boolean, notme: boolean): any {
-    for (const inst of this._getCandidates(classIndex, notme)) {
+  collision_circle(x: number, y: number, r: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean): any {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlapsCircle(bb, x, y, r)) return inst;
     }
     return -4;
   }
-  collision_ellipse(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean): any {
+  collision_ellipse(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean): any {
     // Approximate with circle using average radius
     const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
     const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (!bb) continue;
       const nx = Math.max(bb.x1, Math.min(cx, bb.x2));
@@ -1959,9 +1948,9 @@ export class GameRuntime {
     }
     return -4;
   }
-  collision_line_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: number | boolean = 0): number {
+  collision_line_list(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean, list: number, _ordered: number | boolean = 0): number {
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (!bb) continue;
       let hit = this._bboxContainsPoint(bb, x1, y1) || this._bboxContainsPoint(bb, x2, y2);
@@ -1984,9 +1973,9 @@ export class GameRuntime {
     }
     return count;
   }
-  collision_rectangle_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+  collision_rectangle_list(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlapsRect(bb, x1, y1, x2, y2)) {
         this.ds_list_add(list, inst); count++;
@@ -2426,9 +2415,9 @@ export class GameRuntime {
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  position_meeting(x: number, y: number, classIndex: number): boolean {
-    // Checks if the point (x, y) is inside any instance of classIndex
-    for (const inst of this._getCandidates(classIndex, true)) {
+  position_meeting(x: number, y: number, cls: typeof GMLObject | GMLObject | -1): boolean {
+    // Checks if the point (x, y) is inside any instance of cls
+    for (const inst of this._getCandidates(cls, true)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxContainsPoint(bb, x, y)) return true;
     }
@@ -2443,10 +2432,8 @@ export class GameRuntime {
     // In our 2D canvas model, texture primitives are not supported.
     return -1;
   }
-  object_get_sprite(classIndex: number): number {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return -1;
-    const inst = this._getInstances(clazz)[0];
+  object_get_sprite(cls: typeof GMLObject): number {
+    const inst = this._getInstances(cls)[0];
     return inst?.sprite_index ?? -1;
   }
   room_duplicate(_room: number): number { return _room; /* shallow alias — creating separate room instances not yet supported */ }
@@ -2525,11 +2512,11 @@ export class GameRuntime {
   layer_sequence_destroy(_seq: number): void { /* no-op */ }
 
   // ---- More collision ----
-  collision_ellipse_list(x1: number, y1: number, x2: number, y2: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+  collision_ellipse_list(x1: number, y1: number, x2: number, y2: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
     const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
     const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (!bb) continue;
       const nx = Math.max(bb.x1, Math.min(cx, bb.x2));
@@ -2541,10 +2528,9 @@ export class GameRuntime {
   }
 
   // ---- Instance change ----
-  instance_change(classIndex: number, performEvents: boolean): void {
+  instance_change(cls: typeof GMLObject, performEvents: boolean): void {
     if (!this._self) return;
-    const NewClass = this.classes[classIndex];
-    if (!NewClass) return;
+    const NewClass = cls;
     const old = this._self;
     // Remove old instance and create new one at same position
     const idx = this.roomVariables.indexOf(old);
@@ -2601,9 +2587,9 @@ export class GameRuntime {
     if (sx1 >= dx1 && sx2 <= dx2 && sy1 >= dy1 && sy2 <= dy2) return 2;
     return 1;
   }
-  collision_circle_list(x: number, y: number, r: number, classIndex: number, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
+  collision_circle_list(x: number, y: number, r: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean, notme: boolean, list: number, _ordered: boolean = false): number {
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlapsCircle(bb, x, y, r)) {
         this.ds_list_add(list, inst); count++;
@@ -3183,19 +3169,17 @@ export class GameRuntime {
     }
   }
   instance_activate_layer(_layer: any): void { /* no-op: layer data not available */ }
-  instance_furthest(x: number, y: number, classIndex: number): any {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return -4;
-    let best = -1, bestDist = -1;
+  instance_furthest<T extends GMLObject>(x: number, y: number, cls: new() => T): T | null {
+    let best: T | null = null, bestDist = -1;
     for (const inst of this.roomVariables) {
-      if (!(inst instanceof clazz)) continue;
+      if (!(inst instanceof cls)) continue;
       const d = Math.hypot(inst.x - x, inst.y - y);
-      if (d > bestDist) { bestDist = d; best = inst as any; }
+      if (d > bestDist) { bestDist = d; best = inst as T; }
     }
-    return best === -1 ? -4 : best;
+    return best;
   }
-  instance_position(x: number, y: number, classIndex: number): any {
-    for (const inst of this._getCandidates(classIndex, false)) {
+  instance_position(x: number, y: number, cls: typeof GMLObject | GMLObject | -1): any {
+    for (const inst of this._getCandidates(cls, false)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxContainsPoint(bb, x, y)) return inst;
     }
@@ -3203,12 +3187,10 @@ export class GameRuntime {
   }
 
   // ---- Object extras ----
-  object_get_parent(classIndex: number): number {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return -1;
-    const parent = Object.getPrototypeOf(clazz.prototype)?.constructor;
-    const idx = this.classes.indexOf(parent);
-    return idx >= 0 ? idx : -1;
+  object_get_parent(cls: typeof GMLObject): typeof GMLObject | null {
+    const parent = Object.getPrototypeOf(cls.prototype)?.constructor;
+    if (!parent || parent === GMLObject || parent === Object) return null;
+    return parent as typeof GMLObject;
   }
 
   // ---- More geometry ----
@@ -3256,9 +3238,9 @@ export class GameRuntime {
     const cy2 = Math.min(g.vcells - 1, Math.floor((y2 - g.top) / g.cellh));
     for (let cy = cy1; cy <= cy2; cy++) for (let cx = cx1; cx <= cx2; cx++) g.blocked[cy * g.hcells + cx] = 1;
   }
-  mp_grid_add_instances(id: number, classIndex: number, _prec: boolean): void {
+  mp_grid_add_instances(id: number, cls: typeof GMLObject | GMLObject | -1, _prec: boolean): void {
     const g = this._mpGrids.get(id); if (!g) return;
-    for (const inst of this._getCandidates(classIndex, false)) {
+    for (const inst of this._getCandidates(cls, false)) {
       const bb = this._getBBox(inst); if (!bb) continue;
       this.mp_grid_add_rectangle(id, bb.x1, bb.y1, bb.x2, bb.y2);
     }
@@ -3488,39 +3470,44 @@ export class GameRuntime {
 
   // ---- Instance position/collision with DS list ----
 
-  instance_place_list(x: number, y: number, classIndex: number, list: number, notme: boolean): number {
+  instance_place_list(x: number, y: number, cls: typeof GMLObject | GMLObject | -1, list: number, notme: boolean): number {
     if (!this._self) return 0;
     const selfBB = this._getBBox(this._self, x, y); if (!selfBB) return 0;
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxOverlap(selfBB, bb)) { this.ds_list_add(list, inst); count++; }
     }
     return count;
   }
-  instance_position_list(x: number, y: number, classIndex: number, list: number, notme: boolean): number {
+  instance_position_list(x: number, y: number, cls: typeof GMLObject | GMLObject | -1, list: number, notme: boolean): number {
     let count = 0;
-    for (const inst of this._getCandidates(classIndex, notme)) {
+    for (const inst of this._getCandidates(cls, notme)) {
       const bb = this._getBBox(inst);
       if (bb && this._bboxContainsPoint(bb, x, y)) { this.ds_list_add(list, inst); count++; }
     }
     return count;
   }
 
-  instance_destroy(instance: GMLObject): void {
-    this._instanceDestroy(instance);
+  instance_destroy(instance: typeof GMLObject | GMLObject): void {
+    if (typeof instance === 'function') {
+      for (const obj of this._getInstances(instance as typeof GMLObject).slice()) {
+        this._instanceDestroy(obj);
+      }
+    } else {
+      this._instanceDestroy(instance);
+    }
   }
 
-  instance_exists(classIndex: number): boolean {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return false;
-    return this._getInstances(clazz).length > 0;
+  instance_exists(target: typeof GMLObject | GMLObject): boolean {
+    if (typeof target === 'function') {
+      return this._getInstances(target as typeof GMLObject).length > 0;
+    }
+    return this.roomVariables.includes(target);
   }
 
-  instance_number(classIndex: number): number {
-    const clazz = this.classes[classIndex];
-    if (!clazz) return 0;
-    return this._instanceNumber(clazz);
+  instance_number(cls: typeof GMLObject): number {
+    return this._instanceNumber(cls);
   }
 
   // ---- Room navigation ----
