@@ -1348,13 +1348,76 @@ fn comparison_to_cmp_kind(cmp: ComparisonKind) -> CmpKind {
 
 /// Check if a variable operand represents a 2D array access.
 ///
-/// In older GameMaker bytecode (pre-GMS2), array variable access uses
-/// `ref_type == 0` with a non-negative instance type. Two index values
-/// (2D indices) are popped from the stack before the variable is accessed.
-/// This is distinct from `ref_type == 0xA0` (160) which uses singleton
-/// instance field access without popping indices.
+/// Two index values (dim1, dim2) are popped from the stack before the
+/// variable is accessed. This applies whenever the instance field is a
+/// non-negative object ID — which covers:
+///
+/// - `ref_type == 0x00`: self-context 2D array access (GMS1/GMS2). The
+///   `instance` field is the VARI table's scope owner (NOT the actual
+///   target); the real target is always `self` in an event handler.
+///
+/// Cross-object accesses (`ref_type == 0x10`, etc.) with `instance >= 0`
+/// are handled separately via `is_cross_obj_2d_read`, which additionally
+/// requires that the next array-index signal in the stream is `pushaf` (not
+/// `popaf`).  For WRITE context (popaf follows), the VM leaves `dim1` on the
+/// stack for `popaf` to consume directly — the VARI Push itself is a plain
+/// non-consuming field load.
+///
+/// `ref_type == 0x80` (stacktop) is excluded because it pops a *target
+/// instance* from the stack instead of indices.
+/// `ref_type == 0xA0` (singleton/Builtin) always uses `instance < 0`, so
+/// it is excluded by the `instance >= 0` check.
 fn is_2d_array_access(var_ref: &VariableRef, instance: i16) -> bool {
     instance >= 0 && var_ref.ref_type == 0
+}
+
+/// Returns `true` when the next pushaf/popaf signal in the remaining
+/// instruction stream is `pushaf` (0xFFFE), indicating a READ context.
+/// Returns `false` for `popaf` (WRITE context), block boundaries, Dup
+/// instructions, or if no array-index signal is found before the end of the
+/// basic block.
+///
+/// Dup triggers an early return of `false` because the only context in which
+/// a Dup appears between a cross-object VARI Push and a pushaf is a compound
+/// assignment (e.g. `arr[i] += v`).  In that case the VARI Push should NOT
+/// consume dim1/dim2 from the translation stack — the compound write path
+/// needs those values for the popaf write-back.
+fn lookahead_next_af_is_pushaf(rest: &[Instruction]) -> bool {
+    for inst in rest {
+        match inst.opcode {
+            Opcode::B | Opcode::Bt | Opcode::Bf | Opcode::Ret | Opcode::Exit
+            | Opcode::PushEnv | Opcode::PopEnv | Opcode::Dup => return false,
+            Opcode::Break => {
+                if let Operand::Break { signal, .. } = inst.operand {
+                    match signal {
+                        0xFFFE => return true,  // pushaf = READ
+                        0xFFFD => return false, // popaf = WRITE
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Returns `true` when a cross-object variable access (`ref_type != 0`,
+/// `ref_type != 0x80`, `instance >= 0`) is used in a 2D array READ context,
+/// i.e. the GML VM pushed `dim1` and `dim2` onto the stack before this VARI
+/// Push and the next array-index signal is `pushaf`.
+///
+/// Example: `AceDoll.charSelect[selected]` (ref_type=0x10) where the result
+/// is then indexed at `[8]` via `pushaf`.
+///
+/// In a WRITE context (popaf follows), `dim1` must be left on the stack for
+/// `popaf` to consume, so this returns `false` and the VARI Push is treated
+/// as a plain field load.
+fn is_cross_obj_2d_read(var_ref: &VariableRef, instance: i16, rest: &[Instruction]) -> bool {
+    instance >= 0
+        && var_ref.ref_type != 0
+        && var_ref.ref_type != 0x80
+        && lookahead_next_af_is_pushaf(rest)
 }
 
 /// Check if a variable operand uses stacktop-via-ref_type encoding.
@@ -1386,7 +1449,10 @@ fn gml_slot_units(dt: DataType) -> u8 {
 }
 
 /// Compute the stack effect (pops, pushes) of an instruction.
-fn stack_effect(inst: &Instruction) -> (usize, usize) {
+/// `rest` is the slice of instructions *following* `inst` in the same
+/// function body, used by `is_cross_obj_2d_read` to detect read vs write
+/// context via lookahead.
+fn stack_effect(inst: &Instruction, rest: &[Instruction]) -> (usize, usize) {
     match inst.opcode {
         Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
             if let Operand::Variable { var_ref, instance } = &inst.operand {
@@ -1394,8 +1460,10 @@ fn stack_effect(inst: &Instruction) -> (usize, usize) {
                     || is_stacktop_ref(var_ref, *instance)
                 {
                     (1, 1) // pops instance from stack, pushes field value
-                } else if is_2d_array_access(var_ref, *instance) {
-                    (2, 1) // pops 2D indices, pushes value
+                } else if is_2d_array_access(var_ref, *instance)
+                    || is_cross_obj_2d_read(var_ref, *instance, rest)
+                {
+                    (2, 1) // pops dim1+dim2, pushes value
                 } else {
                     (0, 1)
                 }
@@ -1515,7 +1583,7 @@ fn compute_block_stack_depths(
             continue;
         }
 
-        let (pops, pushes) = stack_effect(inst);
+        let (pops, pushes) = stack_effect(inst, &instructions[i + 1..]);
         depth -= pops as i32;
         if depth < 0 {
             depth = 0;
@@ -1602,7 +1670,7 @@ fn translate_instruction(
         // ============================================================
         Opcode::PushI | Opcode::Push | Opcode::PushLoc | Opcode::PushGlb | Opcode::PushBltn => {
             let depth_before = stack.len();
-            translate_push(inst, fb, stack, locals, ctx, compound_2d_pending, global_arg_count)?;
+            translate_push(inst, &instructions[inst_idx + 1..], fb, stack, locals, ctx, compound_2d_pending, global_arg_count)?;
             // Annotate newly pushed value with its GML type size.
             if stack.len() > depth_before {
                 if let Some(&val) = stack.last() {
@@ -2167,8 +2235,10 @@ fn translate_instruction(
 }
 
 /// Translate a push instruction.
+#[allow(clippy::too_many_arguments)]
 fn translate_push(
     inst: &Instruction,
+    rest: &[Instruction],
     fb: &mut FunctionBuilder,
     stack: &mut Vec<ValueId>,
     locals: &mut HashMap<String, ValueId>,
@@ -2190,7 +2260,7 @@ fn translate_push(
             stack.push(fb.const_string(s));
         }
         Operand::Variable { var_ref, instance } => {
-            translate_push_variable(inst, fb, stack, locals, ctx, var_ref, *instance, compound_2d_pending, global_arg_count)?;
+            translate_push_variable(inst, rest, fb, stack, locals, ctx, var_ref, *instance, compound_2d_pending, global_arg_count)?;
         }
         _ => {
             return Err(format!(
@@ -2206,6 +2276,7 @@ fn translate_push(
 #[allow(clippy::too_many_arguments)]
 fn translate_push_variable(
     inst: &Instruction,
+    rest: &[Instruction],
     fb: &mut FunctionBuilder,
     stack: &mut Vec<ValueId>,
     locals: &mut HashMap<String, ValueId>,
@@ -2275,6 +2346,41 @@ fn translate_push_variable(
         return Ok(());
     }
 
+    // Handle cross-object 2D array READ (ref_type != 0, ref_type != 0x80,
+    // instance >= 0, and the next array-index signal is `pushaf`).
+    // E.g. `AceDoll.charSelect[selected]` where the result is then indexed
+    // at `[8]` via `pushaf`.  The GML VM pushes dim2 and dim1 before the
+    // VARI Push; we consume them here and include dim1 in the getOn call
+    // so the result is `charSelect[selected]` (a 1-D slice) ready for the
+    // outer pushaf to pick element [8].
+    // In a WRITE context (popaf follows) dim1 must remain on the stack for
+    // popaf to use as the array index, so we fall through to the normal
+    // cross-object dispatch below.
+    if is_cross_obj_2d_read(var_ref, instance, rest) {
+        let dim1 = pop(stack, inst)?; // first-dimension index (top of stack)
+        let _dim2 = pop(stack, inst)?; // orphan dim2 (not used for 1-D slice)
+        let is_scalar = matches!(fb.try_get_const(dim1), Some(Constant::Int(-1)));
+        let obj_id = if let Some(name) = ctx.obj_names.get(instance as usize) {
+            fb.const_string(name)
+        } else {
+            fb.const_int(instance as i64)
+        };
+        let name_val = fb.const_string(&var_name);
+        let args: Vec<ValueId> = if is_scalar {
+            vec![obj_id, name_val]
+        } else {
+            vec![obj_id, name_val, dim1]
+        };
+        let val = fb.system_call(
+            "GameMaker.Instance",
+            "getOn",
+            &args,
+            Type::Dynamic,
+        );
+        stack.push(val);
+        return Ok(());
+    }
+
     // Handle 2D array access (ref_type == 0 with non-negative instance).
     // The instruction pops 2 indices from the stack (dim1, dim2).
     if is_2d_array_access(var_ref, instance) {
@@ -2286,7 +2392,10 @@ fn translate_push_variable(
         // the original (pre-Dup) copies left by a compound assignment pattern:
         //   push dim2, push dim1, Dup, VARI-read (← here), arithmetic, VARI-write
         // The subsequent Pop must use reversed order: new_value=top, dim1, dim2.
-        if stack.len() >= 2 {
+        // Only applies to ref_type==0 (self-context 2D arrays) — GMS2.3+ cross-object
+        // accesses (ref_type=0x10, 0x90, etc.) use Dup(swap)+popaf instead and must
+        // never set this flag.
+        if var_ref.ref_type == 0 && stack.len() >= 2 {
             *compound_2d_pending = true;
         }
         if var_name == "argument" {
@@ -2319,11 +2428,10 @@ fn translate_push_variable(
                     stack.push(val);
                 }
             }
-        } else if ctx.has_self {
+        } else if ctx.has_self && var_ref.ref_type == 0 {
             // ref_type==0 with instance >= 0: the instance field is the VARI
             // table's scope owner, NOT the target object.  The actual target
-            // is always the current instance (self).  Cross-object access uses
-            // ref_type 0x80 (stacktop) or 0xA0 (singleton) instead.
+            // is always the current instance (self).
             let is_scalar = matches!(fb.try_get_const(dim1), Some(Constant::Int(-1)));
             let self_param = fb.param(0);
             if is_scalar {
@@ -2335,8 +2443,10 @@ fn translate_push_variable(
                 stack.push(indexed);
             }
         } else {
-            // Script context (no self): the instance field identifies the
-            // target object for cross-object variable access.
+            // Cross-object indexed access (ref_type != 0, or script context):
+            // the instance field identifies the actual target object.
+            // E.g. `AceDoll.charSelect[selected]` uses ref_type=0x10 with
+            // instance=AceDoll and dim1=selected pushed on the stack.
             let is_scalar = matches!(fb.try_get_const(dim1), Some(Constant::Int(-1)));
             let obj_id = if let Some(name) = ctx.obj_names.get(instance as usize) {
                 fb.const_string(name)
@@ -2741,7 +2851,7 @@ fn translate_pop(
         // on top. The `compound_2d_pending` flag is set by translate_push_variable
         // when it detects the originals remaining after the 2D read.
         if is_2d_array_access(var_ref, *instance) {
-            let (dim1, value) = if *compound_2d_pending {
+            let (dim1, value) = if var_ref.ref_type == 0 && *compound_2d_pending {
                 *compound_2d_pending = false;
                 // Compound: new_value=top, dim1=next, _dim2=bottom
                 let value = pop(stack, inst)?;
@@ -2787,7 +2897,7 @@ fn translate_pop(
                         Type::Void,
                     );
                 }
-            } else if ctx.has_self {
+            } else if ctx.has_self && var_ref.ref_type == 0 {
                 // ref_type==0 with instance >= 0: the instance field is the
                 // VARI table's scope owner, NOT the target object.  The actual
                 // target is always self.  (See translate_push_variable.)
@@ -2801,7 +2911,8 @@ fn translate_pop(
                     fb.set_index(field_val, dim1, value);
                 }
             } else {
-                // Script context (no self): cross-object variable access.
+                // Cross-object indexed write (ref_type != 0, or script context):
+                // instance identifies the actual target object.
                 let is_scalar = matches!(fb.try_get_const(dim1), Some(Constant::Int(-1)));
                 let obj_id =
                     if let Some(name) = ctx.obj_names.get(*instance as usize) {
