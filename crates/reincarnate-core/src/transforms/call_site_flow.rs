@@ -22,6 +22,9 @@ use crate::pipeline::{Transform, TransformResult};
 pub struct CallSiteTypeFlow;
 
 /// Collected argument type observations: `(callee_name, param_index) → Vec<Type>`.
+///
+/// A `Dynamic` entry means a caller passed an unresolved value — this prevents
+/// narrowing because Dynamic means "could be anything at runtime."
 type Observations = HashMap<(String, usize), Vec<Type>>;
 
 /// Collect argument types from all call sites in the module.
@@ -43,12 +46,10 @@ fn collect_call_site_types(module: &Module) -> Observations {
                         }
                         for (i, &arg) in args.iter().enumerate() {
                             let ty = &func.value_types[arg];
-                            if *ty != Type::Dynamic {
-                                observations
-                                    .entry((callee_name.clone(), i))
-                                    .or_default()
-                                    .push(ty.clone());
-                            }
+                            observations
+                                .entry((callee_name.clone(), i))
+                                .or_default()
+                                .push(ty.clone());
                         }
                     }
                     Op::MethodCall {
@@ -67,12 +68,10 @@ fn collect_call_site_types(module: &Module) -> Observations {
                         // callee's sig.params which includes self at [0].
                         for (i, &arg) in args.iter().enumerate() {
                             let ty = &func.value_types[arg];
-                            if *ty != Type::Dynamic {
-                                observations
-                                    .entry((method.clone(), i + 1))
-                                    .or_default()
-                                    .push(ty.clone());
-                            }
+                            observations
+                                .entry((method.clone(), i + 1))
+                                .or_default()
+                                .push(ty.clone());
                         }
                     }
                     _ => {}
@@ -84,9 +83,15 @@ fn collect_call_site_types(module: &Module) -> Observations {
     observations
 }
 
-/// Narrow a set of observed types to a single type, or `None` if they disagree.
+/// Narrow a set of observed types to a single type, or `None` if they disagree
+/// or if any caller passes `Dynamic` (meaning "could be anything at runtime").
 fn narrow(types: &[Type]) -> Option<Type> {
     if types.is_empty() {
+        return None;
+    }
+    // If any caller passes Dynamic, we can't narrow — the param genuinely
+    // receives unknown types at runtime.
+    if types.contains(&Type::Dynamic) {
         return None;
     }
     let first = &types[0];
@@ -454,11 +459,12 @@ mod tests {
         assert!(!r2.changed, "second run should report no changes");
     }
 
-    // ---- Dynamic arg contributes nothing ----
+    // ---- Dynamic arg prevents narrowing ----
 
-    /// A caller passing Dynamic doesn't prevent narrowing from other callers.
+    /// A caller passing Dynamic prevents narrowing — Dynamic means "could be
+    /// anything at runtime", so we can't safely narrow to a specific type.
     #[test]
-    fn dynamic_arg_ignored() {
+    fn dynamic_arg_prevents_narrowing() {
         let mut mb = ModuleBuilder::new("test");
 
         let callee_sig = FunctionSig {
@@ -489,16 +495,16 @@ mod tests {
             ..Default::default()
         };
         let mut caller_b = FunctionBuilder::new("caller_b", sig_b, Visibility::Private);
-        let p = caller_b.param(0); // Dynamic — skipped by collection
+        let p = caller_b.param(0); // Dynamic — prevents narrowing
         caller_b.call("target", &[p], Type::Void);
         caller_b.ret(None);
         mb.add_function(caller_b.build());
 
         let result = run(mb);
-        assert!(result.changed);
+        assert!(!result.changed);
         let target = &result.module.functions[FuncId::new(0)];
-        // Only String was observed (Dynamic was filtered out), so narrows to String.
-        assert_eq!(target.sig.params[0], Type::String);
+        // Dynamic arg prevents narrowing — stays Dynamic.
+        assert_eq!(target.sig.params[0], Type::Dynamic);
     }
 
     // ---- Multiple params ----
