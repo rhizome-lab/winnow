@@ -2565,14 +2565,10 @@ fn emit_function(
     crate::ast_passes::strip_redundant_casts(&mut js_func);
     crate::ast_passes::coalesce_text_calls(&mut js_func.body);
     crate::ast_passes::coalesce_array_strings(&mut js_func.body);
-    // Rewrite calls to other free functions: prepend `_rt` as first argument.
+    // Rewrite calls to free functions: prepend `_rt` as first argument.
+    // Includes recursive self-calls — do NOT remove self from the set.
     if !free_func_names.is_empty() {
-        let self_name = func.name.clone();
-        let mut other_fns: HashSet<String> = free_func_names.clone();
-        other_fns.remove(&self_name);
-        if !other_fns.is_empty() {
-            prepend_rt_arg_to_free_calls(&mut js_func.body, &other_fns, false);
-        }
+        prepend_rt_arg_to_free_calls(&mut js_func.body, free_func_names, false);
     }
     // Build preamble and prepend `_rt` parameter for stateful free functions.
     let preamble = if !stateful_names.is_empty() {

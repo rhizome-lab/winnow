@@ -82,12 +82,18 @@ fn recover_defaults(func: &mut Function) -> bool {
     true
 }
 
-/// For variadic functions (has_rest_param), set type-appropriate defaults on all
-/// fixed argument params that don't already have one.  This runs after type
-/// inference, so `sig.params[i]` reflects the narrowed type — the default
-/// matches it: `0.0` for Float, `""` for String, `false` for Bool, etc.
+/// Set type-appropriate defaults on all argument params that don't already have one.
+///
+/// Applies to all functions — variadic and non-variadic alike. In GML, any argument
+/// can be omitted from a call; missing args are `undefined` (GMS2.3+) or 0 (GMS1).
+/// This ensures every argument param is optional in the emitted TypeScript.
+///
+/// Runs after `recover_defaults`, so explicitly-defaulted params (with constant
+/// defaults recovered from `arg === undefined` checks) keep their specific values;
+/// only the remaining params get the type-appropriate zero sentinel.
 fn set_variadic_defaults(func: &mut Function) -> bool {
-    if !func.sig.has_rest_param {
+    // Skip functions that have no params beyond self.
+    if func.sig.params.len() < 2 {
         return false;
     }
 
@@ -97,10 +103,14 @@ fn set_variadic_defaults(func: &mut Function) -> bool {
     }
 
     let mut changed = false;
-    // Skip self/other (they're never optional), skip the rest param at the end.
-    // Fixed argument params are between the instance params and the rest param.
-    let rest_idx = func.sig.params.len() - 1; // last param is ...args
-    for i in 0..rest_idx {
+    // Skip self/other (they're never optional). For variadic functions, also skip
+    // the rest param at the end (it's always optional in TypeScript by its nature).
+    let end_idx = if func.sig.has_rest_param {
+        func.sig.params.len() - 1 // last param is ...args, skip it
+    } else {
+        func.sig.params.len()
+    };
+    for i in 0..end_idx {
         if func.sig.defaults[i].is_some() {
             continue;
         }
@@ -336,6 +346,7 @@ mod tests {
         let mut fb = FunctionBuilder::new("test_func", sig, Visibility::Public);
 
         let self_param = fb.param(0);
+        fb.name_value(self_param, "self".to_string());
 
         // For each argument with a default, build the check chain.
         // Start from entry block.
@@ -412,8 +423,9 @@ mod tests {
     }
 
     #[test]
-    fn test_no_defaults_no_change() {
-        // Function with no default-check pattern.
+    fn test_no_pattern_defaults_filled() {
+        // Function with no explicit `=== undefined` pattern.
+        // set_variadic_defaults still fills arg params with zero defaults.
         let sig = FunctionSig {
             params: vec![Type::Dynamic, Type::Dynamic],
             defaults: vec![None, None],
@@ -421,6 +433,8 @@ mod tests {
             ..Default::default()
         };
         let mut fb = FunctionBuilder::new("plain_func", sig, Visibility::Public);
+        let self_param = fb.param(0);
+        fb.name_value(self_param, "self".to_string());
         fb.ret(None);
         let func = fb.build();
         let mut mb = ModuleBuilder::new("test");
@@ -429,6 +443,10 @@ mod tests {
 
         let pass = GmlDefaultArgRecovery;
         let result = pass.apply(module).unwrap();
-        assert!(!result.changed);
+        // Even without an explicit pattern, set_variadic_defaults fills arg1 with 0.0.
+        assert!(result.changed);
+        let func = result.module.functions.values().next().unwrap();
+        assert_eq!(func.sig.defaults[0], None); // self — never gets a default
+        assert_eq!(func.sig.defaults[1], Some(Constant::Float(0.0))); // arg0 = 0.0
     }
 }
