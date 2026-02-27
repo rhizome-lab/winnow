@@ -74,6 +74,9 @@ enum Command {
         /// Pipeline preset: "literal" (1:1 translation) or "optimized" (default).
         #[arg(long, default_value = "optimized")]
         preset: String,
+        /// Enable fixpoint iteration: repeat all passes until stable.
+        #[arg(long)]
+        fixpoint: bool,
         /// Dump post-transform IR to stderr before structurization.
         #[arg(long)]
         dump_ir: bool,
@@ -428,7 +431,7 @@ fn cmd_extract(manifest_path: &Path, skip_passes: &[String]) -> Result<()> {
 }
 
 /// Run emit and return the list of output directories produced.
-fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &DebugConfig) -> Result<Vec<PathBuf>> {
+fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, fixpoint: bool, debug: &DebugConfig) -> Result<Vec<PathBuf>> {
     let manifest = load_manifest(manifest_path)?;
     let Some(frontend) = find_frontend(&manifest.engine) else {
         bail!("no frontend available for engine {:?}", manifest.engine);
@@ -454,8 +457,11 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, debug: &
         .unwrap_or_default();
 
     let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
-    let (pass_config, lowering_config) = Preset::resolve(preset, &skip_refs)
+    let (mut pass_config, lowering_config) = Preset::resolve(preset, &skip_refs)
         .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset:?} (valid: \"literal\", \"optimized\")"))?;
+    if fixpoint {
+        pass_config.fixpoint = true;
+    }
     let mut pipeline = default_pipeline(&pass_config);
     for extra in output.extra_passes {
         pipeline.add(extra);
@@ -541,7 +547,7 @@ fn cmd_emit_all(skip_passes: &[String], preset: &str, debug: &DebugConfig) -> Re
         println!("  manifest: {}", entry.manifest);
 
         let manifest_path = PathBuf::from(&entry.manifest);
-        match cmd_emit(&manifest_path, skip_passes, preset, debug) {
+        match cmd_emit(&manifest_path, skip_passes, preset, false, debug) {
             Ok(_) => {
                 try_update_last_emitted(&manifest_path);
             }
@@ -825,7 +831,7 @@ fn cmd_check(
         collect_output_dirs(manifest_path)?
     } else {
         let debug = DebugConfig::default();
-        let output_dirs = cmd_emit(manifest_path, skip_passes, preset, &debug)?;
+        let output_dirs = cmd_emit(manifest_path, skip_passes, preset, false, &debug)?;
         try_update_last_emitted(manifest_path);
         // Pair output dirs with backends from the manifest.
         let manifest = load_manifest(manifest_path)?;
@@ -1069,7 +1075,7 @@ fn main() -> Result<()> {
             let path = resolve_target(target.as_deref(), manifest.as_deref())?;
             cmd_extract(&path, skip_passes)
         }
-        Command::Emit { target, manifest, all, parallel: _, skip_passes, preset, dump_ir, dump_ast, dump_function } => {
+        Command::Emit { target, manifest, all, parallel: _, skip_passes, preset, fixpoint, dump_ir, dump_ast, dump_function } => {
             let debug = DebugConfig {
                 dump_ir: *dump_ir,
                 dump_ast: *dump_ast,
@@ -1079,7 +1085,7 @@ fn main() -> Result<()> {
                 cmd_emit_all(skip_passes, preset, &debug)
             } else {
                 let path = resolve_target(target.as_deref(), manifest.as_deref())?;
-                let result = cmd_emit(&path, skip_passes, preset, &debug);
+                let result = cmd_emit(&path, skip_passes, preset, *fixpoint, &debug);
                 if result.is_ok() {
                     try_update_last_emitted(&path);
                 }

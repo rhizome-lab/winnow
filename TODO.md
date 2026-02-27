@@ -352,6 +352,21 @@ generic unknown-call spam.
   downstream work in ConstraintSolve (union unification) and emitter (union type annotations).
   Deferred indefinitely — the single-type narrowing covers the majority of cases where all
   callers agree, and disagreement genuinely suggests `any` is appropriate.
+- [ ] **GML fixpoint + CallSiteTypeFlow: instance ID narrowing causes TS2339 spike** —
+  With `--fixpoint` enabled on Dead Estate, TS2339 "Property does not exist" errors jump from
+  44 (baseline) to 217. Root cause: GML instance IDs are `Float(64)` at the call site (returned
+  by `instance_create`, `instance_find`, etc.), so fixpoint propagates `Float(64)` → `number`
+  into callee `self` params via ConstraintSolve. The callee then accesses `self.field` directly,
+  which TypeScript rejects on `number`. `run_once` on CallSiteTypeFlow helps slightly (217 → 217,
+  same pattern) but the bulk comes from ConstraintSolve re-propagating the first round's
+  narrowing in subsequent iterations. Two potential fixes:
+  1. CallSiteTypeFlow: skip narrowing `Float(64)` → `Float(64)` for GML (instance IDs are
+     semantically opaque handles, not plain numbers). But this would block all float narrowing.
+  2. Deeper fix: GML instance IDs need a distinct IR type (e.g. `InstanceId`) separate from
+     `Float(64)`, so they don't conflate "this is a float" with "this is an object handle".
+  The remaining 16 new TS2339s are `string.push` errors — array params narrowed to `string`
+  from a control-flow path that initialises as a string. Likely game author bugs surfaced by
+  narrowing.
 - [ ] **Frontend-controlled pass ordering** — `extra_passes` are currently appended after the
   entire default pipeline. Frontends should be able to specify where their passes run (e.g.
   "after constraint-solve but before mem2reg"). Current approach works for IntToBoolPromotion
