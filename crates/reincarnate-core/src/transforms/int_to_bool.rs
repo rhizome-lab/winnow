@@ -307,10 +307,35 @@ fn promote_demands(
     changed
 }
 
+/// Returns true if the function body contains a `withInstances` system call.
+///
+/// Functions that call `withInstances` may have their real return value
+/// propagated through the with-callback via a side channel (live_result).
+/// The visible `Op::Return` paths in the outer function are only fallback paths
+/// (e.g. `return false` when no instance is found), which would otherwise
+/// cause `infer_bool_return` to falsely promote the return type to Bool.
+fn function_has_with_instances(func: &Function) -> bool {
+    for inst_id in func.insts.keys() {
+        if let Op::SystemCall { system, method, .. } = &func.insts[inst_id].op {
+            if system == "GameMaker.Instance" && method == "withInstances" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Phase 4: Infer Bool return type for functions that only return 0/1.
 /// Returns true if the return type was changed.
 fn infer_bool_return(func: &mut Function) -> bool {
     if func.sig.return_ty != Type::Dynamic {
+        return false;
+    }
+
+    // Skip functions that contain withInstances calls — the real return value
+    // may come from inside a with-body callback and is not visible in the
+    // outer function's Op::Return instructions.
+    if function_has_with_instances(func) {
         return false;
     }
 
@@ -855,6 +880,36 @@ mod tests {
         let module = mb.build();
         let result = IntToBoolPromotion.apply(module).unwrap();
         assert!(!result.changed);
+    }
+
+    #[test]
+    fn does_not_infer_bool_return_with_with_instances() {
+        // A function with a withInstances call should NOT have its return type
+        // inferred as Bool, even if the only visible return is `return false`.
+        // The real return value is hidden inside the callback via live_result.
+        let sig = FunctionSig {
+            params: vec![Type::Dynamic],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("getNearestScreenType", sig, Visibility::Public);
+        let self_param = fb.param(0);
+        // Simulate: withInstances(obj, callback)
+        fb.system_call("GameMaker.Instance", "withInstances", &[self_param], Type::Void);
+        // Fallback: return false (0)
+        let zero = fb.const_int(0);
+        fb.ret(Some(zero));
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(fb.build());
+        let module = mb.build();
+
+        let result = IntToBoolPromotion.apply(module).unwrap();
+        // Return type must NOT be changed to Bool
+        assert_eq!(
+            result.module.functions[FuncId::new(0)].sig.return_ty,
+            Type::Dynamic,
+        );
     }
 
     #[test]
