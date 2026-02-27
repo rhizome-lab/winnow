@@ -1114,6 +1114,12 @@ fn run_translation_loop(
     // pushac saves the index so popaf can pop ARRAY and VALUE from the
     // stack independently, then write ARRAY[INDEX] = VALUE.
     let mut pushac_array: Option<ValueId> = None;
+    // Set to true by Dup(swap) (DupExtra != 0 with dup_size > 0) which appears
+    // immediately before popaf in compound array element writes (e.g. `arr[i] += x`).
+    // In the compound pattern the stack order at popaf time is [..., ARRAY, INDEX, VALUE]
+    // (ARRAY below INDEX), which is the REVERSE of the simple-write order
+    // [..., INDEX, ARRAY, VALUE].  This flag tells popaf to pop INDEX before ARRAY.
+    let mut compound_popaf_pending = false;
     // When Some(n), skip instructions with index < n (with-body instructions
     // that have been extracted into a closure).
     let mut skip_until: Option<usize> = None;
@@ -1143,6 +1149,7 @@ fn run_translation_loop(
                 stack.clear();
                 compound_2d_pending = false;
                 pushac_array = None;
+                compound_popaf_pending = false;
                 if let Some(params) = block_params.get(&inst.offset) {
                     for &p in params {
                         // Block params are Variable-sized (16 bytes = 4 units).
@@ -1274,6 +1281,7 @@ fn run_translation_loop(
             &mut gml_sizes,
             &mut compound_2d_pending,
             &mut pushac_array,
+            &mut compound_popaf_pending,
             global_arg_count,
             &mut obj_ref_values,
         )?;
@@ -1584,6 +1592,7 @@ fn translate_instruction(
     gml_sizes: &mut HashMap<ValueId, u8>,
     compound_2d_pending: &mut bool,
     pushac_array: &mut Option<ValueId>,
+    compound_popaf_pending: &mut bool,
     global_arg_count: u16,
     obj_ref_values: &mut HashMap<ValueId, String>,
 ) -> Result<(), String> {
@@ -1831,12 +1840,15 @@ fn translate_instruction(
                     //      <arithmetic> → pushes new_value on top
                     //      Dup(swap)    → ← here; stack is [..., arr, i, new_value]
                     //      popaf        → needs (value=top, index=next, array=below)
-                    //    After the arithmetic, our ValueId stack is already in the right
-                    //    order for popaf.  The GML VM needs the swap because Variable is
-                    //    16 bytes while the computed result may be 4 bytes, so the VM's
-                    //    fixed-size popaf would read the wrong bytes without reordering.
-                    //    Our stack holds one ValueId per logical value regardless of byte
-                    //    size, so the byte-alignment problem doesn't exist here.  No-op.
+                    //    At Dup(swap) time the logical stack order is [..., ARRAY, INDEX, VALUE].
+                    //    The GML VM reorders bytes because Variable is 16 bytes while the
+                    //    computed result may be 4 bytes, so fixed-size popaf needs the bytes
+                    //    shuffled.  Our logical ValueId stack has no byte-size issue, BUT the
+                    //    compound stack order (ARRAY below INDEX) is the REVERSE of the simple
+                    //    write order (INDEX below ARRAY).  Set a flag so popaf knows to swap.
+                    if dup_size > 0 {
+                        *compound_popaf_pending = true;
+                    }
                 } else {
                     // Normal dup: duplicate (dup_size + 1) * type_unit units from stack top.
                     let type_unit = gml_slot_units(inst.type1) as usize;
@@ -2025,19 +2037,37 @@ fn translate_instruction(
                     0xFFFD => {
                         // popaf — array element set.
                         //
-                        // Stack layout: [..., INDEX, ARRAY, VALUE] with VALUE
-                        // on top.  When pushac precedes this, it already
-                        // captured the INDEX, leaving [ARRAY, VALUE] on the
-                        // stack.  Without pushac, all three are on the stack.
+                        // Three stack layouts depending on context:
                         //
-                        // Either way the semantic is: ARRAY[INDEX] = VALUE.
+                        // Simple write [..., INDEX, ARRAY, VALUE] (VALUE on top):
+                        //   pop VALUE, pop ARRAY (2nd), pop INDEX (3rd)
+                        //   → ARRAY[INDEX] = VALUE
+                        //
+                        // Compound write [..., ARRAY, INDEX, VALUE] (after
+                        //   Dup(normal)+pushaf+arithmetic+Dup(swap)):
+                        //   pop VALUE, pop INDEX (2nd), pop ARRAY (3rd)
+                        //   → ARRAY[INDEX] = VALUE
+                        //   compound_popaf_pending flag (set by Dup(swap)) signals this.
+                        //
+                        // pushac case [..., ARRAY, VALUE] (VALUE on top;
+                        //   INDEX saved by pushac):
+                        //   pop VALUE, pop ARRAY (2nd), use saved INDEX
+                        //   → ARRAY[INDEX] = VALUE
                         let value = pop(stack, inst)?;
-                        let array = pop(stack, inst)?;
-                        let index = if let Some(idx) = pushac_array.take() {
-                            idx
+                        let (array, index) = if let Some(idx) = pushac_array.take() {
+                            let arr = pop(stack, inst)?;
+                            (arr, idx)
+                        } else if *compound_popaf_pending {
+                            *compound_popaf_pending = false;
+                            let idx = pop(stack, inst)?;
+                            let arr = pop(stack, inst)
+                                .unwrap_or_else(|_| fb.const_int(-6));
+                            (arr, idx)
                         } else {
-                            pop(stack, inst)
-                                .unwrap_or_else(|_| fb.const_int(-6))
+                            let arr = pop(stack, inst)?;
+                            let idx = pop(stack, inst)
+                                .unwrap_or_else(|_| fb.const_int(-6));
+                            (arr, idx)
                         };
                         fb.set_index(array, index, value);
                     }
