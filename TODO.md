@@ -41,7 +41,7 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 
 - [x] **`--dump-ir-after <pass>` flag** — Implemented 2026-02-28. Runs pipeline up through named pass, dumps IR (honoring `--dump-function`), then exits. Special value `frontend` dumps raw IR before any transforms. Valid pass names listed in `VALID_PASS_NAMES`.
 
-- [ ] **Bytecode disassembler subcommand** — No way to inspect raw GML bytecode for a specific function/object event. Debugging stack-order bugs (pushaf/popaf, DupSwap, pushref asset refs) required mentally simulating the stack from code reading, taking many turns per bug. `reincarnate disasm --manifest <path> --function <name>` should disassemble a named GML function's bytecode to stdout in human-readable form (analogous to UndertaleModTool's disassembler).
+- [x] **Bytecode disassembler subcommand** — Implemented 2026-02-28. `reincarnate disasm [--function <filter>]` disassembles GML bytecode directly from DataWin (no IR pipeline). Resolves variable names, strings, function names, instance types, and break signal names. Same `--function` filter matching as `--dump-function`. Without `--function`, lists all CODE entry names.
 
 - [ ] **TypeScript error archaeology tool** — No way to go from a specific TS error (file + line) back to the IR value that caused it. An `explain-error <file> <line>` subcommand could resolve the error back to the IR value ID and the GML bytecode offset that produced it.
 

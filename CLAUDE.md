@@ -248,6 +248,7 @@ Debug flags (on `emit` only):
 
 Additional subcommands:
 - `list-functions [--filter <pattern>]` — list all IR function names (exact names used internally, same matching as `--dump-function`; run this first when `--dump-function` produces no output)
+- `disasm [--function <filter>]` — disassemble GML bytecode directly from the DataWin (no IR pipeline); resolves variable names, strings, function names, instance types, and break signal names; without `--function`, lists all CODE entry names
 - `stress [--runs N] [--skip-pass P] [--preset P]` — run the transform pipeline N times (default 5), detect fixpoint convergence or oscillation; use when adding a new pass to verify it doesn't conflict with existing passes
 
 Test projects live under `~/reincarnate/<engine>/<game>/`:
