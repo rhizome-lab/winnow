@@ -248,6 +248,7 @@ Debug flags (on `emit` only):
 
 Additional subcommands:
 - `list-functions [--filter <pattern>]` — list all IR function names (exact names used internally, same matching as `--dump-function`; run this first when `--dump-function` produces no output)
+- `stress [--runs N] [--skip-pass P] [--preset P]` — run the transform pipeline N times (default 5), detect fixpoint convergence or oscillation; use when adding a new pass to verify it doesn't conflict with existing passes
 
 Test projects live under `~/reincarnate/<engine>/<game>/`:
 - Flash: `~/reincarnate/flash/cc/`
@@ -265,16 +266,12 @@ cargo run -p reincarnate-cli -- check --manifest ... --save-baseline baseline.js
 ```
 Output: per-code counts (`TS2345: 222`, `TS2322: 180`, ...), per-file top 20, and total. Use `--json` for machine-readable output (includes full `diagnostics` array with file/line/message).
 
-**If you need to read error messages** (not just counts), use `--json` and pipe through jq, or fall back to raw tsgo from the `out/` subdirectory. Always run from `out/` — the `tsconfig.json` lives there; running from the game root silently passes:
-```bash
-# reincarnate check --json for full diagnostics:
-cargo run -p reincarnate-cli -- check --manifest ... --json | jq '.[] | .diagnostics[] | select(.code == "TS2345")'
-
-# Raw tsgo from out/:
-(cd ~/reincarnate/gamemaker/deadestate/out && bunx @typescript/native-preview --noEmit 2>&1 | head -50)
-```
-
-Note: `reincarnate check` currently only prints counts by code and file — no example messages. The intended default is a curated summary (counts + ~3 representative examples per code, deduplicated), tracked in TODO.md.
+Default output: per-code counts + up to 3 deduplicated example messages per code. Control with:
+- `--examples N` — number of examples per code (0 = counts only, -1 = all)
+- `--filter-code TS2345` — show only that error code (all matches, not just examples)
+- `--filter-file foo.ts` — show only diagnostics in files matching the substring
+- `--filter-message <text>` — show only diagnostics whose message contains the text
+- Filters compose (AND); filtered output shows "N of M total" so you never lose the true count
 
 When reporting TS error counts (e.g. in TODO.md), always include the total count AND the per-code breakdown.
 

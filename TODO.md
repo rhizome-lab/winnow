@@ -47,9 +47,9 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 
 - [x] **`reincarnate check` workflow adoption** — Documented in CLAUDE.md 2026-02-28.
 
-- [x] **`reincarnate check` curated diagnostic output** — Implemented 2026-02-28. Default output now shows counts by code + up to 3 deduplicated example messages per code. `--examples N` controls count (0 = counts only, -1 = all). Total counts always reflect truth. `--json` still emits full diagnostics array. Remaining gap: `--filter-code` / `--filter-file` / `--filter-message` flags not yet implemented.
+- [x] **`reincarnate check` curated diagnostic output** — Implemented 2026-02-28. Default output shows counts by code + up to 3 deduplicated examples per code. `--examples N`, `--filter-code`, `--filter-file`, `--filter-message` all implemented. Filters compose (AND), show matching/total counts, affect `--json` output. Pass/fail and baseline comparison always use unfiltered totals.
 
-- [ ] **Pipeline fixpoint stress tester** — No automated way to detect oscillation or divergence when adding a new transform pass. `reincarnate stress --manifest <path> --passes <N>` would run the full transform pipeline N times and report whether the module reaches fixpoint or oscillates, catching circular reinforcement bugs before they ship.
+- [x] **Pipeline fixpoint stress tester** — Implemented 2026-02-28. `reincarnate stress [--runs N] [--skip-pass P] [--preset P]` runs the pipeline N times (default 5), reports fixpoint convergence or oscillation (detects matches against any prior run, not just adjacent), and per-run changed function count.
 
 ## TODO.md Staleness Audit (HIGH PRIORITY)
 
