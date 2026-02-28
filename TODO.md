@@ -566,9 +566,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 596 as of 2026-02-28 (post CallSiteTypeWiden)
+### 7. Dead Estate remaining TS errors — 559 as of 2026-02-28 (post BoolAnd/BoolOr + BrIf cascade + fold_cast Bool→Bool)
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345).
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -577,14 +577,14 @@ sig.params, because ConstraintSolve only updates entry.params[i].ty and value_ty
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 222 | Argument type mismatch — remaining mismatches (ClassRef vs number etc.) |
-| TS2322 | 200 | Type not assignable — `boolean→number` (GML no-bool-type) + misc |
+| TS2345 | 211 | Argument type mismatch — remaining mismatches (ClassRef vs number etc.) |
+| TS2322 | 199 | Type not assignable — `boolean→number` (GML no-bool-type) + misc |
 | TS2339 | 43 | Property doesn't exist |
 | TS2365 | 31 | Operator not applicable — bitwise/arithmetic on wrong type |
-| TS2362 | 29 | Left side of `**`/arithmetic must be number |
-| TS7027 | 24 | Unreachable code — **structurizer/emitter bug** (see Bug 7c below) |
+| TS2362 | 28 | Left side of `**`/arithmetic must be number |
 | TS2304 | 17 | Cannot find name — **linearizer/structurizer bugs** (see Bug 7d below) |
 | TS2367 | 7 | Comparison always false — type mismatch in `===` (game author errors) |
+| TS7027 | 1 | Unreachable code — game-author bug (DiavolaEye::destroy infinite loop via GML instance ID as repeat count) |
 | TS2554 | 5 | Wrong argument count |
 | TS2363 | 5 | Right side of `**` must be number |
 | TS2872 | 3 | Comparison appears unintentional |
