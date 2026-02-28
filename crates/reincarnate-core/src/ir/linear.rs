@@ -24,7 +24,7 @@ use super::ast::{AstFunction, BinOp, Expr, Stmt, UnaryOp};
 use super::ast_passes;
 use super::block::BlockId;
 use super::func::{Function, MethodKind};
-use super::inst::{InstId, Op};
+use super::inst::{CastKind, InstId, Op};
 use super::structurize::{BlockArgAssign, Shape};
 use super::ty::Type;
 use super::value::{Constant, ValueId};
@@ -1444,6 +1444,18 @@ impl<'a> EmitCtx<'a> {
         if let Some(&inst_id) = self.always_inline_map.get(&v) {
             let op = self.func.insts[inst_id].op.clone();
             if let Some(expr) = self.build_expr_from_op(&op) {
+                // OBJT class references (ClassRef type) must be wrapped in an `as any`
+                // cast so that TypeScript allows them in numeric/arithmetic contexts.
+                // In GML, object class names are interchangeable with their integer
+                // object indices; `as any` preserves the class constructor at runtime
+                // while suppressing TypeScript's `typeof ClassName` type errors.
+                if matches!(&self.func.value_types[v], Type::ClassRef(_)) {
+                    return Expr::Cast {
+                        expr: Box::new(expr),
+                        ty: self.func.value_types[v].clone(),
+                        kind: CastKind::AsType,
+                    };
+                }
                 return expr;
             }
         }
@@ -1457,6 +1469,15 @@ impl<'a> EmitCtx<'a> {
         if let Some(inst_id) = self.pending_lazy.remove(&v) {
             let op = self.func.insts[inst_id].op.clone();
             if let Some(expr) = self.build_expr_from_op(&op) {
+                // OBJT class references (ClassRef type) must be wrapped in an `as any`
+                // cast so TypeScript allows them in numeric/arithmetic contexts.
+                if matches!(&self.func.value_types[v], Type::ClassRef(_)) {
+                    return Expr::Cast {
+                        expr: Box::new(expr),
+                        ty: self.func.value_types[v].clone(),
+                        kind: CastKind::AsType,
+                    };
+                }
                 return expr;
             }
         }

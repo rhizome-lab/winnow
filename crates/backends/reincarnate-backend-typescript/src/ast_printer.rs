@@ -760,6 +760,13 @@ fn print_expr(expr: &JsExpr) -> String {
                 (CastKind::Coerce, _) => print_expr(inner),
                 // AsType + Dynamic/other → passthrough (no-op).
                 (CastKind::AsType, Type::Dynamic) => print_expr(inner),
+                // AsType + ClassRef → widen to `any`. GML object class names (OBJT)
+                // are integer indices at runtime; `as any` allows usage in numeric /
+                // arithmetic contexts while still passing the class constructor at
+                // runtime (e.g. for `instanceof` and `instance_create_*`).
+                (CastKind::AsType, Type::ClassRef(_)) => {
+                    format!("{} as any", print_expr_operand(inner))
+                }
                 // AsType + Primitive → TS type assertion.
                 (CastKind::AsType, _) => {
                     format!("{} as {}", print_expr_operand(inner), ts_type(ty))
