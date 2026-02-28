@@ -566,9 +566,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 559 as of 2026-02-28 (post BoolAnd/BoolOr + BrIf cascade + fold_cast Bool→Bool)
+### 7. Dead Estate remaining TS errors — 282 as of 2026-02-28
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch).
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -577,23 +577,20 @@ sig.params, because ConstraintSolve only updates entry.params[i].ty and value_ty
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 211 | Argument type mismatch — remaining mismatches (ClassRef vs number etc.) |
-| TS2322 | 199 | Type not assignable — `boolean→number` (GML no-bool-type) + misc |
-| TS2339 | 43 | Property doesn't exist |
-| TS2365 | 31 | Operator not applicable — bitwise/arithmetic on wrong type |
-| TS2362 | 28 | Left side of `**`/arithmetic must be number |
-| TS2304 | 17 | Cannot find name — **linearizer/structurizer bugs** (see Bug 7d below) |
-| TS2367 | 7 | Comparison always false — type mismatch in `===` (game author errors) |
-| TS7027 | 1 | Unreachable code — game-author bug (DiavolaEye::destroy infinite loop via GML instance ID as repeat count) |
-| TS2554 | 5 | Wrong argument count |
+| TS2345 | 106 | Argument type mismatch — string/bool/null/struct passed as number, game author duck-typing |
+| TS2322 | 93 | Type not assignable — `boolean↔number` (GML no-bool-type), null/struct assignments |
+| TS2339 | 17 | Property doesn't exist — `length` on number (array inferred as number), withInstances `_self: number` residual |
+| TS2304 | 17 | Cannot find name — **linearizer bug** (count>1 single-store alloc uses Assign path, no `let` decl) |
+| TS2362 | 16 | Left side of arithmetic must be number — bool/struct in arithmetic, game author errors |
+| TS2365 | 13 | Operator not applicable — bitwise/arithmetic on wrong type |
+| TS2367 | 5 | Comparison always false — void vs number (game author errors) |
+| TS2554 | 5 | Wrong argument count — GML scripts called with more args than declared |
 | TS2363 | 5 | Right side of `**` must be number |
-| TS2872 | 3 | Comparison appears unintentional |
-| TS2308 | 3 | Duplicate re-export (`___struct___127/128`, `TextEffect`) in barrel `index.ts` |
+| TS2872 | 2 | Comparison appears unintentional |
 | TS2358 | 2 | Left operand of `in` must be string |
-| TS2300 | 2 | Duplicate identifier |
-| TS2552 | 1 | Cannot find name (with-body self-reference bug) |
-| TS2440 | 1 | Import declaration conflicts |
 | TS18047 | 1 | Object is possibly null |
+| TS2552 | 1 | Cannot find name (with-body self-reference bug) |
+| TS7027 | 1 | Unreachable code — game-author bug (DiavolaEye::destroy infinite loop) |
 
 #### TS2345 Detailed Breakdown (2043 errors, by type pair)
 
@@ -872,7 +869,7 @@ Reference: UndertaleModTool `AdaptAssetType` / `AdaptAssetTypeId` in `UndertaleC
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 596 TS errors + 1 translation error (2026-02-28) |
+| Dead Estate | `data.win` 192MB | ⚠️ 282 TS errors + 1 translation error (2026-02-28) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
