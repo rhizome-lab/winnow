@@ -97,7 +97,7 @@ fn build_summary(output_dir: &str, diagnostics: &[Diagnostic]) -> CheckSummary {
     let mut total_errors = 0usize;
     let mut total_warnings = 0usize;
     let mut by_code: HashMap<String, usize> = HashMap::new();
-    let mut by_file: HashMap<String, usize> = HashMap::new();
+    let mut by_message: HashMap<(String, String), usize> = HashMap::new();
 
     for d in diagnostics {
         match d.severity {
@@ -105,21 +105,26 @@ fn build_summary(output_dir: &str, diagnostics: &[Diagnostic]) -> CheckSummary {
             Severity::Warning => total_warnings += 1,
         }
         *by_code.entry(d.code.clone()).or_default() += 1;
-        *by_file.entry(d.file.clone()).or_default() += 1;
+        *by_message
+            .entry((d.message.clone(), d.code.clone()))
+            .or_default() += 1;
     }
 
     let mut by_code: Vec<(String, usize)> = by_code.into_iter().collect();
     by_code.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    let mut by_file: Vec<(String, usize)> = by_file.into_iter().collect();
-    by_file.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut by_message: Vec<(String, String, usize)> = by_message
+        .into_iter()
+        .map(|((msg, code), count)| (msg, code, count))
+        .collect();
+    by_message.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)).then_with(|| a.0.cmp(&b.0)));
 
     CheckSummary {
         output_dir: output_dir.to_string(),
         total_errors,
         total_warnings,
         by_code,
-        by_file,
+        by_message,
     }
 }
 
@@ -187,7 +192,12 @@ mod tests {
         assert_eq!(summary.total_warnings, 0);
         assert_eq!(summary.by_code[0], ("TS2304".into(), 2));
         assert_eq!(summary.by_code[1], ("TS2339".into(), 1));
-        assert_eq!(summary.by_file[0], ("a.ts".into(), 2));
-        assert_eq!(summary.by_file[1], ("b.ts".into(), 1));
+        // Each message is unique in this test, so by_message has 3 entries sorted by count.
+        assert_eq!(summary.by_message.len(), 3);
+        // Messages "x" and "y" each appear once under TS2304; "z" appears once under TS2339.
+        // All have count 1, so order is by code then message: TS2304/"x", TS2304/"y", TS2339/"z".
+        assert_eq!(summary.by_message[0], ("x".into(), "TS2304".into(), 1));
+        assert_eq!(summary.by_message[1], ("y".into(), "TS2304".into(), 1));
+        assert_eq!(summary.by_message[2], ("z".into(), "TS2339".into(), 1));
     }
 }

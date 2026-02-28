@@ -908,14 +908,14 @@ fn run_checks(
                 }
             }
 
-            if !s.by_file.is_empty() {
-                let max_files = 20;
-                println!("\nBy file (top {max_files}):");
-                for (file, count) in s.by_file.iter().take(max_files) {
-                    println!("  {count:>5}  {file}");
+            if !s.by_message.is_empty() {
+                let max_msgs = 20;
+                println!("\nBy message (top {max_msgs}):");
+                for (msg, code, count) in s.by_message.iter().take(max_msgs) {
+                    println!("  {count:>5}  {msg} [{code}]");
                 }
-                if s.by_file.len() > max_files {
-                    println!("  ... and {} more file(s)", s.by_file.len() - max_files);
+                if s.by_message.len() > max_msgs {
+                    println!("  ... and {} more unique message(s)", s.by_message.len() - max_msgs);
                 }
             }
         }
@@ -955,7 +955,8 @@ struct BaselineDiff {
     new_total: usize,
     total_delta: isize,
     by_code: Vec<(String, usize, usize, isize)>,
-    by_file: Vec<(String, usize, usize, isize)>,
+    /// Changed message patterns: (message, code, old_count, new_count, delta).
+    by_message: Vec<(String, String, usize, usize, isize)>,
 }
 
 fn compute_baseline_diff(old: &[CheckSummary], new: &[CheckSummary]) -> BaselineDiff {
@@ -990,40 +991,40 @@ fn compute_baseline_diff(old: &[CheckSummary], new: &[CheckSummary]) -> Baseline
     }
     by_code.sort_by(|a, b| b.3.unsigned_abs().cmp(&a.3.unsigned_abs()));
 
-    // Aggregate by_file across all summaries.
-    let mut old_files: HashMap<&str, usize> = HashMap::new();
-    let mut new_files: HashMap<&str, usize> = HashMap::new();
+    // Aggregate by_message across all summaries.
+    let mut old_msgs: HashMap<(&str, &str), usize> = HashMap::new();
+    let mut new_msgs: HashMap<(&str, &str), usize> = HashMap::new();
     for s in old {
-        for (file, count) in &s.by_file {
-            *old_files.entry(file.as_str()).or_default() += count;
+        for (msg, code, count) in &s.by_message {
+            *old_msgs.entry((msg.as_str(), code.as_str())).or_default() += count;
         }
     }
     for s in new {
-        for (file, count) in &s.by_file {
-            *new_files.entry(file.as_str()).or_default() += count;
+        for (msg, code, count) in &s.by_message {
+            *new_msgs.entry((msg.as_str(), code.as_str())).or_default() += count;
         }
     }
 
-    let mut all_files: Vec<&str> = old_files.keys().chain(new_files.keys()).copied().collect();
-    all_files.sort();
-    all_files.dedup();
+    let mut all_msgs: Vec<(&str, &str)> = old_msgs.keys().chain(new_msgs.keys()).copied().collect();
+    all_msgs.sort();
+    all_msgs.dedup();
 
-    let mut by_file: Vec<(String, usize, usize, isize)> = Vec::new();
-    for file in &all_files {
-        let o = old_files.get(file).copied().unwrap_or(0);
-        let n = new_files.get(file).copied().unwrap_or(0);
+    let mut by_message: Vec<(String, String, usize, usize, isize)> = Vec::new();
+    for (msg, code) in &all_msgs {
+        let o = old_msgs.get(&(*msg, *code)).copied().unwrap_or(0);
+        let n = new_msgs.get(&(*msg, *code)).copied().unwrap_or(0);
         if o != n {
-            by_file.push((file.to_string(), o, n, n as isize - o as isize));
+            by_message.push((msg.to_string(), code.to_string(), o, n, n as isize - o as isize));
         }
     }
-    by_file.sort_by(|a, b| b.3.unsigned_abs().cmp(&a.3.unsigned_abs()));
+    by_message.sort_by(|a, b| b.4.unsigned_abs().cmp(&a.4.unsigned_abs()));
 
     BaselineDiff {
         old_total,
         new_total,
         total_delta: new_total as isize - old_total as isize,
         by_code,
-        by_file,
+        by_message,
     }
 }
 
@@ -1045,15 +1046,15 @@ fn print_baseline_diff(diff: &BaselineDiff, baseline_path: &Path) {
         }
     }
 
-    if !diff.by_file.is_empty() {
-        let max_files = 30;
-        println!("\nBy file (changes only, top {max_files}):");
-        for (file, old, new, delta) in diff.by_file.iter().take(max_files) {
+    if !diff.by_message.is_empty() {
+        let max_msgs = 30;
+        println!("\nBy message (changes only, top {max_msgs}):");
+        for (msg, code, old, new, delta) in diff.by_message.iter().take(max_msgs) {
             let s = if *delta > 0 { "+" } else { "" };
-            println!("  {s}{delta}  {file} ({old} → {new})");
+            println!("  {s}{delta:>4}  {msg} [{code}] ({old} → {new})");
         }
-        if diff.by_file.len() > max_files {
-            println!("  ... and {} more file(s)", diff.by_file.len() - max_files);
+        if diff.by_message.len() > max_msgs {
+            println!("  ... and {} more unique message(s)", diff.by_message.len() - max_msgs);
         }
     }
 }

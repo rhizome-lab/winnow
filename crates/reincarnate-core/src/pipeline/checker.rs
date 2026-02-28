@@ -39,8 +39,9 @@ pub struct CheckSummary {
     pub total_warnings: usize,
     /// Error codes sorted by count descending.
     pub by_code: Vec<(String, usize)>,
-    /// Files sorted by error count descending.
-    pub by_file: Vec<(String, usize)>,
+    /// Unique messages sorted by count descending: (message, code, count).
+    #[serde(default)]
+    pub by_message: Vec<(String, String, usize)>,
 }
 
 /// Checker trait — validates emitted code using an external type checker.
