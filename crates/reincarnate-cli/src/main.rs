@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
@@ -160,6 +162,25 @@ enum Command {
         /// Output as JSON array (one object per project).
         #[arg(long)]
         json: bool,
+    },
+    /// Run the transform pipeline N times and report whether it reaches fixpoint or oscillates.
+    Stress {
+        /// Registry name, path to manifest file, or directory containing reincarnate.json.
+        /// Defaults to searching ancestor directories from the current directory.
+        #[arg(conflicts_with = "manifest")]
+        target: Option<String>,
+        /// Path to the project manifest (legacy flag; prefer positional target).
+        #[arg(long, conflicts_with = "target")]
+        manifest: Option<PathBuf>,
+        /// Number of pipeline runs to perform (default: 5).
+        #[arg(long, default_value = "5")]
+        runs: usize,
+        /// Transform passes to skip (e.g. "type-inference", "constant-folding").
+        #[arg(long = "skip-pass")]
+        skip_passes: Vec<String>,
+        /// Pipeline preset: "literal" (1:1 translation) or "optimized" (default).
+        #[arg(long, default_value = "optimized")]
+        preset: String,
     },
     /// List all IR function names in a project (useful for verifying --dump-function strings).
     ListFunctions {
@@ -1113,6 +1134,213 @@ fn cmd_list_functions(manifest_path: &Path, filter: Option<&str>) -> Result<()> 
 }
 
 // ---------------------------------------------------------------------------
+// Stress command
+// ---------------------------------------------------------------------------
+
+/// Hash a string using `DefaultHasher` and return the u64 hash value.
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+/// Count how many functions differ between two serialized modules.
+///
+/// Both maps are `function_name → JSON string`.  Returns the number of
+/// function names whose serialized form changed (including functions that
+/// appeared or disappeared).
+fn count_differing_functions(
+    prev: &HashMap<String, String>,
+    curr: &HashMap<String, String>,
+) -> usize {
+    let mut count = 0usize;
+    for (name, curr_json) in curr {
+        match prev.get(name) {
+            Some(prev_json) if prev_json == curr_json => {}
+            _ => count += 1,
+        }
+    }
+    // Functions present in prev but absent in curr also differ.
+    for name in prev.keys() {
+        if !curr.contains_key(name) {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Serialize each function in the module to its own JSON string, returning a
+/// map from function name to JSON.
+fn serialize_functions(module: &Module) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    for func in module.functions.values() {
+        let json = serde_json::to_string(func)?;
+        map.insert(func.name.clone(), json);
+    }
+    Ok(map)
+}
+
+fn cmd_stress(
+    manifest_path: &Path,
+    runs: usize,
+    skip_passes: &[String],
+    preset: &str,
+) -> Result<()> {
+    if runs == 0 {
+        bail!("--runs must be at least 1");
+    }
+
+    let manifest = load_manifest(manifest_path)?;
+    let Some(frontend) = find_frontend(&manifest.engine) else {
+        bail!("no frontend available for engine {:?}", manifest.engine);
+    };
+
+    let skip_refs: Vec<&str> = skip_passes.iter().map(|s| s.as_str()).collect();
+    let (pass_config, _lowering_config) = Preset::resolve(preset, &skip_refs)
+        .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset:?} (valid: \"literal\", \"optimized\")"))?;
+
+    // Extract the initial modules once.
+    let initial_input = FrontendInput {
+        source: manifest.source.clone(),
+        engine: manifest.engine.clone(),
+        options: manifest.frontend_options.clone(),
+    };
+    let initial_output = frontend.extract(initial_input).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let runtime_variant = initial_output.runtime_variant.as_deref();
+    let first_backend = manifest.targets.first().map(|t| &t.backend);
+    let early_runtime = first_backend.and_then(|b| resolve_runtime(&manifest.engine, b, runtime_variant));
+    let external_type_defs = early_runtime
+        .as_ref()
+        .map(|rt| rt.config.type_definitions.clone())
+        .unwrap_or_default();
+    let external_function_sigs = early_runtime
+        .as_ref()
+        .map(|rt| rt.config.function_signatures.clone())
+        .unwrap_or_default();
+
+    let debug = DebugConfig::none();
+
+    // Add external defs and collect module names before consuming initial_output.
+    let module_names: Vec<String> = initial_output.modules.iter().map(|m| m.name.clone()).collect();
+    let mut initial_modules: Vec<Module> = initial_output.modules;
+    // extra_passes from the initial extraction are consumed by run 0's pipeline.
+    // For runs 1+, we re-extract to obtain fresh Box<dyn Transform> instances
+    // (they are not Clone).  We discard the re-extracted modules.
+    let mut first_extra_passes: Option<Vec<Box<dyn reincarnate_core::pipeline::Transform>>> =
+        Some(initial_output.extra_passes);
+
+    for module in &mut initial_modules {
+        module.external_type_defs = external_type_defs.clone();
+        module.external_function_sigs = external_function_sigs.clone();
+    }
+
+    // Stress-test each module independently; collect overall result.
+    let mut any_not_converged = false;
+
+    for (mod_idx, module_name) in module_names.iter().enumerate() {
+        eprintln!("[stress] module: {module_name}");
+
+        let mut module = std::mem::replace(
+            &mut initial_modules[mod_idx],
+            Module::new(String::new()),
+        );
+
+        // History of (whole-module hash, per-function JSON map) for each run.
+        let mut run_hashes: Vec<u64> = Vec::with_capacity(runs);
+        let mut run_func_maps: Vec<HashMap<String, String>> = Vec::with_capacity(runs);
+
+        let mut fixpoint_run: Option<usize> = None;
+
+        for run_idx in 0..runs {
+            let run_num = run_idx + 1;
+
+            // Obtain extra_passes for this run.  On the very first module's first
+            // run we use the pool from the initial extract; on every other run we
+            // re-extract to get fresh Box<dyn Transform> instances.
+            let extra_passes: Vec<Box<dyn reincarnate_core::pipeline::Transform>> =
+                if run_idx == 0 && mod_idx == 0 {
+                    first_extra_passes.take().unwrap_or_default()
+                } else {
+                    let re_input = FrontendInput {
+                        source: manifest.source.clone(),
+                        engine: manifest.engine.clone(),
+                        options: manifest.frontend_options.clone(),
+                    };
+                    frontend
+                        .extract(re_input)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?
+                        .extra_passes
+                };
+
+            // Build a fresh pipeline for this run.
+            let mut pipeline = reincarnate_core::transforms::default_pipeline(&pass_config);
+            for extra in extra_passes {
+                pipeline.add(extra);
+            }
+
+            let PipelineOutput { module: transformed, stopped_early: _ } =
+                pipeline.run_with_debug(module, &debug).map_err(|e| anyhow::anyhow!("{e}"))?;
+            module = transformed;
+
+            let module_json = serde_json::to_string(&module)?;
+            let module_hash = hash_str(&module_json);
+            let func_map = serialize_functions(&module)?;
+
+            eprint!("[stress] run {run_num}/{runs} — ");
+
+            // Check against all previous runs for oscillation / fixpoint.
+            let mut matched_run: Option<usize> = None;
+            for (prev_idx, &prev_hash) in run_hashes.iter().enumerate() {
+                if prev_hash == module_hash {
+                    matched_run = Some(prev_idx + 1);
+                    break;
+                }
+            }
+
+            if run_idx == 0 {
+                eprintln!("hashing IR...");
+            } else if let Some(matched) = matched_run {
+                if matched == run_idx {
+                    // Identical to the immediately preceding run — fixpoint.
+                    eprintln!("identical to run {matched}. Fixpoint reached after {} run(s).", run_idx);
+                    fixpoint_run = Some(run_idx);
+                    run_hashes.push(module_hash);
+                    run_func_maps.push(func_map);
+                    break;
+                } else {
+                    // Matches an earlier run but not the immediately preceding one — oscillating.
+                    eprintln!("same as run {matched} — oscillating!");
+                }
+            } else {
+                // Different from all previous runs.
+                let prev_func_map = &run_func_maps[run_idx - 1];
+                let diff_count = count_differing_functions(prev_func_map, &func_map);
+                if diff_count > 0 {
+                    eprintln!("changed ({diff_count} function(s) differ)");
+                } else {
+                    eprintln!("changed");
+                }
+            }
+
+            run_hashes.push(module_hash);
+            run_func_maps.push(func_map);
+        }
+
+        if fixpoint_run.is_none() {
+            eprintln!("[stress] WARNING: pipeline did not reach fixpoint after {runs} run(s)");
+            any_not_converged = true;
+        }
+    }
+
+    if any_not_converged {
+        bail!("oscillating or slow to converge after {runs} runs");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Registry commands
 // ---------------------------------------------------------------------------
 
@@ -1352,6 +1580,10 @@ fn main() -> Result<()> {
         }
         Command::Remove { name } => cmd_remove(name),
         Command::List { sort, json } => cmd_list(sort, *json),
+        Command::Stress { target, manifest, runs, skip_passes, preset } => {
+            let path = resolve_target(target.as_deref(), manifest.as_deref())?;
+            cmd_stress(&path, *runs, skip_passes, preset)
+        }
         Command::ListFunctions { target, manifest, filter } => {
             let path = resolve_target(target.as_deref(), manifest.as_deref())?;
             cmd_list_functions(&path, filter.as_deref())
