@@ -824,12 +824,6 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
     fs::create_dir_all(&module_dir).map_err(CoreError::Io)?;
 
     let (class_groups, free_funcs) = group_by_class(module);
-    // Sanitize function names so `prepend_rt_arg_expr` lookup works for names
-    // containing `@` (e.g. `anon@123@...` → `anon_123_...`).
-    let free_func_names: HashSet<String> = free_funcs
-        .iter()
-        .map(|&fid| sanitize_ident(&module.functions[fid].name))
-        .collect();
     let registry = ClassRegistry::from_module(module);
     let class_names = build_class_names(module);
     let empty_type_defs = BTreeMap::new();
@@ -854,6 +848,53 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         known_classes.extend(rc.type_definitions.keys().cloned());
     }
     let engine = detect_engine(runtime_config);
+    // Detect name collisions: a free function whose sanitized name matches a class name
+    // or a global variable name. Rename colliding functions in the IR (both `func.name`
+    // and all `Op::Call` references) to resolve TS2308/TS2440 duplicate-export errors.
+    {
+        let sanitized_global_names: HashSet<String> = module
+            .globals
+            .iter()
+            .map(|g| sanitize_ident(&g.name))
+            .collect();
+        // Build (old_name → new_name) pairs for colliding free functions.
+        let renames: HashMap<String, String> = free_funcs
+            .iter()
+            .filter_map(|&fid| {
+                let raw = sanitize_ident(&module.functions[fid].name);
+                if known_classes.contains(&raw) || sanitized_global_names.contains(&raw) {
+                    Some((module.functions[fid].name.clone(), format!("{raw}__fn")))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !renames.is_empty() {
+            // Rename the function definitions.
+            for fid in &free_funcs {
+                let name = &module.functions[*fid].name;
+                if let Some(new_name) = renames.get(name) {
+                    module.functions[*fid].name = new_name.clone();
+                }
+            }
+            // Update all Op::Call references throughout the module.
+            let all_fids: Vec<FuncId> = module.functions.keys().collect();
+            for fid in all_fids {
+                for inst in module.functions[fid].insts.values_mut() {
+                    if let Op::Call { func, .. } = &mut inst.op {
+                        if let Some(new_name) = renames.get(func.as_str()) {
+                            func.clone_from(new_name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Rebuild free_func_names after potential renames.
+    let free_func_names: HashSet<String> = free_funcs
+        .iter()
+        .map(|&fid| sanitize_ident(&module.functions[fid].name))
+        .collect();
     let mut barrel_exports: Vec<String> = Vec::new();
 
     // Globals → _globals.ts (at module root).
@@ -3291,6 +3332,7 @@ fn prepend_rt_arg_expr(
         | JsExpr::SuperGet(_) | JsExpr::Activation => {}
     }
 }
+
 
 /// Whether a cinit statement is a redundant assignment to a field that already
 /// has a `static readonly` default value on the class.
