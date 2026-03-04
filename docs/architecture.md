@@ -357,17 +357,16 @@ The platform interface is a **cross-language contract** — TypeScript, Rust, C#
 
 ### Capability query
 
-Platforms expose a small capability map so shims can branch without hardcoding target checks. Capabilities are opaque strings scoped to a concern, with boolean values.
+Platforms expose a capability query so shims can branch without hardcoding target checks. Capability names are dot-scoped strings (`concern.feature`). Returns `false` for unknown names.
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `capabilities` | `() → {str: bool}` | Example keys: `graphics.pointer_lock`, `clipboard.read`, `clipboard.write`, `window.fullscreen` |
+| `has_capability` | `(name: str) → bool` | Example names: `"graphics.pointer_lock"`, `"clipboard.read"`, `"clipboard.write"`, `"window.fullscreen"` |
 
 Example usage in a shim:
 
 ```typescript
-const caps = capabilities();
-if (caps["graphics.pointer_lock"]) {
+if (has_capability("graphics.pointer_lock")) {
     request_pointer_lock();
 }
 ```
@@ -753,7 +752,7 @@ A key-value byte store. "Save" is a shim-level concept; the platform is just sto
 
 **Contract:**
 - `init` is async — preloads cache, initialises backing store. After `init` returns, all reads are sync.
-- `store` and `remove` are **atomic** where the backend supports it — on failure, the old value remains intact. Implementations use write-to-temp-then-rename (OPFS, filesystem) or the best available semantics on the platform; web storage does not guarantee crash-consistent atomicity, so callers should tolerate recovery and retries.
+- `store` and `remove` are **atomic on backends that support it** — on failure, the old value remains intact. OPFS and filesystem backends use write-to-temp-then-rename for full crash-consistency. `localStorage` makes a best-effort but does not guarantee crash-consistency (a browser crash mid-write can corrupt the value); callers should tolerate recovery at startup.
 - `store` **throws on failure** — never swallows errors silently. Callers decide how to handle quota exceeded, permission denied, etc.
 - Data is **bytes**, not strings — strings are just UTF-8 bytes; the more general interface subsumes the string case.
 - Backend composition (OPFS + localStorage tee, fallback, debounce, rolling history) is above the platform layer. A `fallback(primary, secondary)` utility wrapper handles degradation — the platform interface itself does not decide which backend to use.
