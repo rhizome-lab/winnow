@@ -46,3 +46,6 @@ swf = "0.2"
 
 # Embedding
 include_dir = "0.7"
+
+[profile.dev]
+debug = 0
