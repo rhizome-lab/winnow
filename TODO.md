@@ -38,8 +38,7 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 **Implementation complete** (2026-03-04). Both runtimes updated:
 - GML: all six platform concerns rewritten to canonical API; shims updated (requestFrame, per-sound loadAudio, bufferDuration, codeToGmlKeyCode)
 - Flash: all six platform concern modules added to `runtime/flash/ts/shared/platform/`; audio aligned (bufferDuration, onVoiceEnd, groups, lazy init); shims converted to classes in `FlashShims` container; `initFlash(canvas)` replaces hardcoded `document.getElementById` at import time
-
-- [ ] **Thread FlashShims through Flash emitter** — `initFlash()` sets module-level singleton live bindings as backward compat, but emitted Flash classes should receive a `FlashShims` parameter rather than importing singletons. Requires Flash emitter change in `crates/backends/reincarnate-backend-typescript/` (Flash emit path). See `runtime/flash/ts/index.ts` TODO comment.
+- Flash emitter now threads `FlashShims` through all class constructors (2026-03-04): `_shims` param on every constructor, generic shim system calls rewritten to `this._shims.<system>.<method>()`, `Flash.Object.construct` injects `this._shims`, `Flash.Class.constructSuper` injects `_shims`; backward-compat `export let` bindings and `initFlash()` removed from `runtime/flash/ts/index.ts`
 
 ---
 
