@@ -2,8 +2,9 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, scheduleTimeout, initWebGL } from "../shared/platform";
-import { PersistenceState, init as initPersistence, save, load as loadItem, remove } from "../shared/platform/persistence";
+import { GraphicsContext, initCanvas, createCanvas, resizeCanvas, loadImage, initWebGL } from "../shared/platform";
+import { requestFrame, cancelFrame, FrameHandle } from "../shared/platform";
+import { PersistenceState, init as initPersistence, store, fetch as fetchItem, remove } from "../shared/platform/persistence";
 import type { RenderRoot } from "../shared/render-root";
 import { DrawState, createDrawAPI } from "./draw";
 import { InputState, createInputAPI } from "./input";
@@ -19,7 +20,7 @@ import {
   setVoicePan as audioSetPan, getVoicePan as audioGetPan,
   setMasterGain as audioSetMasterGain,
   getPosition as audioGetPosition, setPosition as audioSetPosition,
-  soundLength as audioSoundLength,
+  bufferDuration as audioBufferDuration,
   setNodeParam as audioSetNodeParam,
 } from "../shared/platform/audio";
 import { MathState, createMathAPI } from "./math";
@@ -430,7 +431,7 @@ export class GameRuntime {
   _nextTextFileId = 1;
 
   // Runtime state
-  _drawHandle = 0;
+  _drawHandle: FrameHandle | number = 0;
   _currentRoom: GMLRoom | null = null;
   _isStepping = false;
   _pendingStep: GMLObject[] = [];
@@ -1027,7 +1028,7 @@ export class GameRuntime {
   audio_sound_set_pan(handle: number, pan: number): void { audioSetPan(this._audio, handle, pan); }
   audio_sound_get_pan(handle: number): number { return audioGetPan(this._audio, handle); }
   audio_master_gain(gain: number): void { audioSetMasterGain(this._audio, gain); }
-  audio_sound_length(sound: number): number { return audioSoundLength(this._audio, sound); }
+  audio_sound_length(sound: number): number { return audioBufferDuration(this._audio, sound); }
   audio_sound_set_track_position(handle: number, pos: number): void { audioSetPosition(this._audio, handle, pos); }
   audio_sound_get_track_position(handle: number): number { return audioGetPosition(this._audio, handle); }
   audio_exists(sound: number): boolean { return sound >= 0 && sound < this.sounds.length && this.sounds[sound]!.url !== ""; }
@@ -1908,7 +1909,7 @@ export class GameRuntime {
   steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { return []; /* no-op — Steam inventory not available in browser */ }
   steam_lobby_get_member_id(_index: number, _lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
   steam_input_get_action_set_handle(_name: string): number { return 0; }
-  steam_get_stat_float(_name: string): number { return parseFloat(loadItem(this._persistence, this._steamStatKey(_name)) ?? "0"); }
+  steam_get_stat_float(_name: string): number { return parseFloat(fetchItem(this._persistence, this._steamStatKey(_name)) ?? "0"); }
   steam_get_global_stat_int(_name: string): number { return 0; }
   steam_get_user_account_id(): number { return 0; }
   steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { return false; }
@@ -2350,7 +2351,7 @@ export class GameRuntime {
   steam_activate_overlay_user(_type: string, _steamid: number): void { /* no-op */ }
   steam_get_app_id(): number { return 0; }
   steam_get_user_persona_name_sync(_steamid?: number): string { return ""; }
-  steam_get_stat_int(_name: string): number { return parseInt(loadItem(this._persistence, this._steamStatKey(_name)) ?? "0", 10); }
+  steam_get_stat_int(_name: string): number { return parseInt(fetchItem(this._persistence, this._steamStatKey(_name)) ?? "0", 10); }
   steam_get_global_stat_history_int(_name: string, _days?: number): number { return 0; }
   steam_is_overlay_activated(): boolean { return false; }
   steam_image_get_size(_image: number): [number, number] { return [0, 0]; }
@@ -2361,11 +2362,11 @@ export class GameRuntime {
   steam_input_run_frame(): void { /* no-op */ }
   steam_file_write(_path: string, _data: string, _length?: number): boolean {
     const data = _length !== undefined ? _data.slice(0, _length) : _data;
-    save(this._persistence, this._steamCloudKey(_path), data);
+    store(this._persistence, this._steamCloudKey(_path), data);
     this._steamCloudAddToIndex(_path);
     return true;
   }
-  steam_file_exists(_path: string): boolean { return loadItem(this._persistence, this._steamCloudKey(_path)) !== null; }
+  steam_file_exists(_path: string): boolean { return fetchItem(this._persistence, this._steamCloudKey(_path)) !== null; }
   /** UDS (User Data System) is PS4-specific telemetry — no browser equivalent. */
   psn_post_uds_event(_evtype: number, ..._args: any[]): void { /* no-op — PS4 telemetry, no browser equivalent */ }
 
@@ -2563,7 +2564,7 @@ export class GameRuntime {
   steam_request_global_achievement_percentages(): void { /* no-op */ }
   steam_get_achievement(_name: string): boolean { return this._steamAchSet().has(_name); }
   steam_store_stats(): void { /* no-op — stats are already persisted to localStorage immediately */ }
-  steam_set_stat_int(_name: string, _val: number): void { save(this._persistence, this._steamStatKey(_name), String(Math.trunc(_val))); }
+  steam_set_stat_int(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), String(Math.trunc(_val))); }
   steam_net_packet_get_sender_id(): number { return 0; /* no-op — Steam networking not available in browser */ }
   steam_is_cloud_enabled_for_app(): boolean { return false; }
   steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { return -1; /* no-op — Steam UGC not available in browser */ }
@@ -3007,7 +3008,7 @@ export class GameRuntime {
   steam_inventory_get_all_items(_arr?: any): number { return -1; /* no-op — Steam inventory not available in browser */ }
   steam_get_quota_total(): number { return 104857600; /* 100 MB typical Steam Cloud quota */ }
   steam_get_global_stat_history_real(_name: string, _days?: number): number { return 0; }
-  steam_file_read(_path: string): string { return loadItem(this._persistence, this._steamCloudKey(_path)) ?? ""; }
+  steam_file_read(_path: string): string { return fetchItem(this._persistence, this._steamCloudKey(_path)) ?? ""; }
   steam_set_rich_presence(_key: string, _val: string): void { /* no-op — Steam rich presence not available in browser */ }
   steam_user_get_auth_session_ticket(_arr?: any): number { return -1; /* no-op — Steam auth not available in browser */ }
 
@@ -3049,7 +3050,7 @@ export class GameRuntime {
     }
   }
   steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void { /* no-op — complex running-average stat */ }
-  steam_set_stat_float(_name: string, _val: number): void { save(this._persistence, this._steamStatKey(_name), String(_val)); }
+  steam_set_stat_float(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), String(_val)); }
   steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void { /* no-op — Steam floating keyboard not available in browser */ }
   steam_shutdown(): void { /* no-op */ }
   steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void { /* no-op — Steam lobbies not available in browser */ }
@@ -3066,7 +3067,7 @@ export class GameRuntime {
   steam_get_number_of_current_players(): void { /* no-op — Steam player count not available in browser */ }
   steam_get_app_ownership_ticket_data(_appId: number): string { return ""; /* no-op — Steam DRM not available in browser */ }
   steam_file_read_buffer(path: string, buf?: number): boolean {
-    const data = loadItem(this._persistence, this._steamCloudKey(path)); if (!data) return false;
+    const data = fetchItem(this._persistence, this._steamCloudKey(path)); if (!data) return false;
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
     const b = this._buffers.get(buf ?? -1); if (!b) return false;
     this._bufferGrow(b, bytes.length); b.data.set(bytes, 0);
@@ -3360,7 +3361,7 @@ export class GameRuntime {
   /** Load trophy unlock state from storage into the in-memory set. */
   psn_init_trophy(_pad_index?: number): void {
     const gameName = this._storage.gameName;
-    const raw = loadItem(this._persistence, "__psn_trophy_" + gameName);
+    const raw = fetchItem(this._persistence, "__psn_trophy_" + gameName);
     if (raw) {
       try {
         const ids: number[] = JSON.parse(raw);
@@ -3372,7 +3373,7 @@ export class GameRuntime {
   /** Unlock a trophy by ID; persist immediately. */
   psn_unlock_trophy(id: number, _slot: number = 0): void {
     this._psnTrophies.add(id);
-    save(this._persistence, "__psn_trophy_" + this._storage.gameName, JSON.stringify([...this._psnTrophies]));
+    store(this._persistence, "__psn_trophy_" + this._storage.gameName, JSON.stringify([...this._psnTrophies]));
   }
 
   /**
@@ -3401,7 +3402,7 @@ export class GameRuntime {
     return "__steam_cloud_" + this._storage.gameName + "_" + path;
   }
   private _steamCloudIndex(): string[] {
-    const raw = loadItem(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index");
+    const raw = fetchItem(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index");
     if (!raw) return [];
     try { return JSON.parse(raw) as string[]; } catch { return []; }
   }
@@ -3409,20 +3410,20 @@ export class GameRuntime {
     const idx = this._steamCloudIndex();
     if (!idx.includes(path)) {
       idx.push(path);
-      save(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
+      store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
     }
   }
   private _steamCloudRemoveFromIndex(path: string): void {
     const idx = this._steamCloudIndex().filter(p => p !== path);
-    save(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
+    store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
   }
   private _steamAchSet(): Set<string> {
-    const raw = loadItem(this._persistence, "__steam_ach_" + this._storage.gameName);
+    const raw = fetchItem(this._persistence, "__steam_ach_" + this._storage.gameName);
     if (!raw) return new Set();
     try { return new Set(JSON.parse(raw) as string[]); } catch { return new Set(); }
   }
   private _steamAchSave(set: Set<string>): void {
-    save(this._persistence, "__steam_ach_" + this._storage.gameName, JSON.stringify([...set]));
+    store(this._persistence, "__steam_ach_" + this._storage.gameName, JSON.stringify([...set]));
   }
   private _steamStatKey(name: string): string {
     return "__steam_stat_" + this._storage.gameName + "_" + name;
@@ -3442,13 +3443,13 @@ export class GameRuntime {
   }
   steam_file_get_list(): string[] { return this._steamCloudIndex(); }
   steam_file_share(_path: string): void { /* no-op — Steam file sharing not available in browser */ }
-  steam_file_size(_path: string): number { return (loadItem(this._persistence, this._steamCloudKey(_path)) ?? "").length; }
+  steam_file_size(_path: string): number { return (fetchItem(this._persistence, this._steamCloudKey(_path)) ?? "").length; }
   steam_file_write_buffer(path: string, buf: number, size?: number): boolean {
     const b = this._buffers.get(buf); if (!b) return false;
     const len = size ?? b.data.length;
     const bytes = b.data.subarray(0, len);
     const b64 = btoa(String.fromCharCode(...bytes));
-    save(this._persistence, this._steamCloudKey(path), b64);
+    store(this._persistence, this._steamCloudKey(path), b64);
     this._steamCloudAddToIndex(path);
     return true;
   }
@@ -3557,10 +3558,7 @@ export class GameRuntime {
     const elapsed = end - start;
     const newfps = 1000 / Math.max(0.01, elapsed);
     this.fps_real = 0.9 * this.fps_real + 0.1 * newfps;
-    this._drawHandle = scheduleTimeout(
-      () => this._runFrame(),
-      Math.max(0, 1000 / this.room_speed - elapsed),
-    );
+    this._drawHandle = requestFrame(() => this._runFrame()) as unknown as ReturnType<typeof setTimeout>;
   }
 
   // ---- Game startup ----
@@ -3622,7 +3620,7 @@ export class GameRuntime {
     }
     const [sheets] = await Promise.all([
       Promise.all(sheetPromises),
-      loadAudio(this._audio, config.sounds ?? []),
+      Promise.all((config.sounds ?? []).map(s => loadAudio(this._audio, s.name, s.url ?? ""))),
     ]);
     this.textureSheets.push(...sheets);
 

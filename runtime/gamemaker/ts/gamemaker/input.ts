@@ -1,7 +1,7 @@
 /** GML input handling — mouse, keyboard. */
 
 import type { GameRuntime } from "./runtime";
-import { onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "../shared/platform";
+import { InputState as PlatformInputState, onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "../shared/platform";
 import { ACTIVE, noop } from "./constants";
 
 interface ButtonState { pressed: boolean; released: boolean; held: boolean; }
@@ -91,26 +91,91 @@ export function createInputAPI(rt: GameRuntime) {
     }
   }
 
+  function codeToGmlKeyCode(code: string, key: string): number {
+    if (code.startsWith("Key")) {
+      const ch = code.slice(3);
+      if (ch.length === 1) return ch.charCodeAt(0);
+    }
+    if (code.startsWith("Digit")) return code.charCodeAt(5);
+    if (code.startsWith("Numpad")) {
+      const rest = code.slice(6);
+      if (rest >= "0" && rest <= "9") return 96 + parseInt(rest);
+      switch (rest) {
+        case "Add": return 107;
+        case "Subtract": return 109;
+        case "Multiply": return 106;
+        case "Divide": return 111;
+        case "Decimal": return 110;
+        case "Enter": return 13;
+      }
+    }
+    if (code.startsWith("F") && code.length <= 3) {
+      const n = parseInt(code.slice(1));
+      if (n >= 1 && n <= 12) return 111 + n;
+    }
+    switch (code) {
+      case "Backspace": return 8;
+      case "Tab": return 9;
+      case "Enter": return 13;
+      case "ShiftLeft": case "ShiftRight": return 16;
+      case "ControlLeft": case "ControlRight": return 17;
+      case "AltLeft": case "AltRight": return 18;
+      case "Pause": return 19;
+      case "CapsLock": return 20;
+      case "Escape": return 27;
+      case "Space": return 32;
+      case "PageUp": return 33;
+      case "PageDown": return 34;
+      case "End": return 35;
+      case "Home": return 36;
+      case "ArrowLeft": return 37;
+      case "ArrowUp": return 38;
+      case "ArrowRight": return 39;
+      case "ArrowDown": return 40;
+      case "Insert": return 45;
+      case "Delete": return 46;
+      case "MetaLeft": case "MetaRight": return 91;
+      case "ContextMenu": return 93;
+      case "NumLock": return 144;
+      case "ScrollLock": return 145;
+      case "Semicolon": return 186;
+      case "Equal": return 187;
+      case "Comma": return 188;
+      case "Minus": return 189;
+      case "Period": return 190;
+      case "Slash": return 191;
+      case "Backquote": return 192;
+      case "BracketLeft": return 219;
+      case "Backslash": return 220;
+      case "BracketRight": return 221;
+      case "Quote": return 222;
+    }
+    if (key.length === 1) return key.toUpperCase().charCodeAt(0);
+    return 0;
+  }
+
   function setupInput(): void {
     const canvas = rt._gfx.canvas;
+    const platformInput = new PlatformInputState();
 
-    onMouseMove(canvas, (x, y) => {
+    onMouseMove(platformInput, canvas, (_device, x, y) => {
       input.mouse.x = x;
       input.mouse.y = y;
       activateMouse(x, y);
     });
 
-    onMouseDown(canvas, (button) => {
+    onMouseDown(platformInput, canvas, (_device, button) => {
       const b = input.mouse.buttons[input.domButtonMap[button]!];
       if (b) { b.pressed = true; b.held = true; }
     });
 
-    onMouseUp(canvas, (button) => {
+    onMouseUp(platformInput, canvas, (_device, button) => {
       const b = input.mouse.buttons[input.domButtonMap[button]!];
       if (b) { b.released = true; b.held = false; }
     });
 
-    onKeyDown(canvas, (key, keyCode) => {
+    onKeyDown(platformInput, canvas, (_device, code, key) => {
+      const keyCode = codeToGmlKeyCode(code, key);
       input.keysPressed.add(keyCode);
       input.keysDown.add(keyCode);
       if (key.length === 1) {
@@ -126,13 +191,14 @@ export function createInputAPI(rt: GameRuntime) {
       dispatchKeyPress(keyCode);
     });
 
-    onKeyUp(canvas, (_key, keyCode) => {
+    onKeyUp(platformInput, canvas, (_device, code, key) => {
+      const keyCode = codeToGmlKeyCode(code, key);
       input.keysReleased.add(keyCode);
       input.keysDown.delete(keyCode);
     });
 
-    onScroll(canvas, (delta) => {
-      if (delta < 0) input.mouse.wheelUp = true;
+    onScroll(platformInput, canvas, (_device, _dx, dy) => {
+      if (dy < 0) input.mouse.wheelUp = true;
       else input.mouse.wheelDown = true;
     });
   }
