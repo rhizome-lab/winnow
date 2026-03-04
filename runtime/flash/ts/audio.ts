@@ -2,9 +2,9 @@
  * Flash audio shim — implements the load_sound/play/stop API used by emitted
  * Flash code, backed by the shared platform audio (node graph, Web Audio API).
  *
- * Handles are opaque numbers: BufferId for loaded sounds, VoiceId for playing
- * instances. Emitted code treats them as opaque and passes them back to these
- * functions — no assumption about their internal representation.
+ * Handles are opaque numbers: BufferHandle for loaded sounds, VoiceHandle for
+ * playing instances. Emitted code treats them as opaque and passes them back
+ * to these functions — no assumption about their internal representation.
  *
  * TODO: this module uses a module-level AudioState singleton, which violates
  * the "no module-level mutable state" rule and prevents multiple Flash game
@@ -20,38 +20,25 @@ import {
   setVoicePitch, getVoicePitch,
   setMasterGain,
   pause, resume,
-  getPosition, soundLength,
+  getPosition, bufferDuration,
 } from "./shared/platform/audio";
 
 const _audio = new AudioState();
 
-/** Initialize the audio context and master node. Idempotent. */
-async function _ensureInit(): Promise<void> {
-  if (_audio.ctx) return;
-  await loadAudio(_audio, []); // no sounds to preload; initializes ctx + master node (id=0)
-}
-
 export const audio = {
   /**
-   * Decode an audio file from a URL and return a BufferId.
+   * Decode an audio file from a URL and return a BufferHandle.
    * Returns -1 on failure.
    */
   async load_sound(url: string): Promise<number> {
-    await _ensureInit();
-    const ctx = _audio.ctx!;
     try {
-      const res = await fetch(url);
-      if (!res.ok) return -1;
-      const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
-      const id = _audio.buffers.length;
-      _audio.buffers.push(buffer);
-      return id;
+      return await loadAudio(_audio, url, url);
     } catch {
       return -1;
     }
   },
 
-  /** Play a loaded sound. Returns a VoiceId, or -1 on failure. */
+  /** Play a loaded sound. Returns a VoiceHandle, or -1 on failure. */
   play(bufferId: number, loop = false, gain = 1, pan = 0, pitch = 1, offset = 0): number {
     return play(_audio, bufferId, 0, loop, gain, pitch, pan, offset);
   },
@@ -79,5 +66,5 @@ export const audio = {
   set_master_volume(volume: number): void { setMasterGain(_audio, volume); },
 
   get_position(voiceId: number): number { return getPosition(_audio, voiceId); },
-  sound_length(bufferId: number): number { return soundLength(_audio, bufferId); },
+  sound_length(bufferId: number): number { return bufferDuration(_audio, bufferId); },
 };
