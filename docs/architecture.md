@@ -381,8 +381,6 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `init_canvas` | `(id: str) → CanvasHandle` | Bind to existing canvas element by ID |
 | `create_canvas` | `(w, h: int) → CanvasHandle` | Create offscreen canvas |
 | `resize_canvas` | `(canvas: CanvasHandle, w, h: int) → void` | |
-| `canvas_width` | `(canvas: CanvasHandle) → int` | Current canvas width in pixels |
-| `canvas_height` | `(canvas: CanvasHandle) → int` | Current canvas height in pixels |
 | `load_font` | `(url: str) → FontHandle` (async) | Load and register a font |
 | `create_path` | `() → PathHandle` | Begin recording a reusable path |
 | `path_move_to` | `(path: PathHandle, x, y: float) → void` | |
@@ -395,6 +393,13 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `destroy_canvas` | `(canvas: CanvasHandle) → void` | Free canvas resources |
 | `destroy_font` | `(font: FontHandle) → void` | Free font resources |
 
+**Query (sync):**
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `canvas_width` | `(canvas: CanvasHandle) → int` | |
+| `canvas_height` | `(canvas: CanvasHandle) → int` | |
+
 **Hot tier — state (all saved/restored with save_state/restore_state):**
 
 | Function | Signature | Notes |
@@ -406,12 +411,13 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `set_image_smoothing` | `(canvas: CanvasHandle, enabled: bool) → void` | false = nearest-neighbor (pixel art) |
 | `save_state` | `(canvas: CanvasHandle) → void` | Push transform + clip + effect state |
 | `restore_state` | `(canvas: CanvasHandle) → void` | Pop state |
+| `reset_canvas_state` | `(canvas: CanvasHandle) → void` | Reset transform, clip, and all effect state to defaults; does not clear pixel content |
 
 **Hot tier — drawing:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `clear_canvas` | `(canvas: CanvasHandle, color: int) → void` | Fill entire canvas with color; resets clip |
+| `clear_canvas` | `(canvas: CanvasHandle, color: int) → void` | Fill entire canvas with color; respects current clip; does not modify state stack |
 | `fill_rect` | `(canvas: CanvasHandle, x,y,w,h: float, color: int) → void` | RGBA `0xRRGGBBAA` |
 | `draw_image` | `(canvas: CanvasHandle, img: ImageHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Source and dest rects |
 | `draw_canvas` | `(dst: CanvasHandle, src: CanvasHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Composite offscreen canvas onto another |
@@ -468,13 +474,13 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 - **Shader creation**: sync ID, async compile. `create_shader` returns immediately; compilation happens in the background. Poll `shader_ready`. Draw calls against an unready shader are silently no-oped — the engine is responsible for not drawing until ready. Supports streaming (shaders not known at init time).
 - **Vertex layout**: interned via `create_vertex_layout(format: str) → LayoutHandle`. Format string parsed once; `LayoutHandle` used everywhere else. Format: attribute letter + component count, e.g. `"p3n3uv2"` = position(3) + normal(3) + uv(2).
 - **Render passes**: explicit `begin_pass`/`end_pass` with `load_op`/`store_op` declared upfront — required for tile-based GPU efficiency on mobile. Implicit `set_render_target` silently assumes load+store, which wastes bandwidth on tile GPUs.
-- **Context handle**: `GpuHandle` is returned by `init_gfx3d()`. What surface or window it binds to is implementation-defined — on browsers it is implicit (e.g. WebGL context on the document canvas); on native targets it is a window handle passed at construction. Callers never see the surface; they hold only the opaque handle.
+- **Context handle**: `GpuHandle` is returned by `init_gfx3d(canvas)`. Each canvas has its own independent 3D context; multiple canvases → multiple `GpuHandle`s. On browsers this maps to `canvas.getContext("webgl2")`; on native targets the canvas handle identifies the surface.
 
 **Setup tier:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `init_gfx3d` | `() → GpuHandle` | Create a 3D context; surface/window binding is implementation-defined |
+| `init_gfx3d` | `(canvas: CanvasHandle) → GpuHandle` | Create a 3D context bound to the given canvas; one context per canvas, arbitrary many |
 | `create_shader` | `(gpu: GpuHandle, name: str) → ShaderHandle` | Sync ID; async compile in background |
 | `shader_ready` | `(gpu: GpuHandle, id: ShaderHandle) → bool` | Poll until true before drawing |
 | `get_uniform` | `(gpu: GpuHandle, shader: ShaderHandle, name: str) → UniformHandle` | Resolve name at setup time; hot-path uses the returned handle |
@@ -497,6 +503,7 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 | `begin_pass` | `(gpu: GpuHandle, rt: RenderTargetHandle, color_load: LoadOp, color_store: StoreOp, depth_load: LoadOp, depth_store: StoreOp) → void` | |
 | `end_pass` | `(gpu: GpuHandle) → void` | |
 | `set_uniform_float` | `(gpu: GpuHandle, uniform: UniformHandle, v: float) → void` | |
+| `set_uniform_int` | `(gpu: GpuHandle, uniform: UniformHandle, v: int) → void` | |
 | `set_uniform_vec2` | `(gpu: GpuHandle, uniform: UniformHandle, x,y: float) → void` | |
 | `set_uniform_vec3` | `(gpu: GpuHandle, uniform: UniformHandle, x,y,z: float) → void` | |
 | `set_uniform_vec4` | `(gpu: GpuHandle, uniform: UniformHandle, x,y,z,w: float) → void` | |
@@ -522,7 +529,7 @@ established at init time. Playing a voice routes its output to a designated sink
 Fixed topologies (Buffer→Bus→Master) are special cases of the graph, not the interface.
 
 **Opaque handle types** (u32, cross-language safe):
-- `BufferHandle` — decoded audio data (`load_audio` assigns IDs = SOND index)
+- `BufferHandle` — decoded audio data; returned by `load_audio` per sound
 - `NodeHandle` — a DSP node in the graph (0 = master output, always valid)
 - `VoiceHandle` — a playing voice instance (0 = invalid). VoiceHandles are monotonically increasing and never reused. Any operation on an invalid or stopped VoiceHandle is a silent no-op.
 - `GroupHandle` — a voice group for bulk operations
@@ -553,7 +560,7 @@ Each node kind accepts only its own params; others throw at runtime.
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds; assigns BufferHandles |
+| `load_audio` | `(name: str, url: str) → BufferHandle` (async) | Decode one sound; caller loops to load all. Returns the BufferHandle for that sound. |
 | `audio_ready` | `() → bool` | True when AudioContext is running and playback is possible; poll before first play call |
 | `create_node` | `(kind: NodeKind) → NodeHandle` | Create a DSP node |
 | `create_voice_group` | `() → GroupHandle` | Create a group for bulk voice operations |
@@ -563,6 +570,7 @@ Each node kind accepts only its own params; others throw at runtime.
 | `get_node_param` | `(node: NodeHandle, kind: ParamKind) → float` | Read current param value |
 | `destroy_node` | `(node: NodeHandle) → void` | |
 | `destroy_group` | `(group: GroupHandle) → void` | |
+| `destroy_buffer` | `(buffer: BufferHandle) → void` | Free decoded audio data |
 
 **Hot tier** (per-frame voice control, all args are primitives — zero object allocation at call site):
 
@@ -576,7 +584,7 @@ Each node kind accepts only its own params; others throw at runtime.
 | `resume_all` | `() → void` | Resume all paused voices |
 | `is_playing` | `(voice: VoiceHandle) → bool` | True if playing (not paused, not ended) |
 | `is_paused` | `(voice: VoiceHandle) → bool` | |
-| `on_voice_end` | `(voice: VoiceHandle, cb: () → void) → void` | Register a one-shot callback fired when the voice finishes or is stopped |
+| `on_voice_end` | `(voice: VoiceHandle, cb: () → void) → void` | One-shot callback fired on natural completion only (buffer exhausted or loop stopped via stop). Not fired by stop(), stop_all(), stop_group(), or stop_node() — callers manage their own cleanup on programmatic stops. |
 | `set_voice_gain` | `(voice: VoiceHandle, gain: float, fade_ms: float) → void` | Per-voice gain |
 | `get_voice_gain` | `(voice: VoiceHandle) → float` | |
 | `set_voice_pitch` | `(voice: VoiceHandle, pitch: float, fade_ms: float) → void` | Playback rate |
@@ -605,9 +613,7 @@ into the platform interface.
 
 #### Input
 
-**Named constant types**:
-- `DeviceKind`: `keyboard | mouse | touch | gamepad`
-- `CursorShape`: `default | pointer | text | crosshair | move | resize_ns | resize_ew | none`
+**Named constant types**: `DeviceKind`: `keyboard | mouse | touch | gamepad`
 
 Every input source carries a `device: int` ID. Device 0 is the primary/default for each kind. Multiple devices of the same kind (two keyboards, two mice, split controllers) are distinguished by ID. Use `devices(kind)` to enumerate on init; `on_device_connect`/`on_device_disconnect` handle changes after init.
 
@@ -673,26 +679,13 @@ Gamepad buttons surface through the keyboard callbacks with synthetic codes (`"B
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `on_text_input` | `(cb: (text: str) → void) → void` | Fired with composed text (post-IME); separate from key events — use for text entry fields |
-
-**Window focus and visibility:**
-
-| Function | Signature | Notes |
-|----------|-----------|-------|
-| `on_focus_change` | `(cb: (focused: bool) → void) → void` | Fired when the game window gains or loses focus |
-| `on_visibility_change` | `(cb: (visible: bool) → void) → void` | Fired when the page/tab becomes hidden or visible; use to pause the game loop |
-
-**Cursor:**
-
-| Function | Signature | Notes |
-|----------|-----------|-------|
-| `set_cursor` | `(shape: CursorShape) → void` | Set the OS cursor appearance; `none` hides the cursor |
+| `on_text_input` | `(cb: (device: int, text: str) → void) → void` | Fired with composed text (post-IME); separate from key events — use for text entry fields. Contract: `on_key_down`/`on_key_up` and `on_text_input` are independent streams. A text field uses `on_text_input` exclusively; game actions use `on_key_down` exclusively. Never use both for the same purpose. |
 
 #### Images
 
 `ImageHandle` is an opaque u32. It is defined in a shared types module — not owned by the images concern or the graphics concern. This is what allows `graphics_3d` to accept `ImageHandle` in `upload_image` without importing from the images concern.
 
-Sub-images are views into a parent — no copy. `image_width`/`image_height` on a sub-image return the sub-region dimensions. `destroy_image` on a sub-image releases the view, not the parent. `destroy_image` on a **parent** that still has live sub-images throws — callers must destroy sub-images before the parent.
+Sub-images are views into a parent — no copy. `image_width`/`image_height` on a sub-image return the sub-region dimensions. `destroy_image` on a sub-image releases the view, not the parent. `destroy_image` on a **parent** decrements its reference count. The parent is actually deallocated only when the last sub-image is also destroyed (reference counting). This is safe in GC'd languages where sub-image handles may be held by unreachable-but-uncollected objects.
 
 `format` in `load_image_bytes` is a MIME type string (`"image/png"`, `"image/webp"`, etc.), or `null` to request format sniffing from magic bytes. Use explicit format when known; `null` as an escape hatch for raw blobs with no format information.
 
@@ -760,23 +753,31 @@ Handles are typed opaque u32s — distinct types prevent mixing delayed/recurrin
 
 Window and display management. Fullscreen state is async on browsers (requires user gesture); poll `is_fullscreen` or use the callback.
 
+**Named constant types**: `CursorShape`: `default | pointer | text | crosshair | move | resize_ns | resize_ew | none`
+
 | Function | Signature | Notes |
 |----------|-----------|-------|
 | `request_fullscreen` | `() → void` | Request fullscreen; may be deferred until next user gesture |
 | `exit_fullscreen` | `() → void` | |
 | `is_fullscreen` | `() → bool` | |
-| `on_fullscreen_change` | `(cb: (fullscreen: bool) → void) → void` | Fired when fullscreen state changes |
+| `on_fullscreen_change` | `(cb: (fullscreen: bool) → void) → void` | Fired when fullscreen state changes, including when a request is denied (fires with current state = false) |
 | `window_width` | `() → int` | Current window/viewport width in pixels |
 | `window_height` | `() → int` | Current window/viewport height in pixels |
+| `on_resize` | `(cb: (w, h: int) → void) → void` | Fired when the window/viewport size changes |
+| `device_pixel_ratio` | `() → float` | Physical pixels per CSS pixel; use to size canvas backing buffers for hi-DPI displays |
+| `on_focus_change` | `(cb: (focused: bool) → void) → void` | Fired when the game window gains or loses focus |
+| `on_visibility_change` | `(cb: (visible: bool) → void) → void` | Fired when the page/tab becomes hidden or visible; use to pause the game loop |
+| `set_cursor` | `(canvas: CanvasHandle, shape: CursorShape) → void` | Set the OS cursor appearance scoped to a canvas; `none` hides the cursor |
 
 #### Clipboard
 
-Text-only clipboard access. `read_clipboard` is async and may require a user permission grant on browsers.
+Text-only clipboard access. `read_clipboard` and `write_clipboard` are async and may require user permission on browsers.
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `read_clipboard` | `() → str` (async) | Read current clipboard text; throws if permission denied |
-| `write_clipboard` | `(text: str) → void` | Write text to clipboard |
+| `read_clipboard` | `() → str \| null` (async) | Read current clipboard text; `null` if clipboard is empty or contains non-text; throws if permission denied |
+| `write_clipboard` | `(text: str) → void` (async) | Write text to clipboard; throws if permission denied or unavailable |
+| `on_paste` | `(cb: (text: str) → void) → void` | Fired when the user pastes (e.g. Ctrl+V); delivers text without requiring a permission prompt |
 
 #### Network
 
@@ -784,51 +785,9 @@ Minimal HTTP client. Sufficient for leaderboards, analytics, and asset streaming
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `fetch_url` | `(url: str, method: str, headers: {str: str}, body: bytes \| null) → bytes` (async) | HTTP request; throws on network error or non-2xx status |
+| `fetch_url` | `(url: str, method: str, headers: {str: str}, body: bytes \| null) → {status: int, body: bytes}` (async) | HTTP request; throws only on network failure (no response received). Non-2xx status codes are returned as data — caller decides what constitutes an error. |
 
-### Rust: generic traits
-
-```rust
-trait Graphics {
-    type Image;
-    fn set_transform(&mut self, matrix: [f32; 6]);
-    fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32);
-    fn draw_image(&mut self, image: &Self::Image, x: f32, y: f32, w: f32, h: f32);
-    fn draw_text(&mut self, text: &str, x: f32, y: f32, font: &str, size: f32);
-    // ...
-}
-
-trait Audio {
-    fn create_node(&mut self, kind: NodeKind) -> NodeHandle;
-    fn connect(&mut self, from: NodeHandle, to: NodeHandle);
-    fn set_node_param(&mut self, node: NodeHandle, kind: ParamKind, value: f32, fade_ms: f32);
-    fn play(&mut self, params: PlayParams) -> VoiceHandle;  // struct avoids 8-arg limit
-    fn stop(&mut self, voice: VoiceHandle);
-    fn set_voice_gain(&mut self, voice: VoiceHandle, gain: f32, fade_ms: f32);
-    // ...
-}
-
-trait PersistenceBackend {
-    async fn store(&self, key: &str, value: &[u8]) -> Result<()>;
-    async fn fetch(&self, key: &str) -> Result<Option<Vec<u8>>>;
-    async fn remove(&self, key: &str) -> Result<()>;
-    async fn list(&self, prefix: &str) -> Result<Vec<String>>;
-}
-```
-
-The Flash API shim is generic over the platform:
-
-```rust
-struct MovieClip<G: Graphics, A: Audio> {
-    children: Vec<DisplayObjectRef>,
-    current_frame: u32,
-    // ...
-}
-```
-
-The compiler monomorphizes each `<G, A>` combination — zero virtual dispatch.
-Platform implementations (`WgpuGraphics`, `Canvas2DGraphics`) are concrete
-types that implement the traits.
+> Rust trait examples omitted — see canonical function tables above. Language-specific signatures derive from those tables.
 
 ### TypeScript: module re-exports
 
