@@ -451,6 +451,7 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 - `CullMode`: `none | back | front`
 
 **Opaque handle types** (u32, cross-language safe):
+- `GpuHandle` — a 3D rendering context (one per game instance; surface binding is implementation-defined)
 - `ShaderHandle` — compiled shader program (identified by name; impl provides source)
 - `LayoutHandle` — interned vertex layout descriptor
 - `MeshHandle` — uploaded vertex + index buffer pair
@@ -464,44 +465,46 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 - **Shader creation**: sync ID, async compile. `create_shader` returns immediately; compilation happens in the background. Poll `shader_ready`. Draw calls against an unready shader are silently no-oped — the engine is responsible for not drawing until ready. Supports streaming (shaders not known at init time).
 - **Vertex layout**: interned via `create_vertex_layout(format: str) → LayoutHandle`. Format string parsed once; `LayoutHandle` used everywhere else. Format: attribute letter + component count, e.g. `"p3n3uv2"` = position(3) + normal(3) + uv(2).
 - **Render passes**: explicit `begin_pass`/`end_pass` with `load_op`/`store_op` declared upfront — required for tile-based GPU efficiency on mobile. Implicit `set_render_target` silently assumes load+store, which wastes bandwidth on tile GPUs.
+- **Context handle**: `GpuHandle` is returned by `init_gfx3d()`. What surface or window it binds to is implementation-defined — on browsers it is implicit (e.g. WebGL context on the document canvas); on native targets it is a window handle passed at construction. Callers never see the surface; they hold only the opaque handle.
 
 **Setup tier:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `create_shader` | `(name: str) → ShaderHandle` | Sync ID; async compile in background |
-| `shader_ready` | `(id: ShaderHandle) → bool` | Poll until true before drawing |
-| `get_uniform` | `(shader: ShaderHandle, name: str) → UniformHandle` | Resolve name at setup time; hot-path uses the returned handle |
-| `create_vertex_layout` | `(format: str) → LayoutHandle` | Intern once; use ID everywhere |
-| `create_mesh` | `(layout: LayoutHandle, vertices: float[], indices: int[]) → MeshHandle` | Upload geometry |
-| `update_mesh` | `(id: MeshHandle, vertices: float[]) → void` | Dynamic geometry update |
-| `destroy_mesh` | `(id: MeshHandle) → void` | |
-| `upload_image` | `(img: ImageHandle) → TextureHandle` | Upload a CPU-side image to GPU texture |
-| `create_texture` | `(w: int, h: int, data: int[]) → TextureHandle` | RGBA8 pixels |
-| `destroy_texture` | `(id: TextureHandle) → void` | |
-| `create_render_target` | `(w: int, h: int) → RenderTargetHandle` | |
-| `destroy_render_target` | `(rt: RenderTargetHandle) → void` | |
-| `render_target_texture` | `(id: RenderTargetHandle) → TextureHandle` | Read result as texture |
-| `destroy_shader` | `(shader: ShaderHandle) → void` | |
+| `init_gfx3d` | `() → GpuHandle` | Create a 3D context; surface/window binding is implementation-defined |
+| `create_shader` | `(gpu: GpuHandle, name: str) → ShaderHandle` | Sync ID; async compile in background |
+| `shader_ready` | `(gpu: GpuHandle, id: ShaderHandle) → bool` | Poll until true before drawing |
+| `get_uniform` | `(gpu: GpuHandle, shader: ShaderHandle, name: str) → UniformHandle` | Resolve name at setup time; hot-path uses the returned handle |
+| `create_vertex_layout` | `(gpu: GpuHandle, format: str) → LayoutHandle` | Intern once; use ID everywhere |
+| `create_mesh` | `(gpu: GpuHandle, layout: LayoutHandle, vertices: float[], indices: int[]) → MeshHandle` | Upload geometry |
+| `update_mesh` | `(gpu: GpuHandle, id: MeshHandle, vertices: float[]) → void` | Dynamic geometry update |
+| `destroy_mesh` | `(gpu: GpuHandle, id: MeshHandle) → void` | |
+| `upload_image` | `(gpu: GpuHandle, img: ImageHandle) → TextureHandle` | Upload a CPU-side image to GPU texture |
+| `create_texture` | `(gpu: GpuHandle, w: int, h: int, data: int[]) → TextureHandle` | RGBA8 pixels |
+| `destroy_texture` | `(gpu: GpuHandle, id: TextureHandle) → void` | |
+| `create_render_target` | `(gpu: GpuHandle, w: int, h: int) → RenderTargetHandle` | |
+| `destroy_render_target` | `(gpu: GpuHandle, rt: RenderTargetHandle) → void` | |
+| `render_target_texture` | `(gpu: GpuHandle, id: RenderTargetHandle) → TextureHandle` | Read result as texture |
+| `destroy_shader` | `(gpu: GpuHandle, shader: ShaderHandle) → void` | |
 
 **Hot tier:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `begin_pass` | `(rt: RenderTargetHandle, color_load: LoadOp, color_store: StoreOp, depth_load: LoadOp, depth_store: StoreOp) → void` | |
-| `end_pass` | `() → void` | |
-| `set_uniform_float` | `(uniform: UniformHandle, v: float) → void` | |
-| `set_uniform_vec2` | `(uniform: UniformHandle, x,y: float) → void` | |
-| `set_uniform_vec3` | `(uniform: UniformHandle, x,y,z: float) → void` | |
-| `set_uniform_vec4` | `(uniform: UniformHandle, x,y,z,w: float) → void` | |
-| `set_uniform_mat4` | `(uniform: UniformHandle, m: float[16]) → void` | Column-major |
-| `set_uniform_texture` | `(uniform: UniformHandle, tex: TextureHandle) → void` | |
-| `draw_mesh` | `(mesh: MeshHandle, shader: ShaderHandle, prim: Primitive) → void` | |
-| `set_viewport` | `(x,y,w,h: int) → void` | |
-| `set_depth_test` | `(enabled: bool) → void` | |
-| `set_depth_write` | `(enabled: bool) → void` | |
-| `set_blend` | `(mode: Blend) → void` | |
-| `set_cull` | `(mode: CullMode) → void` | |
+| `begin_pass` | `(gpu: GpuHandle, rt: RenderTargetHandle, color_load: LoadOp, color_store: StoreOp, depth_load: LoadOp, depth_store: StoreOp) → void` | |
+| `end_pass` | `(gpu: GpuHandle) → void` | |
+| `set_uniform_float` | `(gpu: GpuHandle, uniform: UniformHandle, v: float) → void` | |
+| `set_uniform_vec2` | `(gpu: GpuHandle, uniform: UniformHandle, x,y: float) → void` | |
+| `set_uniform_vec3` | `(gpu: GpuHandle, uniform: UniformHandle, x,y,z: float) → void` | |
+| `set_uniform_vec4` | `(gpu: GpuHandle, uniform: UniformHandle, x,y,z,w: float) → void` | |
+| `set_uniform_mat4` | `(gpu: GpuHandle, uniform: UniformHandle, m: float[16]) → void` | Column-major |
+| `set_uniform_texture` | `(gpu: GpuHandle, uniform: UniformHandle, tex: TextureHandle) → void` | |
+| `draw_mesh` | `(gpu: GpuHandle, mesh: MeshHandle, shader: ShaderHandle, prim: Primitive) → void` | |
+| `set_viewport` | `(gpu: GpuHandle, x,y,w,h: int) → void` | |
+| `set_depth_test` | `(gpu: GpuHandle, enabled: bool) → void` | |
+| `set_depth_write` | `(gpu: GpuHandle, enabled: bool) → void` | |
+| `set_blend` | `(gpu: GpuHandle, mode: Blend) → void` | |
+| `set_cull` | `(gpu: GpuHandle, mode: CullMode) → void` | |
 
 #### Audio
 
@@ -594,6 +597,8 @@ Engine-specific audio behaviors (exclusive channels, BGM crossfade, voice steali
 named channels) are shim concerns — implemented by composing the above primitives, not baked
 into the platform interface.
 
+**Non-web backends**: the node graph maps directly to Web Audio. For SDL/cpal/Unity targets, implement with [miniaudio](https://miniaud.io) as the DSP engine and a lightweight graph runner on top. The graph interface is intentionally kept as the canonical surface — expressivity for our own frontends outweighs the porting cost of writing the backend once.
+
 #### Input
 
 **Named constant types**: `DeviceKind`: `keyboard | mouse | touch | gamepad`
@@ -662,7 +667,7 @@ Gamepad buttons surface through the keyboard callbacks with synthetic codes (`"B
 
 `ImageHandle` is an opaque u32. It is defined in a shared types module — not owned by the images concern or the graphics concern. This is what allows `graphics_3d` to accept `ImageHandle` in `upload_image` without importing from the images concern.
 
-Sub-images are views into a parent — no copy. `image_width`/`image_height` on a sub-image return the sub-region dimensions. `destroy_image` on a sub-image releases the view, not the parent.
+Sub-images are views into a parent — no copy. `image_width`/`image_height` on a sub-image return the sub-region dimensions. `destroy_image` on a sub-image releases the view, not the parent. `destroy_image` on a **parent** that still has live sub-images throws — callers must destroy sub-images before the parent.
 
 `format` in `load_image_bytes` is a MIME type string (`"image/png"`, `"image/webp"`, etc.), or `null` to request format sniffing from magic bytes. Use explicit format when known; `null` as an escape hatch for raw blobs with no format information.
 
