@@ -357,7 +357,7 @@ The platform interface is a **cross-language contract** — TypeScript, Rust, C#
 
 #### Graphics (2D)
 
-**Opaque handle types** (u32, defined in shared types module): `CanvasHandle`, `FontHandle`, `PathHandle`
+**Opaque handle types** (u32, defined in shared types module): `CanvasHandle`, `FontHandle`, `PathHandle`, `GradientHandle`
 
 All hot-tier draw operations take an explicit `CanvasHandle` — there is no implicit "active canvas" state. Multiple canvases can be drawn to in the same frame without set/restore ceremony.
 
@@ -371,6 +371,8 @@ Text alignment and baseline are parameters on `draw_text`, not state — they ar
 - `BlendMode`: `normal | additive | multiply | screen | erase`
 - `TextAlign`: `left | center | right`
 - `TextBaseline`: `top | middle | bottom | alphabetic`
+- `LineCap`: `butt | round | square`
+- `LineJoin`: `miter | round | bevel`
 
 Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `none | alpha | additive | premultiplied`.
 
@@ -392,6 +394,10 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `destroy_path` | `(path: PathHandle) → void` | Free path resources |
 | `destroy_canvas` | `(canvas: CanvasHandle) → void` | Free canvas resources |
 | `destroy_font` | `(font: FontHandle) → void` | Free font resources |
+| `create_linear_gradient` | `(x0, y0, x1, y1: float) → GradientHandle` | Linear gradient along the line (x0,y0)→(x1,y1) |
+| `create_radial_gradient` | `(x0, y0, r0, x1, y1, r1: float) → GradientHandle` | Radial gradient from inner circle to outer circle |
+| `gradient_add_stop` | `(gradient: GradientHandle, offset: float, color: int) → void` | Add a color stop; offset is 0..1 |
+| `destroy_gradient` | `(gradient: GradientHandle) → void` | |
 
 **Query (sync):**
 
@@ -399,6 +405,8 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 |----------|-----------|-------|
 | `canvas_width` | `(canvas: CanvasHandle) → int` | |
 | `canvas_height` | `(canvas: CanvasHandle) → int` | |
+| `read_canvas_pixels` | `(canvas: CanvasHandle, x, y, w, h: int) → bytes` | RGBA8 pixel readback; throws if unsupported by backend |
+| `canvas_to_image` | `(canvas: CanvasHandle) → ImageHandle` | Snapshot canvas content into an ImageHandle; the image is a copy (further canvas changes don't affect it) |
 
 **Hot tier — state (all saved/restored with save_state/restore_state):**
 
@@ -412,6 +420,8 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `save_state` | `(canvas: CanvasHandle) → void` | Push transform + clip + effect state |
 | `restore_state` | `(canvas: CanvasHandle) → void` | Pop state |
 | `reset_canvas_state` | `(canvas: CanvasHandle) → void` | Reset transform, clip, and all effect state to defaults; does not clear pixel content |
+| `set_stroke_style` | `(canvas: CanvasHandle, cap: LineCap, join: LineJoin, miter_limit: float) → void` | Stroke cap and join style; miter_limit only applies to `miter` join |
+| `set_dash_pattern` | `(canvas: CanvasHandle, segments: float[], offset: float) → void` | Dash/gap lengths in pixels; empty array = solid; offset shifts the pattern start |
 
 **Hot tier — drawing:**
 
@@ -436,6 +446,7 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `arc` | `(canvas: CanvasHandle, x, y, r, start, end: float, ccw: bool) → void` | |
 | `close_path` | `(canvas: CanvasHandle) → void` | |
 | `fill_path` | `(canvas: CanvasHandle, color: int) → void` | Fill current path |
+| `fill_path_gradient` | `(canvas: CanvasHandle, gradient: GradientHandle) → void` | Fill current path with gradient |
 | `stroke_path` | `(canvas: CanvasHandle, color: int, width: float) → void` | Stroke current path |
 | `clip` | `(canvas: CanvasHandle) → void` | Clip to current path |
 | `begin_text_path` | `(canvas: CanvasHandle, text: str, x, y: float, font: FontHandle, size: float) → void` | Add glyph outlines to current path; then fill/stroke/clip as normal |
@@ -445,6 +456,7 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | Function | Signature | Notes |
 |----------|-----------|-------|
 | `fill_path_handle` | `(canvas: CanvasHandle, path: PathHandle, color: int) → void` | |
+| `fill_path_handle_gradient` | `(canvas: CanvasHandle, path: PathHandle, gradient: GradientHandle) → void` | |
 | `stroke_path_handle` | `(canvas: CanvasHandle, path: PathHandle, color: int, width: float) → void` | |
 | `clip_path_handle` | `(canvas: CanvasHandle, path: PathHandle) → void` | |
 
@@ -679,7 +691,10 @@ Gamepad buttons surface through the keyboard callbacks with synthetic codes (`"B
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `on_text_input` | `(cb: (device: int, text: str) → void) → void` | Fired with composed text (post-IME); separate from key events — use for text entry fields. Contract: `on_key_down`/`on_key_up` and `on_text_input` are independent streams. A text field uses `on_text_input` exclusively; game actions use `on_key_down` exclusively. Never use both for the same purpose. |
+| `on_text_input` | `(cb: (device: int, text: str) → void) → void` | Fired with composed text (post-IME); separate from key events — use for text entry fields. Contract: `on_key_down`/`on_key_up` and `on_text_input` are independent streams. A text field uses `on_text_input` exclusively; game actions use `on_key_down` exclusively. Never use both for the same purpose. `on_composition_*` events provide in-progress IME state for CJK input; `on_text_input` fires on commit. |
+| `on_composition_start` | `(cb: (device: int) → void) → void` | IME composition begun; game should display an in-progress composition area |
+| `on_composition_update` | `(cb: (device: int, text: str) → void) → void` | Composing text changed; `text` is the current uncommitted composition string |
+| `on_composition_end` | `(cb: (device: int, text: str) → void) → void` | Composition committed; `text` is the final string (same text delivered by `on_text_input`) |
 
 #### Images
 
@@ -693,6 +708,7 @@ Sub-images are views into a parent — no copy. `image_width`/`image_height` on 
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
+| `create_image` | `(w, h: int) → ImageHandle` | Create a blank (transparent) writable RGBA8 image |
 | `load_image_url` | `(url: str) → ImageHandle` | Decode image from URL |
 | `load_image_bytes` | `(data: bytes, format: str \| null) → ImageHandle` | Decode from raw bytes; `null` format = sniff |
 | `create_sub_image` | `(parent: ImageHandle, x, y, w, h: int) → ImageHandle` | View into parent; no copy |
@@ -704,6 +720,7 @@ Sub-images are views into a parent — no copy. `image_width`/`image_height` on 
 | `image_width` | `(handle: ImageHandle) → int` | |
 | `image_height` | `(handle: ImageHandle) → int` | |
 | `read_pixels` | `(handle: ImageHandle, x, y, w, h: int) → bytes` | RGBA8; throws if unsupported by backend |
+| `write_pixels` | `(handle: ImageHandle, x, y, w, h: int, data: bytes) → void` | Write RGBA8 pixels into an image; throws if image is a sub-image view or read-only |
 
 **Lifecycle:**
 
