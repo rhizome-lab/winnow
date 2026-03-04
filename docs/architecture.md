@@ -389,7 +389,9 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `path_quadratic_to` | `(path: PathHandle, cpx, cpy, x, y: float) → void` | Quadratic bezier |
 | `path_arc` | `(path: PathHandle, x, y, r, start, end: float, ccw: bool) → void` | |
 | `path_close` | `(path: PathHandle) → void` | |
-| `destroy_path` | `(path: PathHandle) → void` | |
+| `destroy_path` | `(path: PathHandle) → void` | Free path resources |
+| `destroy_canvas` | `(canvas: CanvasHandle) → void` | Free canvas resources |
+| `destroy_font` | `(font: FontHandle) → void` | Free font resources |
 
 **Hot tier — state (all saved/restored with save_state/restore_state):**
 
@@ -398,7 +400,7 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `set_transform` | `(canvas: CanvasHandle, a,b,c,d,e,f: float) → void` | Set CTM (6-element affine) |
 | `set_alpha` | `(canvas: CanvasHandle, alpha: float) → void` | Global opacity multiplier (0..1) |
 | `set_blend_mode` | `(canvas: CanvasHandle, mode: BlendMode) → void` | |
-| `set_color_transform` | `(canvas: CanvasHandle, matrix: float[20]) → void` | 4×5 RGBA multiply+add matrix |
+| `set_color_transform` | `(canvas: CanvasHandle, matrix: float[20]) → void` | 4×5 RGBA multiply+add matrix. Implementation note: Canvas 2D has no native color transform. Implement via an LRU cache of color-transformed images (see reference implementation in `~/git/bounty`). |
 | `set_image_smoothing` | `(canvas: CanvasHandle, enabled: bool) → void` | false = nearest-neighbor (pixel art) |
 | `save_state` | `(canvas: CanvasHandle) → void` | Push transform + clip + effect state |
 | `restore_state` | `(canvas: CanvasHandle) → void` | Pop state |
@@ -410,8 +412,8 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `fill_rect` | `(canvas: CanvasHandle, x,y,w,h: float, color: int) → void` | RGBA `0xRRGGBBAA` |
 | `draw_image` | `(canvas: CanvasHandle, img: ImageHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Source and dest rects |
 | `draw_canvas` | `(dst: CanvasHandle, src: CanvasHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Composite offscreen canvas onto another |
-| `draw_text` | `(canvas: CanvasHandle, text: str, x,y: float, font: FontHandle, size: float, align: TextAlign, baseline: TextBaseline) → void` | |
-| `measure_text` | `(font: FontHandle, text: str, size: float) → float` | Text width; no canvas needed |
+| `draw_text` | `(canvas: CanvasHandle, text: str, x,y: float, font: FontHandle, size: float, color: int, align: TextAlign, baseline: TextBaseline) → void` | |
+| `measure_text` | `(text: str, font: FontHandle, size: float) → float` | Text width; no canvas needed |
 
 **Hot tier — one-off paths (canvas-local, not reusable):**
 
@@ -449,47 +451,52 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 - `CullMode`: `none | back | front`
 
 **Opaque handle types** (u32, cross-language safe):
-- `ShaderId` — compiled shader program (identified by name; impl provides source)
-- `LayoutId` — interned vertex layout descriptor
-- `MeshId` — uploaded vertex + index buffer pair
-- `TextureId` — GPU texture
-- `RenderTargetId` — framebuffer / render texture (0 = main framebuffer)
+- `ShaderHandle` — compiled shader program (identified by name; impl provides source)
+- `LayoutHandle` — interned vertex layout descriptor
+- `MeshHandle` — uploaded vertex + index buffer pair
+- `TextureHandle` — GPU texture
+- `RenderTargetHandle` — framebuffer / render texture (0 = main framebuffer)
+- `UniformHandle` — resolved uniform location (name resolved at setup time; used on hot path)
 
 **Design decisions:**
 - **Uniforms**: named string API at the call site; implementation resolves name→(block, offset) at shader compile time via reflection and batches into a UBO. Callers never see binding indices.
 - **Uniform lifetime**: persistent per shader object — set once, reused across draws until changed.
 - **Shader creation**: sync ID, async compile. `create_shader` returns immediately; compilation happens in the background. Poll `shader_ready`. Draw calls against an unready shader are silently no-oped — the engine is responsible for not drawing until ready. Supports streaming (shaders not known at init time).
-- **Vertex layout**: interned via `create_vertex_layout(format: str) → LayoutId`. Format string parsed once; `LayoutId` used everywhere else. Format: attribute letter + component count, e.g. `"p3n3uv2"` = position(3) + normal(3) + uv(2).
+- **Vertex layout**: interned via `create_vertex_layout(format: str) → LayoutHandle`. Format string parsed once; `LayoutHandle` used everywhere else. Format: attribute letter + component count, e.g. `"p3n3uv2"` = position(3) + normal(3) + uv(2).
 - **Render passes**: explicit `begin_pass`/`end_pass` with `load_op`/`store_op` declared upfront — required for tile-based GPU efficiency on mobile. Implicit `set_render_target` silently assumes load+store, which wastes bandwidth on tile GPUs.
 
 **Setup tier:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `create_shader` | `(name: str) → ShaderId` | Sync ID; async compile in background |
-| `shader_ready` | `(id: ShaderId) → bool` | Poll until true before drawing |
-| `create_vertex_layout` | `(format: str) → LayoutId` | Intern once; use ID everywhere |
-| `create_mesh` | `(layout: LayoutId, vertices: float[], indices: int[]) → MeshId` | Upload geometry |
-| `update_mesh` | `(id: MeshId, vertices: float[]) → void` | Dynamic geometry update |
-| `destroy_mesh` | `(id: MeshId) → void` | |
-| `create_texture` | `(w: int, h: int, data: int[]) → TextureId` | RGBA8 pixels |
-| `destroy_texture` | `(id: TextureId) → void` | |
-| `create_render_target` | `(w: int, h: int) → RenderTargetId` | |
-| `render_target_texture` | `(id: RenderTargetId) → TextureId` | Read result as texture |
+| `create_shader` | `(name: str) → ShaderHandle` | Sync ID; async compile in background |
+| `shader_ready` | `(id: ShaderHandle) → bool` | Poll until true before drawing |
+| `get_uniform` | `(shader: ShaderHandle, name: str) → UniformHandle` | Resolve name at setup time; hot-path uses the returned handle |
+| `create_vertex_layout` | `(format: str) → LayoutHandle` | Intern once; use ID everywhere |
+| `create_mesh` | `(layout: LayoutHandle, vertices: float[], indices: int[]) → MeshHandle` | Upload geometry |
+| `update_mesh` | `(id: MeshHandle, vertices: float[]) → void` | Dynamic geometry update |
+| `destroy_mesh` | `(id: MeshHandle) → void` | |
+| `upload_image` | `(img: ImageHandle) → TextureHandle` | Upload a CPU-side image to GPU texture |
+| `create_texture` | `(w: int, h: int, data: int[]) → TextureHandle` | RGBA8 pixels |
+| `destroy_texture` | `(id: TextureHandle) → void` | |
+| `create_render_target` | `(w: int, h: int) → RenderTargetHandle` | |
+| `destroy_render_target` | `(rt: RenderTargetHandle) → void` | |
+| `render_target_texture` | `(id: RenderTargetHandle) → TextureHandle` | Read result as texture |
+| `destroy_shader` | `(shader: ShaderHandle) → void` | |
 
 **Hot tier:**
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `begin_pass` | `(color: RenderTargetId, depth: RenderTargetId, cr,cg,cb,ca: float, clear_depth: float, load_op: LoadOp, store_op: StoreOp) → void` | |
+| `begin_pass` | `(rt: RenderTargetHandle, color_load: LoadOp, color_store: StoreOp, depth_load: LoadOp, depth_store: StoreOp) → void` | |
 | `end_pass` | `() → void` | |
-| `set_uniform_float` | `(shader: ShaderId, name: str, v: float) → void` | |
-| `set_uniform_vec2` | `(shader: ShaderId, name: str, x,y: float) → void` | |
-| `set_uniform_vec3` | `(shader: ShaderId, name: str, x,y,z: float) → void` | |
-| `set_uniform_vec4` | `(shader: ShaderId, name: str, x,y,z,w: float) → void` | |
-| `set_uniform_mat4` | `(shader: ShaderId, name: str, m: float[16]) → void` | Column-major |
-| `set_uniform_texture` | `(shader: ShaderId, name: str, tex: TextureId) → void` | |
-| `draw_mesh` | `(mesh: MeshId, shader: ShaderId, prim: Primitive) → void` | |
+| `set_uniform_float` | `(uniform: UniformHandle, v: float) → void` | |
+| `set_uniform_vec2` | `(uniform: UniformHandle, x,y: float) → void` | |
+| `set_uniform_vec3` | `(uniform: UniformHandle, x,y,z: float) → void` | |
+| `set_uniform_vec4` | `(uniform: UniformHandle, x,y,z,w: float) → void` | |
+| `set_uniform_mat4` | `(uniform: UniformHandle, m: float[16]) → void` | Column-major |
+| `set_uniform_texture` | `(uniform: UniformHandle, tex: TextureHandle) → void` | |
+| `draw_mesh` | `(mesh: MeshHandle, shader: ShaderHandle, prim: Primitive) → void` | |
 | `set_viewport` | `(x,y,w,h: int) → void` | |
 | `set_depth_test` | `(enabled: bool) → void` | |
 | `set_depth_write` | `(enabled: bool) → void` | |
@@ -501,7 +508,7 @@ A **separate platform concern** from `graphics` (2D). A 2D-only engine pays noth
 The audio platform is a **node graph**. The signal path is:
 
 ```
-[Buffer] → [Voice (gain+pan)] → [NodeGraph: user DAG] → [Master (node 0)]
+[BufferHandle] → [Voice (gain+pan)] → [NodeGraph: user DAG] → [Master (node 0)]
 ```
 
 Voices are per-play instances; the node graph is a user-defined DAG of DSP nodes
@@ -509,10 +516,10 @@ established at init time. Playing a voice routes its output to a designated sink
 Fixed topologies (Buffer→Bus→Master) are special cases of the graph, not the interface.
 
 **Opaque handle types** (u32, cross-language safe):
-- `BufferId` — decoded audio data (`load_audio` assigns IDs = SOND index)
-- `NodeId` — a DSP node in the graph (0 = master output, always valid)
-- `VoiceId` — a playing voice instance (0 = invalid). VoiceIds are monotonically increasing and never reused. Any operation on an invalid or stopped VoiceId is a silent no-op.
-- `GroupId` — a voice group for bulk operations
+- `BufferHandle` — decoded audio data (`load_audio` assigns IDs = SOND index)
+- `NodeHandle` — a DSP node in the graph (0 = master output, always valid)
+- `VoiceHandle` — a playing voice instance (0 = invalid). VoiceHandles are monotonically increasing and never reused. Any operation on an invalid or stopped VoiceHandle is a silent no-op.
+- `GroupHandle` — a voice group for bulk operations
 
 **Node kinds**: `gain | pan | low_pass | high_pass | band_pass | notch | compressor | reverb | delay | mixer`
 
@@ -540,46 +547,48 @@ Each node kind accepts only its own params; others throw at runtime.
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds; assigns BufferIds |
+| `load_audio` | `(sounds: [{name,url}]) → void` (async) | Decode all sounds; assigns BufferHandles |
 | `audio_ready` | `() → bool` | True when AudioContext is running and playback is possible; poll before first play call |
-| `create_node` | `(kind: NodeKind) → NodeId` | Create a DSP node |
-| `create_voice_group` | `() → GroupId` | Create a group for bulk voice operations |
-| `connect` | `(from: NodeId, to: NodeId) → void` | Add DAG edge: from.output → to.input |
-| `disconnect` | `(from: NodeId, to: NodeId) → void` | Remove edge |
-| `set_node_param` | `(node: NodeId, kind: ParamKind, value: float, fade_ms: float) → void` | Set/animate a node param |
-| `get_node_param` | `(node: NodeId, kind: ParamKind) → float` | Read current param value |
+| `create_node` | `(kind: NodeKind) → NodeHandle` | Create a DSP node |
+| `create_voice_group` | `() → GroupHandle` | Create a group for bulk voice operations |
+| `connect` | `(from: NodeHandle, to: NodeHandle) → void` | Add DAG edge: from.output → to.input |
+| `disconnect` | `(from: NodeHandle, to: NodeHandle) → void` | Remove edge |
+| `set_node_param` | `(node: NodeHandle, kind: ParamKind, value: float, fade_ms: float) → void` | Set/animate a node param |
+| `get_node_param` | `(node: NodeHandle, kind: ParamKind) → float` | Read current param value |
+| `destroy_node` | `(node: NodeHandle) → void` | |
+| `destroy_group` | `(group: GroupHandle) → void` | |
 
 **Hot tier** (per-frame voice control, all args are primitives — zero object allocation at call site):
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
-| `play` | `(buffer: BufferId, sink: NodeId, loop: bool, gain: float, pitch: float, pan: float, offset: float) → VoiceId` | Play, route through sink |
-| `stop` | `(voice: VoiceId) → void` | Stop and discard |
+| `play` | `(buffer: BufferHandle, sink: NodeHandle, loop: bool, gain: float, pitch: float, pan: float, offset: float) → VoiceHandle` | Play, route through sink |
+| `stop` | `(voice: VoiceHandle) → void` | Stop and discard |
 | `stop_all` | `() → void` | Stop all voices |
-| `pause` | `(voice: VoiceId) → void` | Pause, remember position |
-| `resume` | `(voice: VoiceId) → void` | Resume from pause position |
+| `pause` | `(voice: VoiceHandle) → void` | Pause, remember position |
+| `resume` | `(voice: VoiceHandle) → void` | Resume from pause position |
 | `resume_all` | `() → void` | Resume all paused voices |
-| `is_playing` | `(voice: VoiceId) → bool` | True if playing (not paused, not ended) |
-| `is_paused` | `(voice: VoiceId) → bool` | |
-| `set_voice_gain` | `(voice: VoiceId, gain: float, fade_ms: float) → void` | Per-voice gain |
-| `get_voice_gain` | `(voice: VoiceId) → float` | |
-| `set_voice_pitch` | `(voice: VoiceId, pitch: float, fade_ms: float) → void` | Playback rate |
-| `get_voice_pitch` | `(voice: VoiceId) → float` | |
-| `set_voice_pan` | `(voice: VoiceId, pan: float) → void` | Stereo pan |
-| `get_voice_pan` | `(voice: VoiceId) → float` | |
+| `is_playing` | `(voice: VoiceHandle) → bool` | True if playing (not paused, not ended) |
+| `is_paused` | `(voice: VoiceHandle) → bool` | |
+| `set_voice_gain` | `(voice: VoiceHandle, gain: float, fade_ms: float) → void` | Per-voice gain |
+| `get_voice_gain` | `(voice: VoiceHandle) → float` | |
+| `set_voice_pitch` | `(voice: VoiceHandle, pitch: float, fade_ms: float) → void` | Playback rate |
+| `get_voice_pitch` | `(voice: VoiceHandle) → float` | |
+| `set_voice_pan` | `(voice: VoiceHandle, pan: float) → void` | Stereo pan |
+| `get_voice_pan` | `(voice: VoiceHandle) → float` | |
 | `set_master_gain` | `(gain: float) → void` | Shorthand for set_node_param(0, gain) |
-| `get_position` | `(voice: VoiceId) → float` | Playback position in seconds |
-| `set_position` | `(voice: VoiceId, pos: float) → void` | Seek |
-| `sound_length` | `(buffer: BufferId) → float` | Duration in seconds |
-| `stop_node` | `(node: NodeId) → void` | Stop all voices routed to node |
-| `pause_node` | `(node: NodeId) → void` | Pause all voices routed to node |
-| `resume_node` | `(node: NodeId) → void` | Resume all paused voices routed to node |
-| `add_to_group` | `(group: GroupId, voice: VoiceId) → void` | Add voice to group |
-| `remove_from_group` | `(group: GroupId, voice: VoiceId) → void` | Remove voice from group |
-| `stop_group` | `(group: GroupId) → void` | Stop all voices in group |
-| `pause_group` | `(group: GroupId) → void` | Pause all voices in group |
-| `resume_group` | `(group: GroupId) → void` | Resume all paused voices in group |
-| `set_group_gain` | `(group: GroupId, gain: float, fade_ms: float) → void` | Set gain on all voices in group |
+| `get_position` | `(voice: VoiceHandle) → float` | Playback position in seconds |
+| `set_position` | `(voice: VoiceHandle, pos: float) → void` | Seek |
+| `buffer_duration` | `(buffer: BufferHandle) → float` | Duration in seconds |
+| `stop_node` | `(node: NodeHandle) → void` | Stop all voices routed to node |
+| `pause_node` | `(node: NodeHandle) → void` | Pause all voices routed to node |
+| `resume_node` | `(node: NodeHandle) → void` | Resume all paused voices routed to node |
+| `add_to_group` | `(group: GroupHandle, voice: VoiceHandle) → void` | Add voice to group |
+| `remove_from_group` | `(group: GroupHandle, voice: VoiceHandle) → void` | Remove voice from group |
+| `stop_group` | `(group: GroupHandle) → void` | Stop all voices in group |
+| `pause_group` | `(group: GroupHandle) → void` | Pause all voices in group |
+| `resume_group` | `(group: GroupHandle) → void` | Resume all paused voices in group |
+| `set_group_gain` | `(group: GroupHandle, gain: float, fade_ms: float) → void` | Set gain on all voices in group |
 
 Engine-specific audio behaviors (exclusive channels, BGM crossfade, voice stealing by priority,
 named channels) are shim concerns — implemented by composing the above primitives, not baked
@@ -730,19 +739,20 @@ trait Graphics {
 }
 
 trait Audio {
-    fn create_node(&mut self, kind: NodeKind) -> NodeId;
-    fn connect(&mut self, from: NodeId, to: NodeId);
-    fn set_node_param(&mut self, node: NodeId, kind: ParamKind, value: f32, fade_ms: f32);
-    fn play(&mut self, params: PlayParams) -> VoiceId;  // struct avoids 8-arg limit
-    fn stop(&mut self, voice: VoiceId);
-    fn set_voice_gain(&mut self, voice: VoiceId, gain: f32, fade_ms: f32);
+    fn create_node(&mut self, kind: NodeKind) -> NodeHandle;
+    fn connect(&mut self, from: NodeHandle, to: NodeHandle);
+    fn set_node_param(&mut self, node: NodeHandle, kind: ParamKind, value: f32, fade_ms: f32);
+    fn play(&mut self, params: PlayParams) -> VoiceHandle;  // struct avoids 8-arg limit
+    fn stop(&mut self, voice: VoiceHandle);
+    fn set_voice_gain(&mut self, voice: VoiceHandle, gain: f32, fade_ms: f32);
     // ...
 }
 
-trait Persistence {
-    fn save(&mut self, key: &str, data: &str);
-    fn load(&self, key: &str) -> Option<String>;
-    fn remove(&mut self, key: &str);
+trait PersistenceBackend {
+    async fn store(&self, key: &str, value: &[u8]) -> Result<()>;
+    async fn fetch(&self, key: &str) -> Result<Option<Vec<u8>>>;
+    async fn remove(&self, key: &str) -> Result<()>;
+    async fn list(&self, prefix: &str) -> Result<Vec<String>>;
 }
 ```
 
