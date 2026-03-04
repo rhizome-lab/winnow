@@ -35,10 +35,11 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 
 **Design phase complete** (2026-03-04 through 2026-03-04 follow-up). Canonical interface for all concerns is now in `architecture.md`: Timing, Input, Persistence, Images, Graphics 2D, Graphics 3D, Audio, Window, Clipboard, Network. Three audit rounds (consistency, gaps, devil's advocate × 2) applied.
 
-**Remaining work: implementation** — Flash and GML runtimes still expose the old per-engine APIs. Each must be updated to match the canonical interface.
+**Implementation complete** (2026-03-04). Both runtimes updated:
+- GML: all six platform concerns rewritten to canonical API; shims updated (requestFrame, per-sound loadAudio, bufferDuration, codeToGmlKeyCode)
+- Flash: all six platform concern modules added to `runtime/flash/ts/shared/platform/`; audio aligned (bufferDuration, onVoiceEnd, groups, lazy init); shims converted to classes in `FlashShims` container; `initFlash(canvas)` replaces hardcoded `document.getElementById` at import time
 
-- [ ] **Update Flash runtime** (`runtime/flash/ts/`) — replace diverged platform implementations with canonical interface
-- [ ] **Update GML runtime** (`runtime/gamemaker/ts/`) — replace diverged platform implementations with canonical interface
+- [ ] **Thread FlashShims through Flash emitter** — `initFlash()` sets module-level singleton live bindings as backward compat, but emitted Flash classes should receive a `FlashShims` parameter rather than importing singletons. Requires Flash emitter change in `crates/backends/reincarnate-backend-typescript/` (Flash emit path). See `runtime/flash/ts/index.ts` TODO comment.
 
 ---
 
