@@ -381,6 +381,8 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 | `init_canvas` | `(id: str) → CanvasHandle` | Bind to existing canvas element by ID |
 | `create_canvas` | `(w, h: int) → CanvasHandle` | Create offscreen canvas |
 | `resize_canvas` | `(canvas: CanvasHandle, w, h: int) → void` | |
+| `canvas_width` | `(canvas: CanvasHandle) → int` | Current canvas width in pixels |
+| `canvas_height` | `(canvas: CanvasHandle) → int` | Current canvas height in pixels |
 | `load_font` | `(url: str) → FontHandle` (async) | Load and register a font |
 | `create_path` | `() → PathHandle` | Begin recording a reusable path |
 | `path_move_to` | `(path: PathHandle, x, y: float) → void` | |
@@ -409,6 +411,7 @@ Note: Graphics 3D uses `Blend` (not `BlendMode`) since the valid set differs: `n
 
 | Function | Signature | Notes |
 |----------|-----------|-------|
+| `clear_canvas` | `(canvas: CanvasHandle, color: int) → void` | Fill entire canvas with color; resets clip |
 | `fill_rect` | `(canvas: CanvasHandle, x,y,w,h: float, color: int) → void` | RGBA `0xRRGGBBAA` |
 | `draw_image` | `(canvas: CanvasHandle, img: ImageHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Source and dest rects |
 | `draw_canvas` | `(dst: CanvasHandle, src: CanvasHandle, sx,sy,sw,sh, dx,dy,dw,dh: float) → void` | Composite offscreen canvas onto another |
@@ -573,6 +576,7 @@ Each node kind accepts only its own params; others throw at runtime.
 | `resume_all` | `() → void` | Resume all paused voices |
 | `is_playing` | `(voice: VoiceHandle) → bool` | True if playing (not paused, not ended) |
 | `is_paused` | `(voice: VoiceHandle) → bool` | |
+| `on_voice_end` | `(voice: VoiceHandle, cb: () → void) → void` | Register a one-shot callback fired when the voice finishes or is stopped |
 | `set_voice_gain` | `(voice: VoiceHandle, gain: float, fade_ms: float) → void` | Per-voice gain |
 | `get_voice_gain` | `(voice: VoiceHandle) → float` | |
 | `set_voice_pitch` | `(voice: VoiceHandle, pitch: float, fade_ms: float) → void` | Playback rate |
@@ -601,7 +605,9 @@ into the platform interface.
 
 #### Input
 
-**Named constant types**: `DeviceKind`: `keyboard | mouse | touch | gamepad`
+**Named constant types**:
+- `DeviceKind`: `keyboard | mouse | touch | gamepad`
+- `CursorShape`: `default | pointer | text | crosshair | move | resize_ns | resize_ew | none`
 
 Every input source carries a `device: int` ID. Device 0 is the primary/default for each kind. Multiple devices of the same kind (two keyboards, two mice, split controllers) are distinguished by ID. Use `devices(kind)` to enumerate on init; `on_device_connect`/`on_device_disconnect` handle changes after init.
 
@@ -662,6 +668,25 @@ Gamepad buttons surface through the keyboard callbacks with synthetic codes (`"B
 | Function | Signature | Notes |
 |----------|-----------|-------|
 | `device_axis` | `(device: int, axis: int) → float` | Analog axis value (-1..1); buttons use keyboard callbacks |
+
+**Text input:**
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `on_text_input` | `(cb: (text: str) → void) → void` | Fired with composed text (post-IME); separate from key events — use for text entry fields |
+
+**Window focus and visibility:**
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `on_focus_change` | `(cb: (focused: bool) → void) → void` | Fired when the game window gains or loses focus |
+| `on_visibility_change` | `(cb: (visible: bool) → void) → void` | Fired when the page/tab becomes hidden or visible; use to pause the game loop |
+
+**Cursor:**
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `set_cursor` | `(shape: CursorShape) → void` | Set the OS cursor appearance; `none` hides the cursor |
 
 #### Images
 
@@ -730,6 +755,36 @@ Handles are typed opaque u32s — distinct types prevent mixing delayed/recurrin
 | `cancel_frame` | `(handle: FrameHandle) → void` | |
 | `current_time_ms` | `() → float` | Monotonic clock — for game timing, delta computation |
 | `current_wall_time_ms` | `() → float` | Wall clock — for save file timestamps |
+
+#### Window
+
+Window and display management. Fullscreen state is async on browsers (requires user gesture); poll `is_fullscreen` or use the callback.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `request_fullscreen` | `() → void` | Request fullscreen; may be deferred until next user gesture |
+| `exit_fullscreen` | `() → void` | |
+| `is_fullscreen` | `() → bool` | |
+| `on_fullscreen_change` | `(cb: (fullscreen: bool) → void) → void` | Fired when fullscreen state changes |
+| `window_width` | `() → int` | Current window/viewport width in pixels |
+| `window_height` | `() → int` | Current window/viewport height in pixels |
+
+#### Clipboard
+
+Text-only clipboard access. `read_clipboard` is async and may require a user permission grant on browsers.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `read_clipboard` | `() → str` (async) | Read current clipboard text; throws if permission denied |
+| `write_clipboard` | `(text: str) → void` | Write text to clipboard |
+
+#### Network
+
+Minimal HTTP client. Sufficient for leaderboards, analytics, and asset streaming. More complex patterns (WebSockets, SSE) are composed above this layer.
+
+| Function | Signature | Notes |
+|----------|-----------|-------|
+| `fetch_url` | `(url: str, method: str, headers: {str: str}, body: bytes \| null) → bytes` (async) | HTTP request; throws on network error or non-2xx status |
 
 ### Rust: generic traits
 
