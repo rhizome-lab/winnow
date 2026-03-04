@@ -6,7 +6,7 @@ use reincarnate_core::error::CoreError;
 use reincarnate_core::project::RuntimeConfig;
 
 /// All known generic system names that the runtime provides.
-pub const SYSTEM_NAMES: &[&str] = &["renderer", "audio", "input", "save", "ui"];
+pub const SYSTEM_NAMES: &[&str] = &["renderer", "audio", "input", "save", "ui", "timing"];
 
 /// Recursively copy `src_dir` into `dst_dir`, preserving directory structure.
 fn copy_dir_recursive(src_dir: &Path, dst_dir: &Path) -> Result<(), CoreError> {

@@ -11,6 +11,7 @@ use reincarnate_core::ir::{CastKind, Constant, Type, ValueId};
 
 use crate::emit::{ClassRegistry, RefSets};
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
+use crate::runtime::SYSTEM_NAMES;
 
 // ---------------------------------------------------------------------------
 // Flash-specific rewrite context
@@ -649,16 +650,17 @@ fn rewrite_stmt(stmt: JsStmt, ctx: &FlashRewriteCtx) -> Option<JsStmt> {
         ..
     }) = stmt
     {
-        // constructSuper → super() or skip
+        // constructSuper → super(_shims, ...args) or skip
         if system == "Flash.Class" && method == "constructSuper" {
             if ctx.suppress_super {
                 return None;
             }
             let rewritten_args = rewrite_exprs(args.clone(), ctx);
-            // Skip first arg (this), rest are constructor args
-            return Some(JsStmt::Expr(JsExpr::SuperCall(
-                rewritten_args.into_iter().skip(1).collect(),
-            )));
+            // Skip first arg (this); prepend _shims so derived-class constructors
+            // thread the shims to their parent.
+            let mut super_args = vec![JsExpr::Var("_shims".to_string())];
+            super_args.extend(rewritten_args.into_iter().skip(1));
+            return Some(JsStmt::Expr(JsExpr::SuperCall(super_args)));
         }
 
         // throw(x) → throw x;
@@ -1029,13 +1031,36 @@ fn rewrite_system_call(
     args: &[JsExpr],
     ctx: &FlashRewriteCtx,
 ) -> Option<JsExpr> {
-    // constructSuper → super() or void 0
+    // Generic shim system calls → this._shims.{system}.{method}(args).
+    // Only applies in instance context (has_self); free/static functions fall
+    // through to the SystemCall fallback (they don't use generic shims).
+    if SYSTEM_NAMES.contains(&system) && ctx.has_self {
+        let rewritten_args = rewrite_exprs(args.to_vec(), ctx);
+        return Some(JsExpr::Call {
+            callee: Box::new(JsExpr::Field {
+                object: Box::new(JsExpr::Field {
+                    object: Box::new(JsExpr::Field {
+                        object: Box::new(JsExpr::This),
+                        field: "_shims".to_string(),
+                    }),
+                    field: system.to_string(),
+                }),
+                field: method.to_string(),
+            }),
+            args: rewritten_args,
+        });
+    }
+
+    // constructSuper → super(_shims, ...args) or void 0
     if system == "Flash.Class" && method == "constructSuper" {
         if ctx.suppress_super {
             return Some(JsExpr::Literal(Constant::Null));
         }
-        let rewritten = rewrite_exprs(args.iter().skip(1).cloned().collect(), ctx);
-        return Some(JsExpr::SuperCall(rewritten));
+        // Inject _shims as first super() arg so derived-class constructors
+        // thread the shims to their parent. Skip args[0] which is `this`.
+        let mut super_args = vec![JsExpr::Var("_shims".to_string())];
+        super_args.extend(rewrite_exprs(args.iter().skip(1).cloned().collect(), ctx));
+        return Some(JsExpr::SuperCall(super_args));
     }
 
     // newFunction → inline arrow function (or this.methodRef fallback)
@@ -1073,7 +1098,7 @@ fn rewrite_system_call(
         return Some(JsExpr::Var("Array".to_string()));
     }
 
-    // construct → new Ctor(args)  (but `new Object()` → `{}`)
+    // construct → new Ctor(this._shims, args)  (but `new Object()` → `{}`)
     if system == "Flash.Object" && method == "construct" && !args.is_empty() {
         let callee = rewrite_expr(args[0].clone(), ctx);
         let rest = rewrite_exprs(args[1..].to_vec(), ctx);
@@ -1081,9 +1106,16 @@ fn rewrite_system_call(
         if rest.is_empty() && matches!(&callee, JsExpr::Var(name) if name == "Object") {
             return Some(JsExpr::ObjectInit(Vec::new()));
         }
+        // Inject this._shims as first arg so the new instance inherits the
+        // current game's shim set.
+        let mut new_args = vec![JsExpr::Field {
+            object: Box::new(JsExpr::This),
+            field: "_shims".to_string(),
+        }];
+        new_args.extend(rest);
         return Some(JsExpr::New {
             callee: Box::new(callee),
-            args: rest,
+            args: new_args,
         });
     }
 
@@ -1823,7 +1855,11 @@ mod tests {
         let result = rewrite_system_call("Flash.Class", "constructSuper", &args, &ctx);
         assert!(result.is_some());
         let expr = result.unwrap();
-        assert!(matches!(&expr, JsExpr::SuperCall(args) if args.len() == 1));
+        // First arg is _shims (injected), second is the original arg (42).
+        assert!(matches!(&expr, JsExpr::SuperCall(a) if a.len() == 2));
+        if let JsExpr::SuperCall(a) = &expr {
+            assert!(matches!(&a[0], JsExpr::Var(n) if n == "_shims"));
+        }
     }
 
     #[test]
@@ -1845,9 +1881,14 @@ mod tests {
         let result = rewrite_system_call("Flash.Object", "construct", &args, &ctx);
         assert!(result.is_some());
         let expr = result.unwrap();
+        // First arg is this._shims (injected), second is the original arg (1).
         assert!(matches!(&expr, JsExpr::New { callee, args }
             if matches!(callee.as_ref(), JsExpr::Var(n) if n == "MyClass")
-            && args.len() == 1));
+            && args.len() == 2));
+        if let JsExpr::New { args, .. } = &expr {
+            assert!(matches!(&args[0], JsExpr::Field { object, field }
+                if matches!(object.as_ref(), JsExpr::This) && field == "_shims"));
+        }
     }
 
     #[test]
@@ -1856,6 +1897,41 @@ mod tests {
         let args = vec![JsExpr::Var("Object".into())];
         let result = rewrite_system_call("Flash.Object", "construct", &args, &ctx);
         assert!(matches!(result, Some(JsExpr::ObjectInit(pairs)) if pairs.is_empty()));
+    }
+
+    #[test]
+    fn generic_shim_rewrites_to_this_shims_in_instance_context() {
+        let mut ctx = empty_ctx();
+        ctx.has_self = true;
+        let args = vec![JsExpr::Literal(Constant::Int(0)), JsExpr::Literal(Constant::Int(0))];
+        let result = rewrite_system_call("renderer", "clear", &args, &ctx);
+        assert!(result.is_some(), "should rewrite generic shim system call");
+        // Result should be a Call expression whose callee accesses this._shims.renderer.clear
+        if let Some(JsExpr::Call { callee, args: call_args }) = result {
+            assert_eq!(call_args.len(), 2);
+            // callee = this._shims.renderer.clear
+            assert!(matches!(callee.as_ref(),
+                JsExpr::Field { object, field }
+                if field == "clear" && matches!(object.as_ref(),
+                    JsExpr::Field { object: o2, field: f2 }
+                    if f2 == "renderer" && matches!(o2.as_ref(),
+                        JsExpr::Field { object: o3, field: f3 }
+                        if f3 == "_shims" && matches!(o3.as_ref(), JsExpr::This)
+                    )
+                )
+            ), "callee should be this._shims.renderer.clear");
+        } else {
+            panic!("expected Call expression");
+        }
+    }
+
+    #[test]
+    fn generic_shim_not_rewritten_without_self() {
+        let ctx = empty_ctx(); // has_self defaults to false in empty_ctx
+        let args = vec![];
+        let result = rewrite_system_call("renderer", "clear", &args, &ctx);
+        // Should fall through (None) when not in instance context
+        assert!(result.is_none(), "should not rewrite shim call without self");
     }
 
     #[test]
@@ -2304,14 +2380,15 @@ mod tests {
     }
 
     #[test]
-    fn construct_super_with_only_this_produces_empty_super() {
-        // constructSuper(this) with no additional args → super()
+    fn construct_super_with_only_this_produces_shims_only_super() {
+        // constructSuper(this) with no additional args → super(_shims)
         let ctx = empty_ctx();
         let args = vec![JsExpr::This];
         let result = rewrite_system_call("Flash.Class", "constructSuper", &args, &ctx);
         assert!(result.is_some());
-        if let Some(JsExpr::SuperCall(args)) = result {
-            assert_eq!(args.len(), 0, "super() should have no args");
+        if let Some(JsExpr::SuperCall(a)) = result {
+            assert_eq!(a.len(), 1, "super() should have exactly _shims arg");
+            assert!(matches!(&a[0], JsExpr::Var(n) if n == "_shims"), "first arg should be _shims");
         } else {
             panic!("expected SuperCall");
         }

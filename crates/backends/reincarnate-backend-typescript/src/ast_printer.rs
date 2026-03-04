@@ -134,12 +134,18 @@ pub fn print_function(js: &JsFunction, preamble: Option<&str>, out: &mut String)
 }
 
 /// Print a class method.
+///
+/// `extra_first_param` is prepended to the constructor parameter list. This is
+/// used by the Flash emitter to inject `_shims: FlashShims` (or
+/// `readonly _shims: FlashShims` for base classes) as the first constructor
+/// parameter so each game instance carries its own shim set.
 pub fn print_class_method(
     js: &JsFunction,
     raw_name: &str,
     skip_self: bool,
     preamble: Option<&str>,
     is_override: bool,
+    extra_first_param: Option<&str>,
     out: &mut String,
 ) {
     let (params, param_defaults) = if skip_self && !js.params.is_empty() {
@@ -166,7 +172,12 @@ pub fn print_class_method(
     let ov = if is_override { "override " } else { "" };
     match js.method_kind {
         MethodKind::Constructor => {
-            let _ = writeln!(out, "  constructor({params_str}) {{");
+            if let Some(extra) = extra_first_param {
+                let sep = if params_str.is_empty() { "" } else { ", " };
+                let _ = writeln!(out, "  constructor({extra}{sep}{params_str}) {{");
+            } else {
+                let _ = writeln!(out, "  constructor({params_str}) {{");
+            }
         }
         MethodKind::Getter => {
             let name = raw_name.strip_prefix("get_").unwrap_or(raw_name);

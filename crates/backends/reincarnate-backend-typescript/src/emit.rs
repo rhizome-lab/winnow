@@ -979,9 +979,24 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
 
         let mut out = String::new();
         let class_funcs = || group.methods.iter().map(|&fid| &module.functions[fid]);
-        let systems = collect_system_names_from_funcs(class_funcs());
+        let all_systems = collect_system_names_from_funcs(class_funcs());
+        // For Flash class files, generic shims are accessed via `this._shims` —
+        // strip them from the import set (no module-level singleton import needed).
+        let known_generics: BTreeSet<&str> = SYSTEM_NAMES.iter().copied().collect();
+        let systems = if engine == EngineKind::Flash {
+            all_systems.into_iter().filter(|s| !known_generics.contains(s.as_str())).collect()
+        } else {
+            all_systems
+        };
         let mut _class_sys_aliases = BTreeMap::new();
         emit_runtime_imports_for(systems, &mut out, depth, runtime_config, &mut _class_sys_aliases);
+        // Flash class files need the FlashShims type for constructor parameter annotations.
+        if engine == EngineKind::Flash && !group.class_def.is_interface {
+            let pref = "../".repeat(depth + 1);
+            let pref = pref.trim_end_matches('/');
+            let _ = writeln!(out, "import type {{ FlashShims }} from \"{pref}/runtime\";");
+            out.push('\n');
+        }
         let calls = collect_call_names_from_funcs(class_funcs(), engine);
         let func_prefix = "../".repeat(depth + 1);
         let func_prefix = func_prefix.trim_end_matches('/');
@@ -3145,7 +3160,21 @@ fn emit_class_method(
     let is_override = !is_cinit
         && !matches!(func.method_kind, MethodKind::Constructor | MethodKind::Static)
         && parent_method_names.contains(&raw_name);
-    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), is_override, out);
+    // Flash constructors receive a `_shims: FlashShims` parameter so each game
+    // instance carries its own shim set.  Base classes (suppress_super = true)
+    // use `readonly` to store the value; derived classes accept a plain param
+    // and thread it to `super(_shims, ...)`.
+    let flash_ctor_extra_param: Option<String> =
+        if engine == EngineKind::Flash && func.method_kind == MethodKind::Constructor {
+            if suppress_super {
+                Some("readonly _shims: FlashShims".to_string())
+            } else {
+                Some("_shims: FlashShims".to_string())
+            }
+        } else {
+            None
+        };
+    crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), is_override, flash_ctor_extra_param.as_deref(), out);
     Ok(())
 }
 /// Prepend a runtime argument to calls to free functions.
@@ -3906,10 +3935,11 @@ mod tests {
         );
         // Field.
         assert!(out.contains("  hp: number;"), "Should have field:\n{out}");
-        // Constructor — no `this` param.
+        // Constructor — no `this` param; Flash injects `readonly _shims: FlashShims`.
+        // super_class = Some("Object") → suppress_super = true → base class param.
         assert!(
-            out.contains("  constructor() {"),
-            "Should have constructor:\n{out}"
+            out.contains("  constructor(readonly _shims: FlashShims) {"),
+            "Should have constructor with FlashShims param:\n{out}"
         );
         // Instance method — skips `this`.
         assert!(
@@ -4182,19 +4212,19 @@ mod tests {
         let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
-            out.contains("super();"),
-            "constructSuper should emit super():\n{out}"
+            out.contains("super(_shims);"),
+            "constructSuper should emit super(_shims):\n{out}"
         );
         assert!(
             !out.contains("constructSuper"),
             "Should not have raw constructSuper call:\n{out}"
         );
         // super() must come before any this.field access
-        let super_pos = out.find("super();").expect("super() not found");
+        let super_pos = out.find("super(_shims);").expect("super(_shims) not found");
         let field_pos = out.find("this.x").expect("this.x not found");
         assert!(
             super_pos < field_pos,
-            "super() must precede this.x access:\n{out}"
+            "super(_shims) must precede this.x access:\n{out}"
         );
     }
 
@@ -4272,8 +4302,8 @@ mod tests {
         let out = emit_module_to_string(&mut module, &LoweringConfig::default(), None, &DebugConfig::none()).unwrap();
 
         assert!(
-            out.contains("new Widget()"),
-            "Should emit new Widget():\n{out}"
+            out.contains("new Widget(this._shims)"),
+            "Should emit new Widget(this._shims):\n{out}"
         );
         assert!(
             !out.contains("Flash_Object.construct"),
