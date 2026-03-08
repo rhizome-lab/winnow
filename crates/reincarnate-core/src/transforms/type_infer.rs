@@ -359,11 +359,27 @@ fn infer_inst_type(
 
         // GetField: look up struct field type, walking class hierarchy.
         Op::GetField { object, field } => {
-            if let Type::Struct(name) = &func.value_types[*object] {
-                ctx.resolve_field_type(name, field)
-                    .unwrap_or(Type::Dynamic)
-            } else {
-                return None;
+            match &func.value_types[*object] {
+                Type::Struct(name) => {
+                    ctx.resolve_field_type(name, field)
+                        .unwrap_or(Type::Dynamic)
+                }
+                Type::Union(members) => {
+                    // Resolve the field type for each union member and join.
+                    // Members that can't resolve contribute Dynamic (unknown).
+                    let mut result = Type::Dynamic;
+                    for member in members {
+                        let member_field_ty = if let Type::Struct(name) = member {
+                            ctx.resolve_field_type(name, field)
+                                .unwrap_or(Type::Dynamic)
+                        } else {
+                            Type::Dynamic
+                        };
+                        result = union_type(result, member_field_ty);
+                    }
+                    result
+                }
+                _ => return None,
             }
         }
 
@@ -972,6 +988,97 @@ mod tests {
 
         let func = &module.functions[FuncId::new(0)];
         assert_eq!(func.value_types[x], Type::Int(64));
+    }
+
+    /// GetField on a Union-typed object resolves the field type for each member and joins.
+    /// When all members have the same concrete field type, the result is that type.
+    #[test]
+    fn union_getfield_same_field_type() {
+        let sig = FunctionSig {
+            params: vec![Type::Union(vec![
+                Type::Struct("Point".into()),
+                Type::Struct("Point3D".into()),
+            ])],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let obj = fb.param(0);
+        let x = fb.get_field(obj, "x", Type::Dynamic);
+        fb.ret(Some(x));
+        let func = fb.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_struct(StructDef {
+            name: "Point".into(),
+            namespace: Vec::new(),
+            fields: vec![
+                ("x".into(), Type::Int(64), None),
+                ("y".into(), Type::Int(64), None),
+            ],
+            visibility: Visibility::Public,
+        });
+        mb.add_struct(StructDef {
+            name: "Point3D".into(),
+            namespace: Vec::new(),
+            fields: vec![
+                ("x".into(), Type::Int(64), None),
+                ("y".into(), Type::Int(64), None),
+                ("z".into(), Type::Int(64), None),
+            ],
+            visibility: Visibility::Public,
+        });
+        mb.add_function(func);
+        let module = mb.build();
+
+        let transform = TypeInference;
+        let module = transform.apply(module).unwrap().module;
+
+        let func = &module.functions[FuncId::new(0)];
+        // Both Point and Point3D have `x: Int(64)` → result is Int(64), not Dynamic.
+        assert_eq!(func.value_types[x], Type::Int(64));
+    }
+
+    /// GetField on a Union-typed object where members have different field types
+    /// produces a Union of those types.
+    #[test]
+    fn union_getfield_mixed_field_types() {
+        let sig = FunctionSig {
+            params: vec![Type::Union(vec![
+                Type::Struct("Foo".into()),
+                Type::Struct("Bar".into()),
+            ])],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("test", sig, Visibility::Private);
+        let obj = fb.param(0);
+        let val = fb.get_field(obj, "val", Type::Dynamic);
+        fb.ret(Some(val));
+        let func = fb.build();
+
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_struct(StructDef {
+            name: "Foo".into(),
+            namespace: Vec::new(),
+            fields: vec![("val".into(), Type::Int(64), None)],
+            visibility: Visibility::Public,
+        });
+        mb.add_struct(StructDef {
+            name: "Bar".into(),
+            namespace: Vec::new(),
+            fields: vec![("val".into(), Type::String, None)],
+            visibility: Visibility::Public,
+        });
+        mb.add_function(func);
+        let module = mb.build();
+
+        let transform = TypeInference;
+        let module = transform.apply(module).unwrap().module;
+
+        let func = &module.functions[FuncId::new(0)];
+        // Foo.val: Int(64), Bar.val: String → Union([Int(64), String]).
+        assert_eq!(func.value_types[val], Type::Union(vec![Type::Int(64), Type::String]));
     }
 
     /// Block parameter join: two branches sending Int(32) to a block param → param becomes Int(32).
