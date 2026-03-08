@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use reincarnate_core::error::CoreError;
-use reincarnate_core::ir::inst::{CmpKind, InstId, Op};
+use reincarnate_core::ir::inst::{CmpKind, Inst, InstId, Op};
 use reincarnate_core::ir::{Function, Module, ValueId};
 use reincarnate_core::ir::ty::Type;
 use reincarnate_core::pipeline::{Transform, TransformResult};
@@ -144,31 +144,45 @@ impl GmlInstanceTypeFlow {
             .collect();
 
         for (inst_id, object_vid, class_name, negate) in cmp_rewrites {
-            let type_check = Op::TypeCheck(object_vid, Type::Struct(class_name));
+            let type_check_op = Op::TypeCheck(object_vid, Type::Struct(class_name));
             if negate {
-                // Replace Cmp(Ne) with Not(TypeCheck).
-                // We reuse the existing result ValueId for TypeCheck, then emit Not.
-                // Since we can't insert a new instruction here, wrap by replacing
-                // the Cmp with TypeCheck and relying on DCE/emitter to handle negation.
-                // Approach: change the op to TypeCheck and fix result type to Bool,
-                // but to negate we'd need an extra instruction.
-                // Simplest: emit TypeCheck directly (the emitter sees Op::TypeCheck).
-                // For Ne, the TypeCheck result needs to be negated — represent this
-                // by keeping the original ValueId but noting the inversion.
-                // For now: emit TypeCheck for Eq; for Ne, wrap in Not by replacing
-                // the Cmp with a Not(TypeCheck-result). This requires a two-step:
-                // 1. Update existing inst to TypeCheck (gets the same result vid)
-                // 2. The caller will see the result is Bool and handle negation.
-                // Actually the simplest correct approach: replace the Cmp with TypeCheck,
-                // update result type to Bool. For Ne: we can't easily insert Not here
-                // without a new instruction. Leave Ne as-is for now (let TS handle it).
-                // TODO: handle Ne case properly.
-                func.insts[inst_id].op = type_check;
-                if let Some(vid) = func.insts[inst_id].result {
+                // Replace Cmp(Ne, ...) with Not(TypeCheck(...)).
+                //
+                // The original instruction's result ValueId is used by downstream
+                // consumers. We keep it on the outer `Not`. The inner `TypeCheck`
+                // gets a fresh ValueId.
+                //
+                // Before:  inst_id: Cmp(Ne, ...) → original_vid
+                // After:   inst_id: TypeCheck(...)    → typecheck_vid  (new)
+                //          not_id:  Not(typecheck_vid) → original_vid
+                //
+                // The `Not` instruction is inserted immediately after `inst_id` in
+                // the containing block's instruction list.
+                let original_vid = func.insts[inst_id].result;
+                let typecheck_vid = func.value_types.push(Type::Bool);
+                func.insts[inst_id].op = type_check_op;
+                func.insts[inst_id].result = Some(typecheck_vid);
+
+                let not_inst_id = func.insts.push(Inst {
+                    op: Op::Not(typecheck_vid),
+                    result: original_vid,
+                    span: None,
+                });
+                if let Some(vid) = original_vid {
                     func.value_types[vid] = Type::Bool;
                 }
+
+                // Find the block that contains inst_id and insert not_inst_id after it.
+                'outer: for block in func.blocks.values_mut() {
+                    for (pos, &bid) in block.insts.iter().enumerate() {
+                        if bid == inst_id {
+                            block.insts.insert(pos + 1, not_inst_id);
+                            break 'outer;
+                        }
+                    }
+                }
             } else {
-                func.insts[inst_id].op = type_check;
+                func.insts[inst_id].op = type_check_op;
                 if let Some(vid) = func.insts[inst_id].result {
                     func.value_types[vid] = Type::Bool;
                 }
