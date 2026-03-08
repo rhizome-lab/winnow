@@ -1909,7 +1909,7 @@ export class GameRuntime {
   steam_inventory_result_get_items(_result: number, _arr?: any[]): any[] { return []; /* no-op — Steam inventory not available in browser */ }
   steam_lobby_get_member_id(_index: number, _lobby?: number): number { return 0; /* no-op — Steam lobbies not available in browser */ }
   steam_input_get_action_set_handle(_name: string): number { return 0; }
-  steam_get_stat_float(_name: string): number { return parseFloat(fetchItem(this._persistence, this._steamStatKey(_name)) ?? "0"); }
+  steam_get_stat_float(_name: string): number { const d = fetchItem(this._persistence, this._steamStatKey(_name)); return d ? parseFloat(new TextDecoder().decode(d)) : 0; }
   steam_get_global_stat_int(_name: string): number { return 0; }
   steam_get_user_account_id(): number { return 0; }
   steam_image_get_rgba(_image: number, _buf: number, _size: number): boolean { return false; }
@@ -2351,7 +2351,7 @@ export class GameRuntime {
   steam_activate_overlay_user(_type: string, _steamid: number): void { /* no-op */ }
   steam_get_app_id(): number { return 0; }
   steam_get_user_persona_name_sync(_steamid?: number): string { return ""; }
-  steam_get_stat_int(_name: string): number { return parseInt(fetchItem(this._persistence, this._steamStatKey(_name)) ?? "0", 10); }
+  steam_get_stat_int(_name: string): number { const d = fetchItem(this._persistence, this._steamStatKey(_name)); return d ? parseInt(new TextDecoder().decode(d), 10) : 0; }
   steam_get_global_stat_history_int(_name: string, _days?: number): number { return 0; }
   steam_is_overlay_activated(): boolean { return false; }
   steam_image_get_size(_image: number): [number, number] { return [0, 0]; }
@@ -2361,8 +2361,8 @@ export class GameRuntime {
   steam_ugc_subscribe_item(_id: number): void { /* no-op — Steam UGC not available in browser */ }
   steam_input_run_frame(): void { /* no-op */ }
   steam_file_write(_path: string, _data: string, _length?: number): boolean {
-    const data = _length !== undefined ? _data.slice(0, _length) : _data;
-    store(this._persistence, this._steamCloudKey(_path), data);
+    const str = _length !== undefined ? _data.slice(0, _length) : _data;
+    store(this._persistence, this._steamCloudKey(_path), new TextEncoder().encode(str));
     this._steamCloudAddToIndex(_path);
     return true;
   }
@@ -2564,7 +2564,7 @@ export class GameRuntime {
   steam_request_global_achievement_percentages(): void { /* no-op */ }
   steam_get_achievement(_name: string): boolean { return this._steamAchSet().has(_name); }
   steam_store_stats(): void { /* no-op — stats are already persisted to localStorage immediately */ }
-  steam_set_stat_int(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), String(Math.trunc(_val))); }
+  steam_set_stat_int(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), new TextEncoder().encode(String(Math.trunc(_val)))); }
   steam_net_packet_get_sender_id(): number { return 0; /* no-op — Steam networking not available in browser */ }
   steam_is_cloud_enabled_for_app(): boolean { return false; }
   steam_ugc_create_query_user(_account_id: number, _list_type: number, _matching_type: number, _sort_order: number, _creator_app_id?: number, _consumer_app_id?: number, _page?: number): number { return -1; /* no-op — Steam UGC not available in browser */ }
@@ -3050,7 +3050,7 @@ export class GameRuntime {
     }
   }
   steam_set_stat_avg_rate(_name: string, _session: number, _session_len: number): void { /* no-op — complex running-average stat */ }
-  steam_set_stat_float(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), String(_val)); }
+  steam_set_stat_float(_name: string, _val: number): void { store(this._persistence, this._steamStatKey(_name), new TextEncoder().encode(String(_val))); }
   steam_show_floating_gamepad_text_input(_mode: number, _x: number, _y: number, _w: number, _h: number): void { /* no-op — Steam floating keyboard not available in browser */ }
   steam_shutdown(): void { /* no-op */ }
   steam_lobby_set_owner_id(_steamid: number, _lobby?: number): void { /* no-op — Steam lobbies not available in browser */ }
@@ -3068,9 +3068,8 @@ export class GameRuntime {
   steam_get_app_ownership_ticket_data(_appId: number): string { return ""; /* no-op — Steam DRM not available in browser */ }
   steam_file_read_buffer(path: string, buf?: number): boolean {
     const data = fetchItem(this._persistence, this._steamCloudKey(path)); if (!data) return false;
-    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
     const b = this._buffers.get(buf ?? -1); if (!b) return false;
-    this._bufferGrow(b, bytes.length); b.data.set(bytes, 0);
+    this._bufferGrow(b, data.length); b.data.set(data, 0);
     return true;
   }
   steam_file_persisted(_path: string): boolean { return this.steam_file_exists(_path); }
@@ -3364,7 +3363,7 @@ export class GameRuntime {
     const raw = fetchItem(this._persistence, "__psn_trophy_" + gameName);
     if (raw) {
       try {
-        const ids: number[] = JSON.parse(raw);
+        const ids: number[] = JSON.parse(new TextDecoder().decode(raw));
         for (const id of ids) this._psnTrophies.add(id);
       } catch { /* corrupt data — start fresh */ }
     }
@@ -3373,7 +3372,7 @@ export class GameRuntime {
   /** Unlock a trophy by ID; persist immediately. */
   psn_unlock_trophy(id: number, _slot: number = 0): void {
     this._psnTrophies.add(id);
-    store(this._persistence, "__psn_trophy_" + this._storage.gameName, JSON.stringify([...this._psnTrophies]));
+    store(this._persistence, "__psn_trophy_" + this._storage.gameName, new TextEncoder().encode(JSON.stringify([...this._psnTrophies])));
   }
 
   /**
@@ -3404,26 +3403,26 @@ export class GameRuntime {
   private _steamCloudIndex(): string[] {
     const raw = fetchItem(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index");
     if (!raw) return [];
-    try { return JSON.parse(raw) as string[]; } catch { return []; }
+    try { return JSON.parse(new TextDecoder().decode(raw)) as string[]; } catch { return []; }
   }
   private _steamCloudAddToIndex(path: string): void {
     const idx = this._steamCloudIndex();
     if (!idx.includes(path)) {
       idx.push(path);
-      store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
+      store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", new TextEncoder().encode(JSON.stringify(idx)));
     }
   }
   private _steamCloudRemoveFromIndex(path: string): void {
     const idx = this._steamCloudIndex().filter(p => p !== path);
-    store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", JSON.stringify(idx));
+    store(this._persistence, "__steam_cloud_" + this._storage.gameName + "__index", new TextEncoder().encode(JSON.stringify(idx)));
   }
   private _steamAchSet(): Set<string> {
     const raw = fetchItem(this._persistence, "__steam_ach_" + this._storage.gameName);
     if (!raw) return new Set();
-    try { return new Set(JSON.parse(raw) as string[]); } catch { return new Set(); }
+    try { return new Set(JSON.parse(new TextDecoder().decode(raw)) as string[]); } catch { return new Set(); }
   }
   private _steamAchSave(set: Set<string>): void {
-    store(this._persistence, "__steam_ach_" + this._storage.gameName, JSON.stringify([...set]));
+    store(this._persistence, "__steam_ach_" + this._storage.gameName, new TextEncoder().encode(JSON.stringify([...set])));
   }
   private _steamStatKey(name: string): string {
     return "__steam_stat_" + this._storage.gameName + "_" + name;
@@ -3447,9 +3446,8 @@ export class GameRuntime {
   steam_file_write_buffer(path: string, buf: number, size?: number): boolean {
     const b = this._buffers.get(buf); if (!b) return false;
     const len = size ?? b.data.length;
-    const bytes = b.data.subarray(0, len);
-    const b64 = btoa(String.fromCharCode(...bytes));
-    store(this._persistence, this._steamCloudKey(path), b64);
+    const bytes = new Uint8Array(b.data.buffer, b.data.byteOffset, len);
+    store(this._persistence, this._steamCloudKey(path), bytes);
     this._steamCloudAddToIndex(path);
     return true;
   }
