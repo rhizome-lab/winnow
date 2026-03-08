@@ -725,6 +725,10 @@ impl ModuleBuilder {
         self.module.room_creation_code = map;
     }
 
+    pub fn set_initial_room_name(&mut self, name: String) {
+        self.module.initial_room_name = Some(name);
+    }
+
     pub fn set_sprite_names(&mut self, names: Vec<String>) {
         self.module.sprite_names = names;
     }

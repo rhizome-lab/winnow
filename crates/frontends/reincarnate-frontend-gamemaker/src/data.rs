@@ -134,6 +134,14 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
 }
 
 /// Extract PascalCase sprite names indexed by sprite ID.
+/// Returns the PascalCase name of the first room (used for `initialRoom` in main.ts).
+pub fn extract_initial_room_name(dw: &DataWin) -> Option<String> {
+    let room = dw.room().ok()?;
+    let first = room.rooms.first()?;
+    let raw = dw.resolve_string(first.name).ok()?;
+    Some(naming::room_name_to_pascal(&raw))
+}
+
 pub fn extract_sprite_names(dw: &DataWin) -> Vec<String> {
     let sprt = match dw.sprt() {
         Ok(s) => s,

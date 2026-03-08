@@ -159,6 +159,10 @@ impl Frontend for GameMakerFrontend {
         mb.set_sprite_names(data::extract_sprite_names(&dw));
         // Populate object names for backend rewrite resolution (int → class name).
         mb.set_object_names(obj_names.to_vec());
+        // Populate initial room name so the scaffold can emit `initialRoom: Rooms.<name>`.
+        if let Some(name) = data::extract_initial_room_name(&dw) {
+            mb.set_initial_room_name(name);
+        }
 
         let module = mb.build();
 

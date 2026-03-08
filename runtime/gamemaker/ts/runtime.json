@@ -64,7 +64,7 @@
         "path": "data/shaders"
       }
     ],
-    "entry": "createGameRuntime().start({ rooms, sprites, textures, fonts, sounds, shaders, classes: [{classes}], Classes, initialRoom: Rooms.Init, roomCreationCode: [{roomCreationCode}] });"
+    "entry": "createGameRuntime().start({ rooms, sprites, textures, fonts, sounds, shaders, classes: [{classes}], Classes, initialRoom: Rooms.{initialRoom}, roomCreationCode: [{roomCreationCode}] });"
   },
   "class_preamble": {
     "names": [

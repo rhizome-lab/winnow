@@ -141,6 +141,10 @@ pub struct Module {
     /// Populated by frontends so the scaffold can wire up per-room init functions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub room_creation_code: BTreeMap<usize, String>,
+    /// PascalCase name of the initial/first room (e.g. "Preload", "Init").
+    /// Populated by frontends so the scaffold can emit `initialRoom: Rooms.<name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_room_name: Option<String>,
     /// Sprite names indexed by sprite ID. Contains PascalCase names matching
     /// the `Sprites` enum keys in data output. Used to resolve `sprite_index`
     /// field defaults to named constants instead of raw integers.
@@ -189,6 +193,7 @@ impl Module {
             external_type_defs: BTreeMap::new(),
             external_function_sigs: BTreeMap::new(),
             room_creation_code: BTreeMap::new(),
+            initial_room_name: None,
             sprite_names: Vec::new(),
             object_names: Vec::new(),
             passage_names: BTreeMap::new(),

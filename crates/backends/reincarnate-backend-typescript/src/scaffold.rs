@@ -451,6 +451,10 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
             .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "{}".into()))
             .unwrap_or_else(|| "undefined".into());
         let storylet_conditions = build_storylet_conditions(modules);
+        let initial_room = modules.iter()
+            .find_map(|m| m.initial_room_name.as_deref())
+            .unwrap_or("Init")
+            .to_string();
         let expanded = entry
             .replace("{classes}", &class_list)
             .replace("{roomCreationCode}", &room_creation_code)
@@ -461,7 +465,8 @@ fn generate_main(modules: &[Module], runtime_config: Option<&RuntimeConfig>, per
             .replace("{startPassage}", &start_passage)
             .replace("{rootClass}", &root_class)
             .replace("{persistence}", &persistence_json)
-            .replace("{storylets}", &storylet_conditions);
+            .replace("{storylets}", &storylet_conditions)
+            .replace("{initialRoom}", &initial_room);
         let _ = writeln!(out, "{}", expanded);
     } else if let Some(code) = metadata_entry_code(modules, runtime_config) {
         // Prefer metadata-based entry point over heuristic.

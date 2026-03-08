@@ -56,6 +56,7 @@ export class GMLObject {
   _rt!: GameRuntime;
   x = 0;
   y = 0;
+  z = 0;
   xstart = 0;
   ystart = 0;
   xprevious = 0;
@@ -65,6 +66,7 @@ export class GMLObject {
   sprite_index = -1;
   image_index = 0;
   image_alpha = 1;
+  mask_index = -1;
   persistent: number | boolean = 0;
   depth = 0;
   #alarm: number[] | null = null;
