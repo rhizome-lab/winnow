@@ -631,9 +631,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 192 as of 2026-03-09
+### 7. Dead Estate remaining TS errors — 191 as of 2026-03-09
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution) → 181 (reverted instance_exists(number): those errors are correct diagnostics of instance_place/instance_find returning number instead of GMLObject|null — fix belongs in type inference, not runtime signature) → 206 (2026-03-09 session: instance_type_flow Ne fix, record_depth min, runtime physics/particles/string/irandom fixes, NullableCoerce rename, GetField on Union; count increased due to newly-surfaced IR from br() arg mismatch warnings + record_depth changes) → 192 (2026-03-09: (as any) instanceof prevents TS never-narrowing in Wall class; scan_body_local_names uses live locals map fixing on-the-fly capture gap for TS2304).
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution) → 181 (reverted instance_exists(number): those errors are correct diagnostics of instance_place/instance_find returning number instead of GMLObject|null — fix belongs in type inference, not runtime signature) → 206 (2026-03-09 session: instance_type_flow Ne fix, record_depth min, runtime physics/particles/string/irandom fixes, NullableCoerce rename, GetField on Union; count increased due to newly-surfaced IR from br() arg mismatch warnings + record_depth changes) → 192 (2026-03-09: (as any) instanceof prevents TS never-narrowing in Wall class; scan_body_local_names uses live locals map fixing on-the-fly capture gap for TS2304) → 191 (2026-03-09: `(target as unknown) === -4` in instance_exists suppresses TS2367).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -647,7 +647,7 @@ sig.params, because ConstraintSolve only updates entry.params[i].ty and value_ty
 | TS2339 | 14 | Property doesn't exist — `length` on number (instancePlaceList3d wrong return type); `invulnerable` on intersection type |
 | TS2362 | 14 | Bool-typed operand in arithmetic — **intended diagnostic** (game author using bool in arithmetic) |
 | TS2365 | 13 | Operator `+` on bool/GMLObject — **intended diagnostic** (game author using bool/obj in arithmetic) |
-| TS2367 | 6 | Comparison with void — functions that use `return` inside `with` block inferred as void |
+| TS2367 | 5 | Comparison with void — functions that use `return` inside `with` block inferred as void |
 | TS2554 | 5 | Wrong argument count — GML scripts called with more args than declared (loose calling convention) |
 | TS2363 | 4 | Right side of arithmetic — Bool in operator context (intended diagnostic) |
 | TS2872 | 2 | Always truthy expression (emitter `!(!const)` pattern — pre-existing) |
@@ -679,8 +679,19 @@ misidentified as `||`, replacing `const 1` with the bool condition).
 
 **TS2367 (5):** GML functions with `return value` inside a `with` block. Our `withInstances` callback
 model doesn't propagate return values — the function is typed as `void` even though it should return
-a number. Root cause: `withInstances` callback is `(): void`. Fix: propagate return values from `with`
-callbacks, or detect "all paths return through `with`" and emit the function differently.
+a number. Root cause investigated (2026-03-09):
+
+In GML bytecode, `return X` inside `with` stores X to a local, then `PopEnv.d[e]` (exit PopEnv with
+sentinel offset ~0xffc00000) breaks out and falls through to `Push local; Ret` in the outer function.
+`find_with_ranges` maps PushEnv → loop-back PopEnv (not the exit PopEnv), so `body_insts` includes
+code from PushEnv+1 to the loop-back PopEnv. This inadvertently includes the post-break outer code
+(the `Push local; Ret`) in the with-body closure's bytecode range, where it becomes dead code (block2
+after exit PopEnv's `fb.ret(None)`). The outer function branches past this code to `Exit`, returning void.
+
+Correct fix: detect exit PopEnv within body_insts (Branch offset ≈ -4194304 sentinel). Truncate
+body_insts there; keep post-break code in the outer function. Requires the outer function to branch to
+the post-break code after `withInstances` call (needs block map entries for post-break offsets). Complex
+because the post-break code must also return the value captured in the local.
 
 **TS2554 (5):** `loadSetting(_rt, self, key, default)` — 4 args, but function only declares 3 (`_rt,
 self, argument0 = 0`). Similarly `getScreenType`, `getPiecesWidth`, `getPiecesHeight`, `drawTextPieces`
@@ -976,7 +987,7 @@ Reference: UndertaleModTool `AdaptAssetType` / `AdaptAssetTypeId` in `UndertaleC
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 192 TS errors + 1 translation error (2026-03-09) |
+| Dead Estate | `data.win` 192MB | ⚠️ 191 TS errors + 1 translation error (2026-03-09) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
