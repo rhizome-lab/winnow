@@ -194,6 +194,7 @@ fn get_br_target(func: &Function, br_inst_id: InstId) -> BlockId {
     *target
 }
 
+
 /// Return all successor block IDs of `block`'s terminator instruction.
 fn block_successors(func: &Function, block: BlockId) -> Vec<BlockId> {
     let blk = &func.blocks[block];

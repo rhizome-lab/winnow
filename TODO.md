@@ -611,8 +611,21 @@ source GML is clearly wrong (a bug), the error is correct. `arith_val` coercion 
 
 **TS2322 "boolean not assignable to number" (6 remaining):** Previously 38; fixed 32 by adding
 `else_target != merge_target` guard in `GmlLogicalOpNormalize` (plain `if (cond) { x=1 }` was
-misidentified as `||`, replacing `const 1` with the bool condition). 6 remaining instances likely have
-a different root cause — investigate individually with `--filter-code TS2322 --filter-message 'boolean'`.
+misidentified as `||`, replacing `const 1` with the bool condition).
+
+6 remaining divide into two root causes:
+- **GmlLogicalOpNormalize false positive (3 instances: OAdultLevi:98, MainMenu:381, _init.ts:3428)**:
+  else_target ≠ merge_target so the guard doesn't fire, but the pattern is still an if-then-else
+  not `||`. The fundamental problem: GmlLogicalOpNormalize runs AFTER TypeInference, so replacing
+  a block arg changes the arg type without updating `value_types` for the block param. Refreshing
+  `value_types` fixes the declaration but then passing `boolean | number` to `number` params causes
+  TS2345 regressions (net +1 error). Needs a smarter guard OR fixing at the TypeInference level
+  (re-run TypeInference after extra passes, or propagate type changes through the pass).
+- **Direct bool→number field/variable assignment (3 instances: PassageGate:27, NewCharacterSelect:551, ParentMenu:204)**:
+  Game author assigns a comparison result to a `number`-typed field (e.g. `image_index = y > height/2`).
+  This is a GML idiom (comparison gives 0/1). Our `image_index` struct field is declared `number` in the
+  runtime types. Fix would require widening affected field types to `number | boolean` in the runtime,
+  or accepting these 3 errors as intended diagnostics (game author using bool as int).
 
 **TS2367 (5):** GML functions with `return value` inside a `with` block. Our `withInstances` callback
 model doesn't propagate return values — the function is typed as `void` even though it should return
