@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use datawin::bytecode::decode::{self, Instruction, Operand};
-use datawin::bytecode::opcode::Opcode;
-use datawin::bytecode::types::{ComparisonKind, DataType, InstanceType, VariableRef};
+use reincarnate_datawin::bytecode::decode::{self, Instruction, Operand};
+use reincarnate_datawin::bytecode::opcode::Opcode;
+use reincarnate_datawin::bytecode::types::{ComparisonKind, DataType, InstanceType, VariableRef};
 use reincarnate_core::entity::EntityRef;
 use reincarnate_core::ir::builder::FunctionBuilder;
 use reincarnate_core::ir::block::BlockId;
@@ -60,7 +60,7 @@ pub struct TranslateCtx<'a> {
     pub is_with_body: bool,
     /// Bytecode version from GEN8. Used to guard version-specific behaviours
     /// (GMS2.3+ Break signals, Dup swap-mode encoding, etc.).
-    pub bytecode_version: datawin::BytecodeVersion,
+    pub bytecode_version: reincarnate_datawin::BytecodeVersion,
 }
 
 /// Translate a single code entry's bytecode into an IR Function.
@@ -3257,10 +3257,10 @@ fn resolve_fallthrough(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datawin::bytecode::decode::Instruction;
-    use datawin::bytecode::encode::encode;
-    use datawin::bytecode::opcode::Opcode;
-    use datawin::bytecode::types::{DataType, VariableRef};
+    use reincarnate_datawin::bytecode::decode::Instruction;
+    use reincarnate_datawin::bytecode::encode::encode;
+    use reincarnate_datawin::bytecode::opcode::Opcode;
+    use reincarnate_datawin::bytecode::types::{DataType, VariableRef};
     use reincarnate_core::ir::inst::Op;
 
     static EMPTY_ASSET_REF_NAMES: std::sync::LazyLock<HashMap<u32, String>> =
@@ -3299,7 +3299,7 @@ mod tests {
             script_names,
             is_with_body: false,
             // Tests exercise GMS2.3+ bytecode by default (shared blobs, Break signals, etc.).
-            bytecode_version: datawin::BytecodeVersion(17),
+            bytecode_version: reincarnate_datawin::BytecodeVersion(17),
         }
     }
 

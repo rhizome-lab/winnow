@@ -25,7 +25,7 @@ reincarnate-backend-typescript = { path = "../backends/reincarnate-backend-types
 reincarnate-frontend-gamemaker = { path = "../frontends/reincarnate-frontend-gamemaker", optional = true }
 reincarnate-frontend-twine = { path = "../frontends/reincarnate-frontend-twine", optional = true }
 reincarnate-checker-typescript = { path = "../checkers/reincarnate-checker-typescript", optional = true }
-datawin = { path = "../formats/datawin" }
+reincarnate-datawin = { path = "../formats/datawin" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

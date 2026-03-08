@@ -10,7 +10,7 @@ mod translate;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 
-use datawin::DataWin;
+use reincarnate_datawin::DataWin;
 use reincarnate_core::error::CoreError;
 use reincarnate_core::ir::builder::ModuleBuilder;
 use reincarnate_core::ir::func::Visibility;
@@ -36,7 +36,7 @@ impl Frontend for GameMakerFrontend {
             message: e.to_string(),
         })?;
 
-        let parse_err = |e: datawin::Error| CoreError::Parse {
+        let parse_err = |e: reincarnate_datawin::Error| CoreError::Parse {
             file: input.source.clone(),
             message: e.to_string(),
         };
@@ -66,7 +66,7 @@ impl Frontend for GameMakerFrontend {
         // (4 bytes into the instruction), while earlier formats and VARI always
         // use instruction-word addressing. build_func_ref_map normalises to
         // instruction-word addresses so lookups match bytecode_offset + inst.offset.
-        let bc_version = dw.bytecode_version().unwrap_or(datawin::BytecodeVersion(15));
+        let bc_version = dw.bytecode_version().unwrap_or(reincarnate_datawin::BytecodeVersion(15));
         let func_ref_map = build_func_ref_map(func, dw.data(), bc_version);
         let vari_ref_map = build_vari_ref_map(vari, dw.data());
 
@@ -188,21 +188,21 @@ impl Frontend for GameMakerFrontend {
 #[allow(clippy::too_many_arguments)]
 fn translate_scripts(
     dw: &DataWin,
-    code: &datawin::chunks::code::Code,
-    scpt: &datawin::chunks::scpt::Scpt,
+    code: &reincarnate_datawin::chunks::code::Code,
+    scpt: &reincarnate_datawin::chunks::scpt::Scpt,
     code_name_map: &HashMap<String, usize>,
     function_names: &HashMap<u32, String>,
     asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
-    code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    code_locals_map: &HashMap<String, &reincarnate_datawin::chunks::func::CodeLocals>,
     string_table: &[String],
     mb: &mut ModuleBuilder,
     input: &FrontendInput,
     obj_names: &[String],
     script_names: &HashSet<String>,
-    bc_version: datawin::BytecodeVersion,
+    bc_version: reincarnate_datawin::BytecodeVersion,
 ) -> Result<(usize, usize), CoreError> {
     let mut translated = 0;
     let mut errors = 0;
@@ -315,18 +315,18 @@ fn translate_scripts(
 #[allow(clippy::too_many_arguments)]
 fn translate_global_inits(
     dw: &DataWin,
-    code: &datawin::chunks::code::Code,
+    code: &reincarnate_datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
     asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
-    code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    code_locals_map: &HashMap<String, &reincarnate_datawin::chunks::func::CodeLocals>,
     string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
-    bc_version: datawin::BytecodeVersion,
+    bc_version: reincarnate_datawin::BytecodeVersion,
 ) -> usize {
     let glob = match dw.glob() {
         Ok(Some(g)) => g,
@@ -388,18 +388,18 @@ fn translate_global_inits(
 #[allow(clippy::too_many_arguments)]
 fn translate_room_creation(
     dw: &DataWin,
-    code: &datawin::chunks::code::Code,
+    code: &reincarnate_datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
     asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
-    code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    code_locals_map: &HashMap<String, &reincarnate_datawin::chunks::func::CodeLocals>,
     string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
-    bc_version: datawin::BytecodeVersion,
+    bc_version: reincarnate_datawin::BytecodeVersion,
 ) -> (usize, BTreeMap<usize, String>) {
     let room = match dw.room() {
         Ok(r) => r,
@@ -479,7 +479,7 @@ fn resolve_string_table(dw: &DataWin) -> Vec<String> {
 /// Returns `(local_index, name)` pairs. Called per code entry so the
 /// translator doesn't need raw file bytes.
 pub(crate) fn resolve_local_names(
-    locals: Option<&datawin::chunks::func::CodeLocals>,
+    locals: Option<&reincarnate_datawin::chunks::func::CodeLocals>,
     data: &[u8],
 ) -> Vec<(u32, String)> {
     let Some(cl) = locals else { return vec![] };
@@ -492,7 +492,7 @@ pub(crate) fn resolve_local_names(
 /// Register global variables from VARI.
 fn register_globals(
     dw: &DataWin,
-    vari: &datawin::chunks::vari::Vari,
+    vari: &reincarnate_datawin::chunks::vari::Vari,
     mb: &mut ModuleBuilder,
 ) {
     for entry in &vari.variables {
@@ -514,7 +514,7 @@ fn register_globals(
 /// Build function_id → resolved name mapping from FUNC entries.
 fn build_function_names(
     dw: &DataWin,
-    func: &datawin::chunks::func::Func,
+    func: &reincarnate_datawin::chunks::func::Func,
 ) -> Result<HashMap<u32, String>, CoreError> {
     let mut names = HashMap::new();
     for (idx, entry) in func.functions.iter().enumerate() {
@@ -538,9 +538,9 @@ fn build_function_names(
 /// operand occurrence. We normalise to instruction-word address so keys match
 /// the `bytecode_offset + inst.offset` values computed during translation.
 fn build_func_ref_map(
-    func: &datawin::chunks::func::Func,
+    func: &reincarnate_datawin::chunks::func::Func,
     data: &[u8],
-    bc_version: datawin::BytecodeVersion,
+    bc_version: reincarnate_datawin::BytecodeVersion,
 ) -> HashMap<usize, usize> {
     let gms2 = bc_version.func_first_address_is_operand();
     let mut map = HashMap::new();
@@ -578,7 +578,7 @@ fn build_func_ref_map(
 /// is at `first_address + 4`. The operand's lower 27 bits encode a relative
 /// offset to the next occurrence: `next_addr = addr + offset`.
 fn build_vari_ref_map(
-    vari: &datawin::chunks::vari::Vari,
+    vari: &reincarnate_datawin::chunks::vari::Vari,
     data: &[u8],
 ) -> HashMap<usize, usize> {
     let mut map = HashMap::new();
@@ -611,7 +611,7 @@ fn build_vari_ref_map(
 /// Build variable_id → (name, instance_type) from VARI entries.
 fn build_variable_table(
     dw: &DataWin,
-    vari: &datawin::chunks::vari::Vari,
+    vari: &reincarnate_datawin::chunks::vari::Vari,
 ) -> Result<Vec<(String, i32)>, CoreError> {
     let mut vars = Vec::with_capacity(vari.variables.len());
     for entry in &vari.variables {
@@ -628,7 +628,7 @@ fn build_variable_table(
 /// We look up the CODE entry by name (`gml_Script_<ScriptName>`) instead.
 fn build_code_name_map(
     dw: &DataWin,
-    code: &datawin::chunks::code::Code,
+    code: &reincarnate_datawin::chunks::code::Code,
 ) -> HashMap<String, usize> {
     let mut map = HashMap::new();
     for (i, entry) in code.entries.iter().enumerate() {
@@ -642,8 +642,8 @@ fn build_code_name_map(
 /// Build code entry name → CodeLocals mapping.
 fn build_code_locals_map<'a>(
     dw: &DataWin,
-    func: &'a datawin::chunks::func::Func,
-) -> Result<HashMap<String, &'a datawin::chunks::func::CodeLocals>, CoreError> {
+    func: &'a reincarnate_datawin::chunks::func::Func,
+) -> Result<HashMap<String, &'a reincarnate_datawin::chunks::func::CodeLocals>, CoreError> {
     let mut map = HashMap::new();
     for entry in &func.code_locals {
         let name = dw.resolve_string(entry.name).unwrap_or_default();
@@ -655,7 +655,7 @@ fn build_code_locals_map<'a>(
 /// Resolve all object names from OBJT, converting to PascalCase.
 fn resolve_object_names(
     dw: &DataWin,
-    objt: &datawin::chunks::objt::Objt,
+    objt: &reincarnate_datawin::chunks::objt::Objt,
 ) -> Result<Vec<String>, CoreError> {
     let mut names = Vec::with_capacity(objt.objects.len());
     for obj in &objt.objects {
@@ -702,7 +702,7 @@ fn strip_script_prefix(name: &str) -> &str {
 ///   - type=8 used with shader_set → SHDR
 ///
 /// Returns a map of `(type_tag << 24) | asset_index → raw GML asset name`.
-fn build_asset_ref_names(dw: &DataWin, scpt: &datawin::chunks::scpt::Scpt) -> HashMap<u32, String> {
+fn build_asset_ref_names(dw: &DataWin, scpt: &reincarnate_datawin::chunks::scpt::Scpt) -> HashMap<u32, String> {
     let mut map = HashMap::new();
 
     // Type 0: objects (OBJT).

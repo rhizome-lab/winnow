@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use datawin::DataWin;
-use datawin::bytecode::decode;
-use datawin::bytecode::decode::{Instruction, Operand};
-use datawin::bytecode::types::{ComparisonKind, DataType, InstanceType};
-use datawin::bytecode::opcode::Opcode;
+use reincarnate_datawin::DataWin;
+use reincarnate_datawin::bytecode::decode;
+use reincarnate_datawin::bytecode::decode::{Instruction, Operand};
+use reincarnate_datawin::bytecode::types::{ComparisonKind, DataType, InstanceType};
+use reincarnate_datawin::bytecode::opcode::Opcode;
 use reincarnate_core::ir::Module;
 use std::collections::HashMap;
 use reincarnate_core::pipeline::{Backend, BackendInput, Checker, CheckerInput, CheckerOutput, CheckSummary, DebugConfig, Diagnostic, Frontend, FrontendInput, Linker, PassConfig, PipelineOutput, Preset, RuntimePackage, VALID_PASS_NAMES};
@@ -1253,7 +1253,7 @@ fn format_instruction(
         Operand::Float(v) => format!("{v}"),
         Operand::Bool(v) => format!("{v}"),
         Operand::StringIndex(idx) => {
-            let s = dw.resolve_string(datawin::StringRef(*idx)).unwrap_or_else(|_| format!("<string#{idx}>"));
+            let s = dw.resolve_string(reincarnate_datawin::StringRef(*idx)).unwrap_or_else(|_| format!("<string#{idx}>"));
             // Truncate at 40 chars
             if s.chars().count() > 40 {
                 let truncated: String = s.chars().take(40).collect();

@@ -268,15 +268,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datawin"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1211,12 +1202,12 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "datawin",
  "dirs",
  "include_dir",
  "reincarnate-backend-typescript",
  "reincarnate-checker-typescript",
  "reincarnate-core",
+ "reincarnate-datawin",
  "reincarnate-frontend-flash",
  "reincarnate-frontend-gamemaker",
  "reincarnate-frontend-twine",
@@ -1234,6 +1225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reincarnate-datawin"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "reincarnate-frontend-flash"
 version = "0.1.0"
 dependencies = [
@@ -1245,8 +1245,8 @@ dependencies = [
 name = "reincarnate-frontend-gamemaker"
 version = "0.1.0"
 dependencies = [
- "datawin",
  "reincarnate-core",
+ "reincarnate-datawin",
  "serde_json",
  "unicode-ident",
 ]

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use datawin::chunks::objt::{event_type, ObjectEntry};
-use datawin::DataWin;
+use reincarnate_datawin::chunks::objt::{event_type, ObjectEntry};
+use reincarnate_datawin::DataWin;
 use reincarnate_core::ir::builder::ModuleBuilder;
 use reincarnate_core::ir::func::{MethodKind, Visibility};
 use reincarnate_core::ir::module::{ClassDef, StructDef};
@@ -13,18 +13,18 @@ use crate::translate::{self, TranslateCtx};
 #[allow(clippy::too_many_arguments)]
 pub fn translate_objects(
     dw: &DataWin,
-    code: &datawin::chunks::code::Code,
+    code: &reincarnate_datawin::chunks::code::Code,
     function_names: &HashMap<u32, String>,
     asset_ref_names: &HashMap<u32, String>,
     variables: &[(String, i32)],
     func_ref_map: &HashMap<usize, usize>,
     vari_ref_map: &HashMap<usize, usize>,
-    code_locals_map: &HashMap<String, &datawin::chunks::func::CodeLocals>,
+    code_locals_map: &HashMap<String, &reincarnate_datawin::chunks::func::CodeLocals>,
     string_table: &[String],
     mb: &mut ModuleBuilder,
     obj_names: &[String],
     script_names: &HashSet<String>,
-    bc_version: datawin::BytecodeVersion,
+    bc_version: reincarnate_datawin::BytecodeVersion,
 ) -> Result<(usize, usize), String> {
     let objt = dw.objt().map_err(|e| e.to_string())?;
     let mut translated = 0;

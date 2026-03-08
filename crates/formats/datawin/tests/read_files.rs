@@ -1,25 +1,25 @@
-use datawin::bytecode::decode;
-use datawin::bytecode::encode;
-use datawin::chunks::audo::Audo;
-use datawin::chunks::code::Code;
-use datawin::chunks::font::Font;
-use datawin::chunks::func::Func;
-use datawin::chunks::gen8::Gen8;
-use datawin::chunks::glob::Glob;
-use datawin::chunks::lang::Lang;
-use datawin::chunks::objt::Objt;
-use datawin::chunks::optn::Optn;
-use datawin::chunks::room::Room;
-use datawin::chunks::scpt::Scpt;
-use datawin::chunks::sond::Sond;
-use datawin::chunks::sprt::Sprt;
-use datawin::chunks::tpag::Tpag;
-use datawin::chunks::txtr::Txtr;
-use datawin::chunks::vari::Vari;
-use datawin::reader::ChunkIndex;
-use datawin::string_table::StringTable;
-use datawin::version::BytecodeVersion;
-use datawin::DataWin;
+use reincarnate_datawin::bytecode::decode;
+use reincarnate_datawin::bytecode::encode;
+use reincarnate_datawin::chunks::audo::Audo;
+use reincarnate_datawin::chunks::code::Code;
+use reincarnate_datawin::chunks::font::Font;
+use reincarnate_datawin::chunks::func::Func;
+use reincarnate_datawin::chunks::gen8::Gen8;
+use reincarnate_datawin::chunks::glob::Glob;
+use reincarnate_datawin::chunks::lang::Lang;
+use reincarnate_datawin::chunks::objt::Objt;
+use reincarnate_datawin::chunks::optn::Optn;
+use reincarnate_datawin::chunks::room::Room;
+use reincarnate_datawin::chunks::scpt::Scpt;
+use reincarnate_datawin::chunks::sond::Sond;
+use reincarnate_datawin::chunks::sprt::Sprt;
+use reincarnate_datawin::chunks::tpag::Tpag;
+use reincarnate_datawin::chunks::txtr::Txtr;
+use reincarnate_datawin::chunks::vari::Vari;
+use reincarnate_datawin::reader::ChunkIndex;
+use reincarnate_datawin::string_table::StringTable;
+use reincarnate_datawin::version::BytecodeVersion;
+use reincarnate_datawin::DataWin;
 
 fn load_if_exists(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
@@ -1055,8 +1055,8 @@ fn bounty_round_trip() {
         return;
     };
     let index = ChunkIndex::parse(&data).unwrap();
-    let chunks = datawin::writer::extract_chunks(&index, &data);
-    let reassembled = datawin::writer::assemble_form(&chunks);
+    let chunks = reincarnate_datawin::writer::extract_chunks(&index, &data);
+    let reassembled = reincarnate_datawin::writer::assemble_form(&chunks);
 
     assert_eq!(
         data.len(),
@@ -1076,8 +1076,8 @@ fn undertale_round_trip() {
         return;
     };
     let index = ChunkIndex::parse(&data).unwrap();
-    let chunks = datawin::writer::extract_chunks(&index, &data);
-    let reassembled = datawin::writer::assemble_form(&chunks);
+    let chunks = reincarnate_datawin::writer::extract_chunks(&index, &data);
+    let reassembled = reincarnate_datawin::writer::assemble_form(&chunks);
 
     assert_eq!(
         data.len(),
@@ -1095,8 +1095,8 @@ fn chronicon_round_trip() {
         return;
     };
     let index = ChunkIndex::parse(&data).unwrap();
-    let chunks = datawin::writer::extract_chunks(&index, &data);
-    let reassembled = datawin::writer::assemble_form(&chunks);
+    let chunks = reincarnate_datawin::writer::extract_chunks(&index, &data);
+    let reassembled = reincarnate_datawin::writer::assemble_form(&chunks);
 
     assert_eq!(
         data.len(),

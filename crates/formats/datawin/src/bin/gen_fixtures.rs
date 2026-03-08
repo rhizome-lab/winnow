@@ -17,7 +17,7 @@
 //! # Usage
 //!
 //! ```sh
-//! cargo run -p datawin --bin gen_fixtures
+//! cargo run -p reincarnate-datawin --bin gen_fixtures
 //! ```
 //!
 //! # Kaitai validation workflow
@@ -32,12 +32,12 @@
 //! Or open a `.bin` file in the interactive Kaitai Web IDE at
 //! <https://ide.kaitai.io/> together with the matching `.ksy`.
 
-use datawin::bytecode::decode::{Instruction, Operand};
-use datawin::bytecode::opcode::Opcode;
-use datawin::bytecode::types::{ComparisonKind, DataType, VariableRef};
-use datawin::bytecode::{decode, encode};
-use datawin::cursor::Writer;
-use datawin::writer::{assemble_form, OutputChunk};
+use reincarnate_datawin::bytecode::decode::{Instruction, Operand};
+use reincarnate_datawin::bytecode::opcode::Opcode;
+use reincarnate_datawin::bytecode::types::{ComparisonKind, DataType, VariableRef};
+use reincarnate_datawin::bytecode::{decode, encode};
+use reincarnate_datawin::cursor::Writer;
+use reincarnate_datawin::writer::{assemble_form, OutputChunk};
 
 const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 

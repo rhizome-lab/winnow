@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use datawin::DataWin;
+use reincarnate_datawin::DataWin;
 use reincarnate_core::project::{Asset, AssetCatalog, AssetKind};
 
 /// Extract assets (textures, audio) from a data.win file.
