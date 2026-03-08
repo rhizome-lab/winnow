@@ -824,20 +824,27 @@ fn find_with_ranges(instructions: &[Instruction]) -> HashMap<usize, usize> {
 /// Find the names of outer local variables accessed in a slice of instructions.
 ///
 /// Used to determine which locals a with-body closure needs to capture.
-fn scan_body_local_names(body_insts: &[Instruction], ctx: &TranslateCtx<'_>) -> Vec<String> {
-    // Build a fast lookup set from the outer function's declared local names so we
-    // only capture names that actually have an alloc slot (see `allocate_locals`).
-    let known_locals: HashSet<&str> = ctx.local_names.iter().map(|(_, n)| n.as_str()).collect();
+/// `outer_locals` is the caller's live locals map at the time the `PushEnv`
+/// instruction is processed — it contains both CodeLocals allocs and any
+/// on-the-fly allocs created during translation up to that point.
+fn scan_body_local_names(
+    body_insts: &[Instruction],
+    ctx: &TranslateCtx<'_>,
+    outer_locals: &HashMap<String, ValueId>,
+) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut names = Vec::new();
     for inst in body_insts {
         if let Operand::Variable { instance, .. } = &inst.operand {
             if matches!(InstanceType::from_i16(*instance), Some(InstanceType::Local)) {
                 let name = resolve_variable_name(inst, ctx);
-                // Skip names that don't correspond to a declared local — resolve_variable_name
-                // returns "var_unknown_{offset}" when the VARI lookup fails, and these have no
-                // alloc slot in the outer locals map.
-                if known_locals.contains(name.as_str()) && seen.insert(name.clone()) {
+                // Only capture variables that actually have an alloc slot in the outer
+                // function. This covers both CodeLocals-declared variables and on-the-fly
+                // allocs created during translation (e.g. variables declared with `var` but
+                // absent from CodeLocals in obfuscated games like Dead Estate).
+                // resolve_variable_name returns "var_unknown_{offset}" on VARI lookup
+                // failure; those have no slot and are implicitly excluded here.
+                if outer_locals.contains_key(&name) && seen.insert(name.clone()) {
                     names.push(name);
                 }
             }
@@ -1176,7 +1183,7 @@ fn run_translation_loop(
                 let body_insts = &instructions[inst_idx + 1..popenv_idx];
 
                 // Determine which outer locals the body needs to capture.
-                let scanned_names = scan_body_local_names(body_insts, ctx);
+                let scanned_names = scan_body_local_names(body_insts, ctx, locals);
                 // If the outer context has a self and the body accesses `other`, capture
                 // the outer self as _other (prepended so it becomes the first capture param).
                 let has_outer_self =
