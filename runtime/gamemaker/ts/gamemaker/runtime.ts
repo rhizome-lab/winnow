@@ -62,7 +62,7 @@ export class GMLObject {
   yprevious = 0;
   image_xscale = 1;
   image_yscale = 1;
-  sprite_index: number | undefined = undefined;
+  sprite_index = -1;
   image_index = 0;
   image_alpha = 1;
   persistent: number | boolean = 0;
@@ -87,7 +87,7 @@ export class GMLObject {
   destroy(): void {}
 
   draw(): void {
-    if (this.sprite_index === undefined || !this.visible) return;
+    if (this.sprite_index < 0 || !this.visible) return;
     this._rt.drawSprite(this.sprite_index, this.image_index, this.x, this.y, this);
   }
 
@@ -1356,7 +1356,8 @@ export class GameRuntime {
   point_in_rectangle(px: number, py: number, x1: number, y1: number, x2: number, y2: number): boolean {
     return px >= x1 && px <= x2 && py >= y1 && py <= y2;
   }
-  distance_to_object(cls: typeof GMLObject | GMLObject): number {
+  distance_to_object(cls: typeof GMLObject | GMLObject | null): number {
+    if (cls === null) return 0;
     if (!this._self) return 0;
     const sx = this._self.x, sy = this._self.y;
     if (cls instanceof GMLObject) {
@@ -1374,7 +1375,7 @@ export class GameRuntime {
 
   // ---- Collision helpers (AABB) ----
   private _getBBox(obj: GMLObject, ox?: number, oy?: number): { x1: number; y1: number; x2: number; y2: number } | null {
-    if (obj.sprite_index === undefined) return null;
+    if (obj.sprite_index < 0) return null;
     const spr = this.sprites[obj.sprite_index];
     if (!spr || !spr.bbox) return null;
     const xs = obj.image_xscale ?? 1, ys = obj.image_yscale ?? 1;
@@ -3493,7 +3494,8 @@ export class GameRuntime {
     return count;
   }
 
-  instance_destroy(instance: typeof GMLObject | GMLObject): void {
+  instance_destroy(instance: typeof GMLObject | GMLObject | null): void {
+    if (instance === null) return;
     if (typeof instance === 'function') {
       for (const obj of this._getInstances(instance as typeof GMLObject).slice()) {
         this._instanceDestroy(obj);
