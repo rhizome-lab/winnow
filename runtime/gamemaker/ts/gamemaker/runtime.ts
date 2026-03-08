@@ -726,8 +726,8 @@ export class GameRuntime {
     if (font !== -1) return font;
     return -1;
   }
-  asset_get_tags(_asset: number, _type: number = -1): string[] { return []; }
-  asset_has_tags(_asset: number, _tags: string | string[], _not?: boolean | number): boolean { return false; }
+  asset_get_tags(_asset: number, _type: number = -1): string[] { throw Error("asset_get_tags: not yet implemented"); }
+  asset_has_tags(_asset: number, _tags: string | string[], _not?: boolean | number): boolean { throw Error("asset_has_tags: not yet implemented"); }
 
   // ---- Array API (GMS2 style) ----
 
@@ -1171,7 +1171,7 @@ export class GameRuntime {
       p.vx += gx + randf(-p.speedWiggle, p.speedWiggle);
       p.vy += gy + randf(-p.speedWiggle, p.speedWiggle);
       if (p.speedInc !== 0) { const spd = Math.hypot(p.vx, p.vy); if (spd > 0) { const ns = spd + p.speedInc; p.vx = p.vx / spd * ns; p.vy = p.vy / spd * ns; } }
-      p.x += p.vx + s.pos[0]; p.y += p.vy + s.pos[1];
+      p.x += p.vx; p.y += p.vy;
       p.size = Math.max(0, p.size + p.sizeInc + randf(-p.sizeWiggle, p.sizeWiggle));
       p.angle += p.angleInc + randf(-p.angleWiggle, p.angleWiggle);
       p.life--;
@@ -1198,7 +1198,7 @@ export class GameRuntime {
       const r = col & 0xff, g = (col >> 8) & 0xff, b = (col >> 16) & 0xff;
       ctx.save();
       ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-      ctx.translate(p.x, p.y);
+      ctx.translate(p.x + s.pos[0], p.y + s.pos[1]);
       if (p.angle !== 0) ctx.rotate(p.angle * Math.PI / 180);
       ctx.scale(t.scale[0], t.scale[1]);
       const [xs, ys] = t.sizeX && t.sizeY ? [t.sizeX[0], t.sizeY[0]] : [p.size, p.size];
@@ -2170,13 +2170,13 @@ export class GameRuntime {
     const f = this._textFiles.get(file); return !f || f.pos >= f.content.length;
   }
   file_delete(path: string): void { localStorage.removeItem(this._fileKey(path)); }
-  file_find_first(_mask: string, _attr: number): string { return ""; /* no filesystem enumeration in browser */ }
-  file_find_next(): string { return ""; }
+  file_find_first(_mask: string, _attr: number): string { throw Error("file_find_first: not yet implemented"); /* no filesystem enumeration in browser */ }
+  file_find_next(): string { throw Error("file_find_next: not yet implemented"); }
   file_find_close(): void { /* no-op */ }
 
   // ---- Directory ----
   directory_create(_path: string): void { /* no-op: no filesystem access in browser */ }
-  directory_exists(_path: string): boolean { return false; }
+  directory_exists(_path: string): boolean { return false; /* no-op — no filesystem in browser; callers use this as a precondition guard */ }
 
 
   // ---- Buffer extras ----
@@ -2273,7 +2273,7 @@ export class GameRuntime {
     }
   }
   buffer_async_group_begin(_groupname: string): void { /* no-op — async buffer groups not needed in browser */ }
-  buffer_async_group_end(): number { return 0; }
+  buffer_async_group_end(): number { throw Error("buffer_async_group_end: not yet implemented"); }
 
   // ---- Display extras ----
   display_get_gui_width(): number { return window.innerWidth; }
