@@ -3,7 +3,8 @@
  */
 
 import { GraphicsContext, initCanvas, loadImage, initWebGL } from "../shared/platform";
-import { requestFrame, cancelFrame, FrameHandle } from "../shared/platform";
+import { requestFrame, cancelFrame } from "../shared/platform";
+import type { FrameHandle } from "../shared/platform";
 import { PersistenceState, init as initPersistence, store, fetch as fetchItem, remove } from "../shared/platform/persistence";
 import type { RenderRoot } from "../shared/render-root";
 import { DrawState, createDrawAPI } from "./draw";
@@ -3446,7 +3447,7 @@ export class GameRuntime {
   steam_file_write_buffer(path: string, buf: number, size?: number): boolean {
     const b = this._buffers.get(buf); if (!b) return false;
     const len = size ?? b.data.length;
-    const bytes = new Uint8Array(b.data.buffer, b.data.byteOffset, len);
+    const bytes = b.data.slice(0, len);
     store(this._persistence, this._steamCloudKey(path), bytes);
     this._steamCloudAddToIndex(path);
     return true;

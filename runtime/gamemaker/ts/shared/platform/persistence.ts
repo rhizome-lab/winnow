@@ -19,7 +19,7 @@
  */
 
 export class PersistenceState {
-  cache = new Map<string, Uint8Array>();
+  cache = new Map<string, Uint8Array<ArrayBuffer>>();
   opfsDir: FileSystemDirectoryHandle | null = null;
 }
 
@@ -30,13 +30,13 @@ function filenameToKey(name: string): string {
   try { return decodeURIComponent(name); } catch { return name; }
 }
 
-function bytesToBase64(data: Uint8Array): string {
+function bytesToBase64(data: Uint8Array<ArrayBuffer>): string {
   let binary = "";
   for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
   return btoa(binary);
 }
 
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -84,7 +84,7 @@ export async function init(state: PersistenceState): Promise<void> {
  * Throws if localStorage write fails (quota exceeded, permission denied, etc.).
  * OPFS write uses write-to-temp-then-rename for atomicity.
  */
-export function store(state: PersistenceState, key: string, data: Uint8Array): void {
+export function store(state: PersistenceState, key: string, data: Uint8Array<ArrayBuffer>): void {
   state.cache.set(key, data);
   // localStorage is string-based; encode as base64.
   localStorage.setItem(key, bytesToBase64(data));
@@ -115,7 +115,7 @@ export function store(state: PersistenceState, key: string, data: Uint8Array): v
  * Read bytes by key. Returns null if not found.
  * All reads are sync after init() has resolved.
  */
-export function fetch(state: PersistenceState, key: string): Uint8Array | null {
+export function fetch(state: PersistenceState, key: string): Uint8Array<ArrayBuffer> | null {
   const cached = state.cache.get(key);
   if (cached !== undefined) return cached;
   // Cache miss: fall back to localStorage (handles data written before OPFS init).
