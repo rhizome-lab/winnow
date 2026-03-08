@@ -65,10 +65,15 @@ fn normalize_logical_ops(func: &mut Function) -> bool {
         // is only correct for THIS BrIf, not for the other predecessor(s).
         // Guard: skip if the merge target is a loop header — the trivially-truthy
         // then-block would be a loop initializer, not a short-circuit OR arm.
+        // Guard: skip if else_target IS the merge target — that means the else branch
+        // jumps directly to the join point (a plain `if (cond) { x = 1 }`, not `||`).
+        // In a real `||`, the else branch has a body that computes the RHS and THEN
+        // jumps to the merge; merge_target ≠ else_target.
         if let Some(br_inst_id) = trivially_pure_const_branch(func, then_target, true) {
             let then_pred_count = brifs.iter().filter(|(_, _, t, _)| *t == then_target).count();
             let merge_target = get_br_target(func, br_inst_id);
             if then_pred_count == 1
+                && else_target != merge_target
                 && !is_trivially_pure_block(func, else_target)
                 && !is_loop_header(func, merge_target)
             {
@@ -83,10 +88,15 @@ fn normalize_logical_ops(func: &mut Function) -> bool {
         // else-block is initializing a loop variable (e.g. `counter = 0`), not
         // short-circuiting a logical AND. Substituting `cond` would replace the
         // correctly-typed loop counter initial value with a bool condition.
+        // Guard: skip if then_target IS the merge target — that means the then branch
+        // jumps directly to the join point (a plain `if (!cond) { x = 0 }`, not `&&`).
         if let Some(br_inst_id) = trivially_pure_const_branch(func, else_target, false) {
             let else_pred_count = brifs.iter().filter(|(_, _, _, e)| *e == else_target).count();
             let merge_target = get_br_target(func, br_inst_id);
-            if !is_trivially_pure_block(func, then_target) && !is_loop_header(func, merge_target) {
+            if then_target != merge_target
+                && !is_trivially_pure_block(func, then_target)
+                && !is_loop_header(func, merge_target)
+            {
                 if else_pred_count == 1 {
                     // Sole predecessor: rewrite the trivial block in place.
                     func.insts[br_inst_id].op = replace_br_arg(func, br_inst_id, cond);
@@ -440,6 +450,64 @@ mod tests {
         assert_eq!(
             args[0], v_zero,
             "block2's Br arg must remain v_zero (loop counter init), not be replaced with v_cond"
+        );
+    }
+
+    /// Regression test: a plain `if (cond) { x = 1 }` must NOT be rewritten as `||`.
+    ///
+    /// Pattern (BigYellowEye::step `var m = 4; if (timer > 60) { m = 1; }`):
+    ///   block0: BrIf(cond) → then=block1(trivially pure, const 1), else=block2(real code)
+    ///   block1: v1 = const 1; br block2(v1)   ← trivially pure, truthy
+    ///   block2(v_m: i64): ...                  ← merge target == else_target
+    ///
+    /// Without the guard, GmlLogicalOpNormalize would replace block1's
+    /// `br block2(v1)` with `br block2(cond)`, changing the type of
+    /// the merged value from i64 to bool — causing TS2322.
+    #[test]
+    fn test_if_then_not_rewritten_as_logical_or() {
+        let sig = FunctionSig {
+            params: vec![Type::Bool, Type::Int(64)],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("if_then_guard", sig, Visibility::Public);
+        let v_cond = fb.param(0);
+        let v_init = fb.param(1); // simulates the initial value passed in else path
+
+        let block1 = fb.create_block();
+        let (block2, block2_params) = fb.create_block_with_params(&[Type::Int(64)]);
+        let v_m = block2_params[0];
+
+        // block0: BrIf(cond) → then=block1, else=block2(v_init)
+        // Note: else_target == merge_target (block2 is the merge)
+        fb.br_if(v_cond, block1, &[], block2, &[v_init]);
+
+        // block1: v1 = const 1; br block2(v1)  ← trivially pure, truthy
+        fb.switch_to_block(block1);
+        let v1 = fb.const_int(1);
+        fb.br(block2, &[v1]);
+
+        // block2(v_m): use v_m in a non-trivial way, then return
+        fb.switch_to_block(block2);
+        let _ = v_m;
+        fb.ret(None);
+
+        let func = fb.build();
+        let mut mb = ModuleBuilder::new("test");
+        mb.add_function(func);
+        let module = mb.build();
+
+        let result = GmlLogicalOpNormalize.apply(module).unwrap();
+        // The pass must NOT modify block1's Br arg — it's a plain if-then, not ||.
+        let func = result.module.functions.values().next().unwrap();
+        let b1 = &func.blocks[block1];
+        let last_inst = func.insts[*b1.insts.last().unwrap()].op.clone();
+        let Op::Br { args, .. } = last_inst else {
+            panic!("Expected Br terminator in block1");
+        };
+        assert_eq!(
+            args[0], v1,
+            "block1's Br arg must remain v1 (const 1, int), not be replaced with cond (bool)"
         );
     }
 }
