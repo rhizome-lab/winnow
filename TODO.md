@@ -577,9 +577,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 222 as of 2026-03-08
+### 7. Dead Estate remaining TS errors — 176 as of 2026-03-08
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6).
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + instance_exists null/number + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -588,22 +588,19 @@ sig.params, because ConstraintSolve only updates entry.params[i].ty and value_ty
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | ~130 | Argument type mismatch — string/bool/null/struct passed as number, game author duck-typing |
-| TS2322 | 6 | Type not assignable — residual `boolean` → `number` (was 38; GmlLogicalOpNormalize fix reduced 32) |
+| TS2345 | ~97 | Argument type mismatch — string/bool/null/struct/GMLObject passed as wrong type; game author duck-typing |
+| TS2339 | 17 | Property doesn't exist — `length` on number (instancePlaceList3d wrong return type); `invulnerable` on intersection type |
 | TS2362 | 15 | Bool-typed operand in arithmetic — **intended diagnostic** (game author using bool in arithmetic) |
-| TS2339 | 13 | Property doesn't exist — `length` on number (array inferred as number), withInstances residual |
-| TS2304 | ~14 | Cannot find name — structurizer SSA name leakage + `spd` in with-body closure capture gap |
-| TS2554 | 4 | Wrong argument count — GML scripts called with more args than declared (loose calling convention) |
+| TS2322 | 13 | Type not assignable — bool→number (GML idiom), GMLObject→number, string→number, array→number |
+| TS2304 | 14 | Cannot find name — structurizer SSA name leakage + `spd` in with-body closure capture gap |
+| TS2365 | 12 | Operator `+` on bool/GMLObject — **intended diagnostic** (game author using bool/obj in arithmetic) |
+| TS2554 | 5 | Wrong argument count — GML scripts called with more args than declared (loose calling convention) |
 | TS2367 | 5 | Comparison with void — functions that use `return` inside `with` block inferred as void |
-| TS2363 | 4 | Right side of `**` or arithmetic — Bool in operator context (intended diagnostic) |
-| TS2365 | 12 | Operator not applicable — Bool in operator context (intended diagnostic) |
-| TS2872 | 2 | Comparison appears unintentional |
+| TS2363 | 4 | Right side of arithmetic — Bool in operator context (intended diagnostic) |
+| TS2872 | 2 | Always truthy expression (emitter !(!const) pattern) |
 | TS7027 | 1 | Unreachable code — game-author bug (DiavoloEye::destroy infinite loop) |
-| TS18047 | 1 | Object is possibly null |
-| TS1484 | 1 | `'import type'` cannot be used |
-| TS2552 | 1 | Cannot find name (with-body self-reference bug) |
-| TS2724 | 1 | Exported name collision |
-| TS2769 | 1 | No overload matches |
+| TS18047 | 1 | Object is possibly null — game-author bug (using GMLObject|null as number) |
+| TS2552 | 1 | Cannot find name `sarr` — SSA name leakage variant |
 
 **TS2362 / TS2363 / TS2365 (Bool in arithmetic/operators):** These are **intended diagnostics**. GML game
 author is using boolean values in arithmetic/operator context. Do NOT suppress with coercions. If the
