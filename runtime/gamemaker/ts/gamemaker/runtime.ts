@@ -2,7 +2,11 @@
  * GML Runtime — game loop, GMLObject base class, room system.
  */
 
-import { GraphicsContext, initCanvas, loadImage, initWebGL } from "../shared/platform";
+import { GraphicsContext, initCanvas, initWebGL } from "../shared/platform";
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; });
+}
 import { requestFrame, cancelFrame } from "../shared/platform";
 import type { FrameHandle } from "../shared/platform";
 import { PersistenceState, init as initPersistence, store, fetch as fetchItem, remove } from "../shared/platform/persistence";
