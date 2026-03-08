@@ -636,8 +636,11 @@ accessible via `argument[N]` in GML but are ignored in TypeScript. Correct fix: 
 (GameMaker backend), scan all function calls per callee; if any call site passes more GML args than
 the function's declared param count, widen the declaration to add `argumentN: any = 0.0` params up
 to the max observed arity. This is bounded (not `...args: any[]`) and applies only to functions
-actually called with extra args. NOT: add `...args: any[]` globally (too broad). NOT: a global IR
-policy (only functions with observed over-arity calls need widening).
+actually called with extra args. The type for each extra param should come from call-site analysis
+(meet of observed arg types at that position — like a mini CallSiteTypeFlow for undeclared params),
+NOT `: any`. E.g. `loadSetting(key, 0)` adds `argument1: number = 0` not `argument1: any = 0.0`.
+NOT: add `...args: any[]` globally (too broad, untyped). NOT: a global IR policy (only functions
+with observed over-arity calls need widening).
 
 #### TS2345 Detailed Breakdown (2043 errors, by type pair)
 
