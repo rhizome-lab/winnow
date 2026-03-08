@@ -632,8 +632,12 @@ callbacks, or detect "all paths return through `with`" and emit the function dif
 **TS2554 (5):** `loadSetting(_rt, self, key, default)` — 4 args, but function only declares 3 (`_rt,
 self, argument0 = 0`). Similarly `getScreenType`, `getPiecesWidth`, `getPiecesHeight`, `drawTextPieces`
 called with more args than their signatures declare. GML loose calling convention: extra args are
-accessible via `argument[N]` in GML but are ignored in TypeScript. Fix: detect at call sites that
-pass more args than declared, and add extra optional params to the callee signature.
+accessible via `argument[N]` in GML but are ignored in TypeScript. Correct fix: in the emitter
+(GameMaker backend), scan all function calls per callee; if any call site passes more GML args than
+the function's declared param count, widen the declaration to add `argumentN: any = 0.0` params up
+to the max observed arity. This is bounded (not `...args: any[]`) and applies only to functions
+actually called with extra args. NOT: add `...args: any[]` globally (too broad). NOT: a global IR
+policy (only functions with observed over-arity calls need widening).
 
 #### TS2345 Detailed Breakdown (2043 errors, by type pair)
 
