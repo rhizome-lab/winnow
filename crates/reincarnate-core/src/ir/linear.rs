@@ -2097,6 +2097,11 @@ impl<'a> EmitCtx<'a> {
                 cases,
                 default_body,
             } => {
+                // Flush pending SE inlines before entering switch cases.
+                // A SE inline flushed inside a case body is only in scope for
+                // that case — uses in other cases would be undeclared (TS2304).
+                // Same pattern as emit_if.
+                self.flush_side_effecting_inlines(stmts);
                 let val = self.build_val(*value);
                 let mut case_stmts = Vec::new();
                 for (constant, body) in cases {
@@ -3601,6 +3606,201 @@ mod tests {
             "Expected while with hoisted condition: {}",
             debug_body(&ast.body)
         );
+    }
+
+    // Regression: Switch handler must flush pending SE inlines to the outer scope
+    // before emitting case bodies.  Without the flush, a side-effecting inline
+    // can end up declared inside an earlier case (triggered when that case contains
+    // an if-body that calls flush_side_effecting_inlines), making it undeclared in
+    // a later case that references it — TS2304 "Cannot find name 'x'".
+    //
+    // IR shape:
+    //   entry(v_key: Int64, v_cond: Bool):
+    //     v_call = call("foo", [])           -- SE inline candidate
+    //     switch v_key { Int(0) → case0, default → case1 }
+    //   case0:
+    //     br_if v_cond, then0, merge0        -- inner if triggers flush inside case0
+    //   then0: br merge0
+    //   merge0: ret
+    //   case1:
+    //     v_result = call("bar", [v_call])   -- uses the SE inline
+    //     ret
+    #[test]
+    fn switch_se_inline_flushed_to_outer_scope() {
+        let sig = FunctionSig {
+            params: vec![Type::Int(64), Type::Bool],
+            return_ty: Type::Dynamic,
+            ..Default::default()
+        };
+        let mut fb = FunctionBuilder::new("f", sig, Visibility::Public);
+        let v_key = fb.param(0);
+        let v_cond = fb.param(1);
+        let case0 = fb.create_block();
+        let then0 = fb.create_block();
+        let merge0 = fb.create_block();
+        let case1 = fb.create_block();
+
+        // Entry: side-effecting call followed by switch.
+        let v_call = fb.call("foo", &[], Type::Dynamic);
+        fb.name_value(v_call, "foo_call".to_string());
+        fb.switch(v_key, vec![(Constant::Int(0), case0, vec![])], (case1, vec![]));
+
+        // case0: contains inner if — this triggers flush_side_effecting_inlines
+        // inside case0's scope when emitted, which (without the fix) materialises
+        // foo_call into case0's block instead of the outer scope.
+        fb.switch_to_block(case0);
+        fb.br_if(v_cond, then0, &[], merge0, &[]);
+
+        fb.switch_to_block(then0);
+        fb.br(merge0, &[]);
+
+        fb.switch_to_block(merge0);
+        fb.ret(None);
+
+        // case1 (default): uses v_call.  Without the outer flush, "foo_call" is
+        // undeclared here because it was materialised inside case0's scope.
+        fb.switch_to_block(case1);
+        let v_result = fb.call("bar", &[v_call], Type::Dynamic);
+        fb.name_value(v_result, "bar_result".to_string());
+        fb.ret(Some(v_result));
+
+        let mut func = fb.build();
+        let shape = structurize(&mut func);
+        let config = LoweringConfig::default();
+        let ast = lower_function_linear(&func, &shape, &config, &DebugConfig::none());
+
+        // The Switch must appear in the output.
+        assert!(
+            ast.body.iter().any(|s| matches!(s, Stmt::Switch { .. })),
+            "Expected a Switch in output: {}",
+            debug_body(&ast.body)
+        );
+
+        // Key invariant: "foo_call" must not appear as an undeclared Var reference
+        // inside any case body.  There are two valid post-AST-pass shapes:
+        //
+        //  (a) `foo()` was inlined at the use site by fold_single_use_consts
+        //      → no Var("foo_call") anywhere                  (after fix + fold)
+        //  (b) Var("foo_call") exists in a case body AND a VarDecl for it
+        //      exists in the outer scope                       (after fix, no fold)
+        //
+        //  The bug (before fix) produces:
+        //  (c) Var("foo_call") inside a case body with NO outer-scope VarDecl
+        //      — the declaration was materialised inside case0's scope, then
+        //      stripped as dead (0 uses in case0) leaving an undeclared ref
+        //      in case1 → TS2304.
+        let has_outer_decl = ast
+            .body
+            .iter()
+            .any(|s| matches!(s, Stmt::VarDecl { name, .. } if name == "foo_call"));
+        let has_orphan_ref =
+            if let Some(Stmt::Switch { cases, default_body, .. }) =
+                ast.body.iter().find(|s| matches!(s, Stmt::Switch { .. }))
+            {
+                let in_cases = cases
+                    .iter()
+                    .any(|(_, stmts)| body_contains_var_ref(stmts, "foo_call"));
+                let in_default = body_contains_var_ref(default_body, "foo_call");
+                (in_cases || in_default) && !has_outer_decl
+            } else {
+                false
+            };
+        assert!(
+            !has_orphan_ref,
+            "'foo_call' is referenced inside a switch case but has no outer-scope \
+             declaration — cross-case scope violation: {}",
+            debug_body(&ast.body)
+        );
+    }
+
+    /// Check whether `Expr::Var(name)` appears anywhere in a statement list.
+    fn body_contains_var_ref(body: &[Stmt], name: &str) -> bool {
+        body.iter().any(|s| stmt_contains_var_ref(s, name))
+    }
+
+    fn stmt_contains_var_ref(stmt: &Stmt, name: &str) -> bool {
+        match stmt {
+            Stmt::VarDecl { init, .. } => {
+                init.as_ref().is_some_and(|e| expr_contains_var_ref(e, name))
+            }
+            Stmt::Assign { target, value }
+            | Stmt::CompoundAssign { target, value, .. } => {
+                expr_contains_var_ref(target, name) || expr_contains_var_ref(value, name)
+            }
+            Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_contains_var_ref(e, name),
+            Stmt::If { cond, then_body, else_body } => {
+                expr_contains_var_ref(cond, name)
+                    || body_contains_var_ref(then_body, name)
+                    || body_contains_var_ref(else_body, name)
+            }
+            Stmt::While { cond, body } => {
+                expr_contains_var_ref(cond, name) || body_contains_var_ref(body, name)
+            }
+            Stmt::For { init, cond, update, body } => {
+                body_contains_var_ref(init, name)
+                    || expr_contains_var_ref(cond, name)
+                    || body_contains_var_ref(update, name)
+                    || body_contains_var_ref(body, name)
+            }
+            Stmt::Switch { value, cases, default_body } => {
+                expr_contains_var_ref(value, name)
+                    || cases.iter().any(|(_, s)| body_contains_var_ref(s, name))
+                    || body_contains_var_ref(default_body, name)
+            }
+            _ => false,
+        }
+    }
+
+    fn expr_contains_var_ref(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Var(n) => n == name,
+            Expr::Literal(_) | Expr::GlobalRef(_) => false,
+            Expr::Binary { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                expr_contains_var_ref(lhs, name) || expr_contains_var_ref(rhs, name)
+            }
+            Expr::Unary { expr: inner, .. }
+            | Expr::Cast { expr: inner, .. }
+            | Expr::TypeCheck { expr: inner, .. }
+            | Expr::Not(inner)
+            | Expr::PostIncrement(inner)
+            | Expr::Spread(inner)
+            | Expr::CoroutineResume(inner) => expr_contains_var_ref(inner, name),
+            Expr::Yield(Some(inner)) => expr_contains_var_ref(inner, name),
+            Expr::Yield(None) => false,
+            Expr::Call { args, .. }
+            | Expr::ArrayInit(args)
+            | Expr::TupleInit(args)
+            | Expr::CoroutineCreate { args, .. } => {
+                args.iter().any(|a| expr_contains_var_ref(a, name))
+            }
+            Expr::MakeClosure { captures, .. } => {
+                captures.iter().any(|a| expr_contains_var_ref(a, name))
+            }
+            Expr::CallIndirect { callee, args } => {
+                expr_contains_var_ref(callee, name)
+                    || args.iter().any(|a| expr_contains_var_ref(a, name))
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                expr_contains_var_ref(receiver, name)
+                    || args.iter().any(|a| expr_contains_var_ref(a, name))
+            }
+            Expr::SystemCall { args, .. } => args.iter().any(|a| expr_contains_var_ref(a, name)),
+            Expr::Field { object, .. } => expr_contains_var_ref(object, name),
+            Expr::Index { collection, index } => {
+                expr_contains_var_ref(collection, name) || expr_contains_var_ref(index, name)
+            }
+            Expr::Ternary { cond, then_val, else_val } => {
+                expr_contains_var_ref(cond, name)
+                    || expr_contains_var_ref(then_val, name)
+                    || expr_contains_var_ref(else_val, name)
+            }
+            Expr::LogicalOr { lhs, rhs } | Expr::LogicalAnd { lhs, rhs } => {
+                expr_contains_var_ref(lhs, name) || expr_contains_var_ref(rhs, name)
+            }
+            Expr::StructInit { fields, .. } => {
+                fields.iter().any(|(_, v)| expr_contains_var_ref(v, name))
+            }
+        }
     }
 
     // Regression: LogicalOr inside a then-branch with else-branch also assigning
