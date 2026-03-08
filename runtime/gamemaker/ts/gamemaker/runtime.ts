@@ -1475,8 +1475,8 @@ export class GameRuntime {
   object_get_name(cls: typeof GMLObject): string {
     return cls.name;
   }
-  object_exists(cls: typeof GMLObject): boolean {
-    return cls != null;
+  object_exists(cls: typeof GMLObject | number): boolean {
+    return cls != null && cls !== -1;
   }
 
   // ---- Color helpers ----
