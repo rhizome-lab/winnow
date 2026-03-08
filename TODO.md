@@ -1388,45 +1388,6 @@ and add it to `~/reincarnate/twine/`.
 - [x] **Complex `'s` possessive chains** — `$obj's (str-nth: $idx)` nested macro in possessive
   (already handled: `parse_prefix` falls to `try_parse_inline_macro` after `'s`)
 
----
-
-## Session Postmortems
-
-### 2026-03-09 (Dead Estate TS error reduction)
-
-Mistakes made during this session that must not repeat:
-
-**1. `instance_exists(number)` — widened runtime to suppress a correct diagnostic.**
-When `instance_find`/`instance_nearest` returned `number` and were passed to `instance_exists`,
-widened the runtime signature to `typeof GMLObject | GMLObject | number` to silence TS2345.
-Wrong direction: raw numeric instance IDs in callee signatures is a type inference gap in the
-pipeline, not a missing overload in the runtime API. The fix is upstream: `instance_find`/
-`instance_nearest`/`instance_place` should return `GMLObject | null`, not `number`. The runtime
-signature `instance_exists(target: typeof GMLObject | GMLObject | null)` is correct.
-
-**2. TS2554 — proposed `...args: any[]` to handle loose calling convention.**
-Suggested adding `...args: any[]` to GML function signatures to absorb extra arguments. This
-loses all type information for the extra args, defeats arity checking, and is semantically wrong
-(GML doesn't pass extras as an array). The correct fix: `CallSiteArityWiden` IR transform pass
-in `reincarnate-frontend-gamemaker`, which reads observed call-site arity and widens callee
-signatures to the max, with extra param types derived from call-site type analysis.
-
-**3. TS2554 — proposed a global IR-level policy ("all GML functions should reflect loose calling convention").**
-GML loose calling is a source-language convention, not a universal IR property. A pass that makes
-every GML function variadic would destroy type information globally. `CallSiteArityWiden` is
-per-function and bounded by what call sites actually pass.
-
-**4. TS2554 — proposed scanning in the emitter.**
-Emitters read sigs; they don't set them. Arity widening must happen in a transform pass, not at
-emit time.
-
-**5. Extra params typed as `: any`.**
-Extra params from `CallSiteArityWiden` must use types from call-site analysis (meet of observed
-arg types at that position), same strategy as `CallSiteTypeFlow`. Not `: any`.
-
-**6. `CallSiteArityWiden` placed in wrong crate.**
-GML loose calling convention is GML-specific — the pass belongs in `reincarnate-frontend-gamemaker`,
-not `reincarnate-core`. Same class of error as `arith_val`/`coerce_bool_to_numeric`.
 
 
 
