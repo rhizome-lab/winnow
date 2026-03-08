@@ -42,6 +42,51 @@ Full roadmaps in `docs/targets/<engine>.md`. Summary of where each stands:
 
 ---
 
+## Engine-Specific Logic in `reincarnate-core` (found 2026-03-09 audit)
+
+CLAUDE.md rule: "Frontend/backend specific logic never belongs in `reincarnate-core`."
+All of the following violate it and need to move to the respective frontend crates.
+
+- [ ] **`type_infer.rs` lines 473–514: Flash and GML dispatch in the shared type inference pass.**
+  Hardcoded match arms on `("Flash.Scope", "findPropStrict")`, `("Flash.Object", "construct")`,
+  and `("GameMaker.Global", "get")` to infer output types. These are engine-specific inference
+  rules in a shared pass. Fix: frontends register type inference hooks (e.g. a `SystemCallTypeHook`
+  callback map) that the pass calls out to, rather than hardcoding engine names.
+
+- [ ] **`linear.rs` lines 765, 1638–1669: Flash-specific rewrites in the shared linearizer.**
+  `is_scope_lookup_op()` hardcodes `"Flash.Scope"` (line 765). `build_expr_from_op` converts
+  `"Flash.Object"` / `deleteProperty` / `hasProperty` to `dict.delete()`/`dict.has()` (lines
+  1638–1669). These belong in `reincarnate-frontend-flash`'s post-linearization rewrite pass.
+
+- [ ] **`linear.rs` line ~1454–1465: GML `ClassRef as any` widening in the shared linearizer.**
+  `build_val` adds an `AsType` cast for `Type::ClassRef` with the comment "In GML, object class
+  names are interchangeable with their integer object indices." This is GML-specific and belongs
+  in the GML backend's rewrite pass, not the shared linearizer.
+
+- [ ] **`ast_passes.rs` lines 1804–2140: Flash `ForOfRewrite` / `HasNext2` pattern in shared AST passes.**
+  `ForOfRewrite`, `is_hasnext2_expr`, `contains_iterator_next`, `is_iterator_next_expr`,
+  `replace_iterator_next` are entirely about Flash's `HasNext2` opcode pattern. Move to
+  `reincarnate-frontend-flash`.
+
+- [ ] **`ast_passes.rs` line ~170: Harlowe-specific dispatch in `lower_output_nodes`.**
+  Hardcodes `system == "Harlowe.H"`. Move to `reincarnate-frontend-twine`.
+
+- [ ] **`CastKind::AsType` in core IR is AS3-specific.**
+  `ir/inst.rs` lines 31–36: `CastKind::AsType` is documented as "AS3 `as` operator: type-check-or-null".
+  A RPG Maker or Ruby frontend has no equivalent. Consider renaming to `NullableCoerce` with
+  a language-agnostic description, or moving Flash-specific cast semantics to a Flash IR extension.
+
+- [ ] **`CmpKind::LooseEq` / `LooseNe` in core IR are JS-specific.**
+  `inst.rs` lines 47–51: Documented as "JavaScript loose equality (`==`)… used by SugarCube."
+  Rust backends and non-JS frontends have no concept of loose vs strict equality. Move to a
+  JS-backend-specific annotation or a frontend IR extension.
+
+- [ ] **`datawin` crate missing `reincarnate-` prefix.**
+  `crates/formats/datawin/Cargo.toml`: crate name is `datawin`. CLAUDE.md: "All crates use the
+  `reincarnate-` prefix." Rename to `reincarnate-formats-datawin` (or `reincarnate-datawin`).
+
+---
+
 ## Developer Experience / Tooling Gaps (HIGH PRIORITY)
 
 - [x] **Session tooling review** — Completed 2026-02-28. Found gaps below (items added as separate entries).
@@ -205,6 +250,12 @@ Functions to audit (partial list):
 - `surface_copy`, `vertex_*` — graphics
 - `layer_get_depth`, `layer_x`, `layer_y` — layer state queries
 
+Confirmed untracked silent stubs (found 2026-03-09 audit):
+- [ ] **`asset_get_tags` / `asset_has_tags`** — return `[]` / `false` with no comment; should throw or have an explicit no-op comment
+- [ ] **`file_find_first` / `file_find_next`** — return `""` with "no filesystem enumeration in browser" comment; but returning `""` is the GML terminator sentinel, which could cause game loops that check `file_find_first() != ""` to silently skip rather than error. Should throw.
+- [ ] **`directory_exists`** — returns `false` with no comment. Add explicit no-op comment or throw.
+- [ ] **`buffer_async_group_end`** — returns `0` (fake group handle). Callers may use the returned ID for subsequent async operations, silently acting on handle 0. Should throw.
+
 ### Runtime type widening — last audited: (never)
 
 Review runtime files for type signatures widened to silence TypeScript errors from game code (e.g. `string` → `any`, required param made optional). Such changes hide real bugs.
@@ -228,6 +279,9 @@ All mutable state in the Flash runtime lives at module scope, which means two Fl
 
 - [x] **`flash/display.ts` — exported drag state** (`_dragTarget`, `_dragBounds`, `_dragLockCenter`, `_dragOffsetX`, `_dragOffsetY`). Replaced with `_dragStateByStage: WeakMap<Stage, DragState | null>` — now keyed by Stage so each FlashRuntime has isolated drag state.
 - [ ] **`flash/display.ts` — `_displayState` singleton** (line ~1209). Single-threaded JS means two concurrent `constructRoot()` can't interleave, so this is safe in practice but still wrong in principle. Move to a WeakMap keyed by Stage or pass stage directly.
+- [ ] **`flash/display.ts` — `_timelineFactories` map** (`const _timelineFactories = new Map<string, () => DisplayObject>()` at module scope, line ~964). Keyed by string name — cross-game pollution if two Flash games share a class name. Move to `FlashRuntime`.
+- [ ] **`flash/text.ts` — `_textState` singleton** (`const _textState = new TextModuleState()` at module scope, line ~19). Move to `FlashRuntime`.
+- [ ] **`flash/deflate.ts` — `_deflateState` singleton** (`const _deflateState = new DeflateState()` at module scope, line ~114). Move to `FlashRuntime`.
 - [ ] **`flash/timing.ts` — `TimingState` singleton** — `state = new TimingState()` at module scope (line 9); `timing` object wraps it. Move to `FlashRuntime.timing` instance field; same pattern as `GameRuntime.onTick`.
 - [ ] **`flash/input.ts` — `InputState` singleton** — `state = new InputState()` at module scope (line 12); DOM event listeners registered unconditionally on import. Move to `FlashRuntime.input`; attach/detach listeners in `start()`/`stop()`.
 - [ ] **`flash/audio.ts` — `AudioState` singleton** — `_audio = new AudioState()` at module scope. Move to `FlashRuntime.audio`; `_ensureInit()` becomes part of `FlashRuntime.start()`.
@@ -876,6 +930,12 @@ Fixed in previous sessions (2026-02-24):
   merge target happened to be a loop header. Fixed with a `is_loop_header` BFS guard.
   Combined result: 553 → 472 total errors (−81); TS2322: 135 → 126.
 
+- [ ] **`instance_type_flow.rs` line 165: `Ne` TypeCheck case not handled.**
+  The `Ne` comparison falls through to the same `TypeCheck` rewrite as `Eq`, which is wrong —
+  `Ne` should produce a `Not(TypeCheck(...))`. Currently any `obj != SomeClass` check gets the
+  same type narrowing as `obj == SomeClass`, yielding wrong narrowed types in the else branch.
+  Untracked `// TODO: handle Ne case properly.` in source.
+
 - [ ] **TS2345/TS2322/TS2365 (~80 errors): GmlInstanceTypeFlow arithmetic widening** —
   When a class constructor (`Struct(ClassName)` / `typeof ClassName`) participates in arithmetic
   (Add, Sub, Mul, Div, etc.), the result type should NOT inherit the constructor type. The game uses
@@ -959,6 +1019,78 @@ Dead Estate uses shaders for visual effects (fog, color grading, etc.).
 ### Particle System
 `part_*` require a real particle simulation system. Currently throw.
 Dead Estate uses particles for effects (dust, sparks, etc.).
+
+### GML Simulation Correctness Bugs (found 2026-03-09 audit)
+
+**CRITICAL — `room_speed` completely ignored:**
+The game loop calls `requestAnimationFrame` unconditionally every vsync frame. GML's `room_speed`
+declares target steps/second (commonly 30, 60, 120). A game with `room_speed = 30` on a 60Hz
+monitor runs 2× too fast. All per-step logic (alarms, physics, `xprevious`/`yprevious`) is
+affected. Fix: accumulate elapsed time and step N times per frame to match `room_speed`.
+
+- [ ] **Implement `room_speed`-based step accumulator in `_runFrame()`**
+
+**CRITICAL — Built-in instance physics missing entirely:**
+GML's built-in motion model (`speed`, `direction`, `hspeed`, `vspeed`, `friction`, `gravity`,
+`gravity_direction`) is applied to `x`/`y` each step by the runner. None of these properties
+exist on `GMLObject` and the step loop doesn't apply them. Games using built-in motion are
+fully stationary.
+
+- [ ] **Add `speed`, `direction`, `hspeed`, `vspeed`, `friction`, `gravity`, `gravity_direction`, `image_speed`, `image_angle` to `GMLObject`**
+- [ ] **Apply built-in motion in the step loop** (before step event): apply gravity to speed along `gravity_direction`, apply friction to decelerate `speed`, decompose `speed`/`direction` into `hspeed`/`vspeed`, add to `x`/`y`
+
+**CRITICAL — `_partUpdate`: system position offset applied as per-step velocity:**
+`runtime.ts` line ~1174: `p.x += p.vx + s.pos[0]; p.y += p.vy + s.pos[1]` — `s.pos` is the
+system origin offset, not a velocity. Adding it every step causes exponential drift. Fix:
+`p.x += p.vx; p.y += p.vy;` during update; apply `s.pos` offset only at draw time.
+
+- [ ] **Fix `_partUpdate` to apply `s.pos` at draw time only**
+
+**WARN — `part_type_color_hsv` computes one color at type-definition time, not per-particle:**
+GML's HSV range parameters are per-particle randomization at spawn time. Current impl calls
+`randf` once and stores one color in `t.colors[0]` for all particles of the type.
+
+- [ ] **Fix `part_type_color_hsv` to store HSV range params; randomize per spawn in `_spawnParticle`**
+
+**WARN — `string_insert` off-by-one (GML is 1-based):**
+`string.ts`: `s.slice(0, index) + sub + s.slice(index)` — at `index=1`, slices first character
+instead of inserting before it. GML `string_insert(sub, s, 1)` inserts at the very start.
+Fix: `s.slice(0, index - 1) + sub + s.slice(index - 1)`.
+
+- [ ] **Fix `string_insert` 1-based indexing**
+
+**WARN — `buffer_wrap` kind (2) silently drops writes past end:**
+`buffer_write` grows for kinds 1/3 (grow/fast-grow), early-returns for kinds 0/4 (fixed/vbuffer),
+but for kind 2 (wrap) it also silently drops without wrapping the position. GML `buffer_wrap`
+semantics require position to wrap to `tell % size`.
+
+- [ ] **Implement `buffer_wrap` wraparound in `buffer_write`/`buffer_read`**
+
+**WARN — `clipboard_get_text()` returns stale internal cache:**
+Only updates from `clipboard_set_text()` calls within the game. External clipboard content
+(e.g. user copying a save code from elsewhere) is never read. `navigator.clipboard.readText()`
+is async — needs a pre-fetch mechanism or async init path for games that use clipboard save codes.
+
+- [ ] **Implement `clipboard_get_text()` with async clipboard read + cached result**
+
+**WARN — `collision_circle` ignores `prec=true`:**
+Uses AABB-vs-circle test regardless of the `prec` parameter. When `prec=true`, GML uses
+pixel-precise sprite masks. The `_prec` parameter is currently accepted and ignored.
+
+- [ ] **Track as known limitation; add `prec=true` TODO comment in source**
+
+**WARN — `draw_rectangle_color` / `draw_triangle_color` use only first corner color:**
+Three of four rect corner colors and two of three triangle vertex colors are ignored. Canvas 2D
+doesn't natively support per-vertex colors, but a linear gradient approximation is feasible.
+
+- [ ] **Implement gradient approximation for `draw_rectangle_color` and `draw_triangle_color`**
+
+**WARN — `GetField` on `Union` type always returns `Dynamic`:**
+`type_infer.rs` `infer_result_type` for `Op::GetField` handles `Struct(name)` and `ClassRef(name)`
+but not `Union([...])`. Field access on any union-typed value yields `Dynamic`, losing type info
+after any branch that produces different object types.
+
+- [ ] **Add Union arm to `GetField` type inference: resolve field type for each union member, join results**
 
 ### Import side: free-function and asset references
 `loadAnyaDataExt`, `AnyaSticker2A`, etc. appear as bare TS2304 names because the import
@@ -1085,6 +1217,28 @@ All previously listed functions have been implemented. Check `function_modules`
 in runtime.json for any newly referenced but unimplemented functions.
 
 ## IR Architecture
+
+### IR Invariant Violations (found 2026-03-09 audit)
+
+- [ ] **`FunctionBuilder::br()` / `br_if()` don't validate arg count vs target block param count.**
+  A mismatch is silently accepted at construction time and causes index-out-of-bounds panics or
+  silent wrong-value assignments when `branch_assigns()` zips params with args during structurization.
+  Fix: add a debug-mode assertion (or always-on check) in `br()` / `br_if()` that
+  `args.len() == func.blocks[target].params.len()`. Add an IR verifier pass for catching this class
+  of error during testing.
+
+- [ ] **`ValueId`s are unscoped — a value from function A can be silently embedded in function B.**
+  `ValueId` is a plain `u32` newtype with no function-scope binding. If a frontend accidentally
+  passes a foreign `ValueId` into `fb.br(target, &[foreign_id])`, it silently accesses the wrong
+  value (or an in-range-by-coincidence value). Consider a debug-mode `FuncId`-tagged `ValueId`
+  wrapper, or at minimum document this invariant as caller responsibility and add a verifier check.
+
+- [ ] **`null_sentinel_values` is `#[serde(skip)]` — lost across IR serialization.**
+  If IR is ever serialized post-Mem2Reg (e.g. for incremental builds, caching, or `print-ir`
+  roundtrip), sentinel information is lost and the emitter would emit spurious null-initialization
+  assignments. Not a current bug (no serialization roundtrip of transformed IR exists), but
+  the field should either be serialized or the sentinel logic should be reconstructable from
+  the IR itself.
 
 - [ ] **Closure support with variable capture** — The IR has
   `MethodKind::Closure` for marking closures, and the backend can inline them
