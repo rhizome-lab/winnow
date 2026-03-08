@@ -1557,6 +1557,15 @@ fn stack_effect(inst: &Instruction, rest: &[Instruction]) -> (usize, usize) {
 }
 
 /// Pre-compute the operand stack depth at each block entry point.
+fn record_depth(depths: &mut HashMap<usize, usize>, offset: usize, depth: usize) {
+    // Use min across all predecessor paths — if paths disagree on depth, only the
+    // values present on every path can be safely passed as block args.
+    depths
+        .entry(offset)
+        .and_modify(|v| *v = (*v).min(depth))
+        .or_insert(depth);
+}
+
 fn compute_block_stack_depths(
     instructions: &[Instruction],
     block_starts: &BTreeSet<usize>,
@@ -1570,7 +1579,7 @@ fn compute_block_stack_depths(
     for (i, inst) in instructions.iter().enumerate() {
         if block_starts.contains(&inst.offset) && i > 0 {
             if !terminated {
-                depths.entry(inst.offset).or_insert(depth as usize);
+                record_depth(&mut depths, inst.offset, depth as usize);
             }
             if let Some(&d) = depths.get(&inst.offset) {
                 depth = d as i32;
@@ -1597,16 +1606,16 @@ fn compute_block_stack_depths(
             Opcode::B => {
                 if let Operand::Branch(offset) = inst.operand {
                     let target = (inst.offset as i64 + offset as i64) as usize;
-                    depths.entry(target).or_insert(depth as usize);
+                    record_depth(&mut depths, target, depth as usize);
                 }
                 terminated = true;
             }
             Opcode::Bt | Opcode::Bf => {
                 if let Operand::Branch(offset) = inst.operand {
                     let target = (inst.offset as i64 + offset as i64) as usize;
-                    depths.entry(target).or_insert(depth as usize);
+                    record_depth(&mut depths, target, depth as usize);
                     if let Some(next) = instructions.get(i + 1) {
-                        depths.entry(next.offset).or_insert(depth as usize);
+                        record_depth(&mut depths, next.offset, depth as usize);
                     }
                 }
                 terminated = true;
@@ -1614,9 +1623,9 @@ fn compute_block_stack_depths(
             Opcode::PushEnv => {
                 if let Operand::Branch(offset) = inst.operand {
                     let target = (inst.offset as i64 + offset as i64) as usize;
-                    depths.entry(target).or_insert(depth as usize);
+                    record_depth(&mut depths, target, depth as usize);
                     if let Some(next) = instructions.get(i + 1) {
-                        depths.entry(next.offset).or_insert(depth as usize);
+                        record_depth(&mut depths, next.offset, depth as usize);
                     }
                 }
                 terminated = true;
@@ -1624,9 +1633,9 @@ fn compute_block_stack_depths(
             Opcode::PopEnv => {
                 if let Operand::Branch(offset) = inst.operand {
                     let target = (inst.offset as i64 + offset as i64) as usize;
-                    depths.entry(target).or_insert(depth as usize);
+                    record_depth(&mut depths, target, depth as usize);
                     if let Some(next) = instructions.get(i + 1) {
-                        depths.entry(next.offset).or_insert(depth as usize);
+                        record_depth(&mut depths, next.offset, depth as usize);
                     }
                 }
                 terminated = true;
