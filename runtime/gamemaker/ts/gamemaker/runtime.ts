@@ -72,6 +72,15 @@ export class GMLObject {
   #alarm: number[] | null = null;
   [ACTIVE] = false;
   visible: number | boolean = 1;
+  speed = 0;
+  direction = 0;
+  hspeed = 0;
+  vspeed = 0;
+  friction = 0;
+  gravity = 0;
+  gravity_direction = 270;
+  image_speed = 1;
+  image_angle = 0;
 
   get alarm(): number[] {
     if (this.#alarm === null) {
@@ -173,6 +182,33 @@ class GMLRoom {
           }
         }
       }
+    }
+
+    // Built-in motion model (applied before begin-step, per GML semantics)
+    for (const instance of rt.roomVariables) {
+      if (deact.has(instance)) continue;
+      const { speed, direction, hspeed, vspeed, friction, gravity, gravity_direction } = instance;
+      if (speed === 0 && gravity === 0 && hspeed === 0 && vspeed === 0) continue;
+      // Apply gravity: decompose along gravity_direction (GML: 0=right,90=up,180=left,270=down; y-axis flipped)
+      const gravRad = gravity_direction * Math.PI / 180;
+      let hs = hspeed + Math.cos(gravRad) * gravity;
+      let vs = vspeed + (-Math.sin(gravRad)) * gravity;
+      // Recompute speed/direction from hs/vs
+      let spd = Math.sqrt(hs * hs + vs * vs);
+      // Apply friction: reduce speed (clamped to 0)
+      if (friction !== 0 && spd > 0) {
+        spd = Math.max(0, spd - friction);
+        if (spd === 0) { hs = 0; vs = 0; }
+        else { hs = Math.cos(Math.atan2(-vs, hs)) * spd; vs = -Math.sin(Math.atan2(-vs, hs)) * spd; }
+      }
+      // Apply motion
+      instance.x += hs;
+      instance.y += vs;
+      // Keep speed/direction/hspeed/vspeed in sync
+      instance.hspeed = hs;
+      instance.vspeed = vs;
+      instance.speed = spd;
+      instance.direction = spd > 0 ? Math.atan2(-vs, hs) * 180 / Math.PI : instance.direction;
     }
 
     // Begin step
@@ -287,6 +323,7 @@ interface PartTypeConfig {
   direction: [number, number, number, number];   // min, max, inc, wiggle
   colors: number[];          // 1-3 color values for gradient
   alphas: number[];          // 1-3 alpha values for gradient
+  hsvRange: { h1: number; h2: number; s1: number; s2: number; v1: number; v2: number } | null;
   size: [number, number, number, number];        // min, max, inc, wiggle
   sizeX: [number, number, number, number] | null;
   sizeY: [number, number, number, number] | null;
@@ -322,7 +359,7 @@ interface PartSystem {
 function defaultPartType(): PartTypeConfig {
   return {
     life: [1, 1], speed: [0, 0, 0, 0], direction: [0, 360, 0, 0],
-    colors: [0xffffff], alphas: [1],
+    colors: [0xffffff], alphas: [1], hsvRange: null,
     size: [1, 1, 0, 0], sizeX: null, sizeY: null,
     orientation: [0, 0, 0, 0, false], scale: [1, 1],
     shape: 1, sprite: null, gravity: [0, 0],
@@ -440,6 +477,8 @@ export class GameRuntime {
   // Runtime state
   _drawHandle: FrameHandle | number = 0;
   _currentRoom: GMLRoom | null = null;
+  _stepAccumulator = 0;
+  _lastFrameTime = 0;
   _isStepping = false;
   _pendingStep: GMLObject[] = [];
   _drawguiUsed = false;
@@ -1076,7 +1115,9 @@ export class GameRuntime {
   part_type_color3(type: number, col1: number, col2: number, col3: number): void { const t = this._partTypes.get(type); if (t) t.colors = [col1, col2, col3]; }
   part_type_color_hsv(type: number, hmin: number, hmax: number, smin: number, smax: number, vmin: number, vmax: number): void {
     const t = this._partTypes.get(type); if (!t) return;
-    t.colors = [hsv2rgb(randf(hmin, hmax), randf(smin, smax) / 255, randf(vmin, vmax) / 255)];
+    // Store ranges; randomized per-particle at spawn time in _spawnParticle.
+    t.hsvRange = { h1: hmin, h2: hmax, s1: smin, s2: smax, v1: vmin, v2: vmax };
+    t.colors = [];
   }
   part_type_alpha1(type: number, a: number): void { const t = this._partTypes.get(type); if (t) t.alphas = [a]; }
   part_type_alpha2(type: number, a1: number, a2: number): void { const t = this._partTypes.get(type); if (t) t.alphas = [a1, a2]; }
@@ -1131,9 +1172,15 @@ export class GameRuntime {
     const dir = randf(t.direction[0], t.direction[1]) * Math.PI / 180;
     const size = randf(t.size[0], t.size[1]);
     const angle = randf(t.orientation[0], t.orientation[1]);
+    // Per-spawn HSV randomization: pick a random color within the stored ranges.
+    let resolvedColor = colorOverride;
+    if (resolvedColor === null && t.hsvRange !== null) {
+      const { h1, h2, s1, s2, v1, v2 } = t.hsvRange;
+      resolvedColor = hsv2rgb(randf(h1, h2), randf(s1, s2) / 255, randf(v1, v2) / 255);
+    }
     s.particles.push({
       x, y, vx: Math.cos(dir) * spd, vy: -Math.sin(dir) * spd,
-      life, maxLife: life, typeId, colorOverride,
+      life, maxLife: life, typeId, colorOverride: resolvedColor,
       size, angle, sizeInc: t.size[2], angleInc: t.orientation[2],
       speedInc: t.speed[2],
       sizeWiggle: t.size[3], angleWiggle: t.orientation[3], speedWiggle: t.speed[3],
@@ -1632,10 +1679,19 @@ export class GameRuntime {
     }
     this._primVerts = [];
   }
-  draw_rectangle_color(x1: number, y1: number, x2: number, y2: number, c1: number, _c2: number, _c3: number, _c4: number, outline: boolean): void {
+  draw_rectangle_color(x1: number, y1: number, x2: number, y2: number, c1: number, _c2: number, _c3: number, c4: number, outline: boolean): void {
     const ctx = this._gfx.ctx;
-    if (outline) { ctx.strokeStyle = gmlColorToCss(c1); ctx.strokeRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1); }
-    else { ctx.fillStyle = gmlColorToCss(c1); ctx.fillRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1); }
+    if (outline) {
+      ctx.strokeStyle = gmlColorToCss(c1);
+      ctx.strokeRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    } else {
+      // Linear gradient approximation from top-left (c1) to bottom-right (c4).
+      const g = ctx.createLinearGradient(x1, y1, x2, y2);
+      g.addColorStop(0, gmlColorToCss(c1));
+      g.addColorStop(1, gmlColorToCss(c4));
+      ctx.fillStyle = g;
+      ctx.fillRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    }
   }
   draw_sprite_tiled_ext(spr: number, sub: number, x: number, y: number, xscale: number, yscale: number, _col: number, alpha: number): void {
     const ctx = this._gfx.ctx;
@@ -1825,6 +1881,8 @@ export class GameRuntime {
       case 16: try { view.setBigUint64(buf.pos, BigInt(Math.trunc(value as number)), true); } catch { view.setUint32(buf.pos, (value as number) >>> 0, true); } break;
     }
     buf.pos += sz;
+    // buffer_wrap (kind=2): wrap position circularly so the buffer acts as a ring.
+    if (buf.kind === 2 && buf.data.length > 0) buf.pos = buf.pos % buf.data.length;
   }
 
   buffer_read(bufId: number, type: number): any {
@@ -1863,6 +1921,8 @@ export class GameRuntime {
       default: return 0;
     }
     buf.pos += sz;
+    // buffer_wrap (kind=2): wrap position circularly.
+    if (buf.kind === 2 && buf.data.length > 0) buf.pos = buf.pos % buf.data.length;
     return result;
   }
 
@@ -2022,11 +2082,26 @@ export class GameRuntime {
     if (outline) { ctx.strokeStyle = css; ctx.stroke(); }
     else { ctx.fillStyle = css; ctx.fill(); }
   }
-  draw_triangle_color(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, c1: number, _c2: number, _c3: number, outline: boolean): void {
+  draw_triangle_color(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, c1: number, c2: number, c3: number, outline: boolean): void {
     const ctx = this._gfx.ctx;
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
-    if (outline) { ctx.strokeStyle = gmlColorToCss(c1); ctx.stroke(); }
-    else { ctx.fillStyle = gmlColorToCss(c1); ctx.fill(); }
+    if (outline) {
+      ctx.strokeStyle = gmlColorToCss(c1);
+      ctx.stroke();
+    } else {
+      // Canvas 2D has no per-vertex colors. Approximate: gradient from vertex 1 to midpoint of v2/v3.
+      // Average c2 and c3 channel-wise (GML colors are BGR packed integers).
+      const avgR = ((c2 & 0xff) + (c3 & 0xff)) >> 1;
+      const avgG = (((c2 >> 8) & 0xff) + ((c3 >> 8) & 0xff)) >> 1;
+      const avgB = (((c2 >> 16) & 0xff) + ((c3 >> 16) & 0xff)) >> 1;
+      const cAvg = avgR | (avgG << 8) | (avgB << 16);
+      const mx = (x2 + x3) / 2, my = (y2 + y3) / 2;
+      const g = ctx.createLinearGradient(x1, y1, mx, my);
+      g.addColorStop(0, gmlColorToCss(c1));
+      g.addColorStop(1, gmlColorToCss(cAvg));
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
   }
   draw_set_circle_precision(_n: number): void { /* canvas uses native arcs */ }
   draw_sprite_part_ext(spr: number, sub: number, left: number, top: number, w: number, h: number, x: number, y: number, xscale: number, yscale: number, _col: number, alpha: number): void {
@@ -3561,9 +3636,23 @@ export class GameRuntime {
       const gp = pads[i];
       this._gamepadPrev.set(i, gp ? gp.buttons.map((b) => b.pressed) : []);
     }
+
+    const now = performance.now();
+    if (this._lastFrameTime === 0) this._lastFrameTime = now;
+    // Compute delta time in seconds; clamp to 100ms to avoid spiral-of-death.
+    const dt = Math.min((now - this._lastFrameTime) / 1000, 0.1);
+    this._lastFrameTime = now;
+
+    const stepInterval = 1 / (this.room_speed || 60);
+    this._stepAccumulator += dt;
+
     const start = performance.now();
     this.onTick?.();
-    if (this._currentRoom) this._currentRoom.draw();
+    // Run as many game steps as the accumulator has accumulated.
+    while (this._stepAccumulator >= stepInterval) {
+      if (this._currentRoom) this._currentRoom.draw();
+      this._stepAccumulator -= stepInterval;
+    }
     const end = performance.now();
     const elapsed = end - start;
     const newfps = 1000 / Math.max(0.01, elapsed);
