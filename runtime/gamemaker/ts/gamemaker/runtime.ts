@@ -60,11 +60,11 @@ export class GMLObject {
   sprite_index: number | undefined = undefined;
   image_index = 0;
   image_alpha = 1;
-  persistent = false;
+  persistent: number | boolean = 0;
   depth = 0;
   #alarm: number[] | null = null;
   [ACTIVE] = false;
-  visible = true;
+  visible: number | boolean = 1;
 
   get alarm(): number[] {
     if (this.#alarm === null) {
@@ -3008,7 +3008,7 @@ export class GameRuntime {
   steam_inventory_get_all_items(_arr?: any): number { return -1; /* no-op — Steam inventory not available in browser */ }
   steam_get_quota_total(): number { return 104857600; /* 100 MB typical Steam Cloud quota */ }
   steam_get_global_stat_history_real(_name: string, _days?: number): number { return 0; }
-  steam_file_read(_path: string): string { return fetchItem(this._persistence, this._steamCloudKey(_path)) ?? ""; }
+  steam_file_read(_path: string): string { const d = fetchItem(this._persistence, this._steamCloudKey(_path)); return d ? new TextDecoder().decode(d) : ""; }
   steam_set_rich_presence(_key: string, _val: string): void { /* no-op — Steam rich presence not available in browser */ }
   steam_user_get_auth_session_ticket(_arr?: any): number { return -1; /* no-op — Steam auth not available in browser */ }
 

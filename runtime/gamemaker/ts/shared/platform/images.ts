@@ -43,7 +43,7 @@ export async function loadImageUrl(state: ImageState, url: string): Promise<Imag
   return state.allocate({ bitmap, x: 0, y: 0, w: bitmap.width, h: bitmap.height, refCount: 0 });
 }
 
-export async function loadImageBytes(state: ImageState, data: Uint8Array, format: string | null): Promise<ImageHandle> {
+export async function loadImageBytes(state: ImageState, data: Uint8Array<ArrayBuffer>, format: string | null): Promise<ImageHandle> {
   const mime = format ?? "image/png";
   const blob = new Blob([data], { type: mime });
   const bitmap = await createImageBitmap(blob);
