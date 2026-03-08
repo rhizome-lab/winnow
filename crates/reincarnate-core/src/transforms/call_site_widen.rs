@@ -29,6 +29,11 @@ use crate::transforms::call_site_flow::collect_call_site_types;
 /// - `run_once = true`: prevents oscillation in fixpoint mode. Without this,
 ///   `ConstraintSolve` would re-narrow in each iteration and this pass would
 ///   re-widen, producing an infinite loop.
+///
+/// Requires both `CallSiteTypeFlow` and `ConstraintSolve` to have run for
+/// useful results. If `ConstraintSolve` is skipped and `CallSiteTypeFlow` runs,
+/// widening sees Dynamic caller types and silently undoes `ConstraintSolve`'s
+/// narrowing. Consider gating this pass when either dependency is disabled.
 pub struct CallSiteTypeWiden;
 
 impl Transform for CallSiteTypeWiden {

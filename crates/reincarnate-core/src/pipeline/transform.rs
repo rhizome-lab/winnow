@@ -41,6 +41,10 @@ pub trait Transform {
 const MAX_FIXPOINT_ITERATIONS: usize = 100;
 
 /// Valid pass names for `--dump-ir-after`, in pipeline order.
+///
+/// Order must match `default_pipeline` in `transforms/mod.rs` exactly —
+/// the pipeline stops after the named pass, so a wrong order causes
+/// `--dump-ir-after <pass>` to stop at the wrong point.
 pub const VALID_PASS_NAMES: &[&str] = &[
     "frontend",
     "type-inference",
@@ -50,8 +54,8 @@ pub const VALID_PASS_NAMES: &[&str] = &[
     "constant-folding",
     "cfg-simplify",
     "coroutine-lowering",
-    "redundant-cast-elimination",
     "mem2reg",
+    "redundant-cast-elimination",
     "dead-code-elimination",
 ];
 

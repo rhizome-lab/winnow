@@ -90,6 +90,11 @@ pub struct Function {
     /// user code; they represent an uninitialized slot. Block-arg assignments
     /// from these sentinels should be skipped during code emission so that
     /// TypeScript's definite-assignment analysis can verify correct initialization.
+    ///
+    /// Populated by Mem2Reg. Skipped during serialization — this data is only valid
+    /// within a single pipeline run and cannot be reconstructed from the serialized IR.
+    /// If IR is ever serialized post-Mem2Reg (e.g. for incremental builds), this field
+    /// would need to be either serialized or the sentinel logic made reconstructable.
     #[serde(skip)]
     pub null_sentinel_values: HashSet<ValueId>,
 }
