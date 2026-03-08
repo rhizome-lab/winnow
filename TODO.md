@@ -632,15 +632,13 @@ callbacks, or detect "all paths return through `with`" and emit the function dif
 **TS2554 (5):** `loadSetting(_rt, self, key, default)` — 4 args, but function only declares 3 (`_rt,
 self, argument0 = 0`). Similarly `getScreenType`, `getPiecesWidth`, `getPiecesHeight`, `drawTextPieces`
 called with more args than their signatures declare. GML loose calling convention: extra args are
-accessible via `argument[N]` in GML but are ignored in TypeScript. Correct fix: in the emitter
-(GameMaker backend), scan all function calls per callee; if any call site passes more GML args than
-the function's declared param count, widen the declaration to add `argumentN: any = 0.0` params up
-to the max observed arity. This is bounded (not `...args: any[]`) and applies only to functions
-actually called with extra args. The type for each extra param should come from call-site analysis
-(meet of observed arg types at that position — like a mini CallSiteTypeFlow for undeclared params),
-NOT `: any`. E.g. `loadSetting(key, 0)` adds `argument1: number = 0` not `argument1: any = 0.0`.
-NOT: add `...args: any[]` globally (too broad, untyped). NOT: a global IR policy (only functions
-with observed over-arity calls need widening).
+accessible via `argument[N]` in GML but are ignored in TypeScript. Correct fix: a new `CallSiteArityWiden` IR transform pass (sibling of `CallSiteTypeFlow`).
+For each callee, scan all `Op::Call` sites; if any passes more args than the declared param count,
+append `argumentN: T = default` params to the `FunctionSig`, where `T` comes from call-site type
+analysis (meet of observed arg types at each extra position). The emitter reads the widened sig
+as-is — no emitter changes needed. NOT: `...args: any[]` (too broad, untyped). NOT: `: any` for
+extra params (use observed call-site types). NOT: a global policy (only callees that are actually
+called with extra args need widening).
 
 #### TS2345 Detailed Breakdown (2043 errors, by type pair)
 
