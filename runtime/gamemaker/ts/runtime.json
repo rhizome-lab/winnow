@@ -2813,6 +2813,1089 @@
     "window_get_fullscreen": {
       "params": [],
       "returns": "boolean"
+    },
+    "angle_difference": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "approach": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "array_length": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "asset_get_index": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "audio_play_sound_at": {
+      "params": [
+        "number",
+        "*",
+        "number",
+        "number",
+        "number",
+        "number",
+        "boolean"
+      ],
+      "returns": "number"
+    },
+    "audio_sound_get_gain": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "audio_sound_get_pan": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "audio_sound_get_track_position": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "audio_sound_length": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "buffer_base64_decode": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "buffer_create": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "buffer_get_size": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "buffer_load_async": {
+      "params": [
+        "number",
+        "string"
+      ],
+      "returns": "number"
+    },
+    "buffer_save_async": {
+      "params": [
+        "string",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "buffer_tell": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "camera_create_view": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "camera_get_view_height": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "camera_get_view_width": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "camera_get_view_x": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "camera_get_view_y": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "display_get_gui_height": {
+      "params": [],
+      "returns": "number"
+    },
+    "display_get_gui_width": {
+      "params": [],
+      "returns": "number"
+    },
+    "display_get_height": {
+      "params": [],
+      "returns": "number"
+    },
+    "display_get_width": {
+      "params": [],
+      "returns": "number"
+    },
+    "draw_get_font": {
+      "params": [],
+      "returns": "number"
+    },
+    "ds_grid_value_x": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "*"
+      ],
+      "returns": "number"
+    },
+    "ds_grid_value_y": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "*"
+      ],
+      "returns": "number"
+    },
+    "ds_list_find_index": {
+      "params": [
+        "number",
+        "*"
+      ],
+      "returns": "number"
+    },
+    "ds_map_secure_load": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "ds_priority_create": {
+      "params": [],
+      "returns": "number"
+    },
+    "ds_priority_size": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "ds_queue_create": {
+      "params": [],
+      "returns": "number"
+    },
+    "ds_queue_size": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "ds_stack_create": {
+      "params": [],
+      "returns": "number"
+    },
+    "ds_stack_size": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "file_text_open_append": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "file_text_open_read": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "file_text_open_write": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "font_add_sprite_ext": {
+      "params": [
+        "number",
+        "string",
+        "number",
+        "boolean"
+      ],
+      "returns": "number"
+    },
+    "game_get_speed": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "gamepad_axis_value": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "gamepad_get_device_count": {
+      "params": [],
+      "returns": "number"
+    },
+    "get_integer_async": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "layer_background_get_sprite": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "layer_get_depth": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "layer_get_id": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "layer_get_x": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "layer_get_y": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "layer_sequence_create": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "make_color_hsv": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "mp_grid_create": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "part_emitter_create": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "part_system_create": {
+      "params": [],
+      "returns": "number"
+    },
+    "part_type_create": {
+      "params": [],
+      "returns": "number"
+    },
+    "path_add": {
+      "params": [],
+      "returns": "number"
+    },
+    "path_get_length": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "point_distance_3d": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "rectangle_in_rectangle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "room_duplicate": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "shader_get_sampler_index": {
+      "params": [
+        "number",
+        "string"
+      ],
+      "returns": "number"
+    },
+    "shader_get_uniform": {
+      "params": [
+        "number",
+        "string"
+      ],
+      "returns": "number"
+    },
+    "sprite_duplicate": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_speed": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "sprite_get_uvs": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_file_size": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "steam_get_app_id": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_get_stat_int": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "steam_get_user_steam_id": {
+      "params": [],
+      "returns": "number"
+    },
+    "variable_get_hash": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "variable_struct_names_count": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "vertex_create_buffer": {
+      "params": [],
+      "returns": "number"
+    },
+    "vertex_format_end": {
+      "params": [],
+      "returns": "number"
+    },
+    "video_get_duration": {
+      "params": [],
+      "returns": "number"
+    },
+    "video_get_position": {
+      "params": [],
+      "returns": "number"
+    },
+    "video_get_status": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_get_height": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_get_width": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_get_x": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_get_y": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_mouse_get_x": {
+      "params": [],
+      "returns": "number"
+    },
+    "window_mouse_get_y": {
+      "params": [],
+      "returns": "number"
+    },
+    "audio_get_name": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "buffer_base64_encode": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "string"
+    },
+    "clipboard_get_text": {
+      "params": [],
+      "returns": "string"
+    },
+    "ds_map_write": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "file_find_first": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "string"
+    },
+    "file_find_next": {
+      "params": [],
+      "returns": "string"
+    },
+    "file_text_read_string": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "font_get_name": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "gamepad_get_description": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "get_string_async": {
+      "params": [
+        "string",
+        "string"
+      ],
+      "returns": "string"
+    },
+    "json_encode": {
+      "params": [
+        "*"
+      ],
+      "returns": "string"
+    },
+    "json_stringify": {
+      "params": [
+        "*"
+      ],
+      "returns": "string"
+    },
+    "room_get_name": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "sprite_get_name": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "string_digits": {
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    "string_format": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "string"
+    },
+    "string_letters": {
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    "string_repeat": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "string"
+    },
+    "variable_struct_get_names": {
+      "params": [
+        "*"
+      ],
+      "returns": "string"
+    },
+    "video_get_format": {
+      "params": [],
+      "returns": "string"
+    },
+    "getInstanceField": {
+      "params": [
+        "*",
+        "string"
+      ],
+      "returns": "*"
+    },
+    "getAllField": {
+      "params": [
+        "string"
+      ],
+      "returns": "*"
+    },
+    "array_concat": {
+      "params": [
+        "*"
+      ],
+      "returns": "*"
+    },
+    "array_get": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "surface_getpixel": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "gpu_get_colorwriteenable": {
+      "params": [],
+      "returns": "*"
+    },
+    "ds_map_find_first": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "ds_map_find_next": {
+      "params": [
+        "number",
+        "*"
+      ],
+      "returns": "*"
+    },
+    "ds_stack_pop": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "ds_stack_top": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "ds_queue_dequeue": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "ds_queue_head": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "method": {
+      "params": [
+        "*",
+        "*"
+      ],
+      "returns": "*"
+    },
+    "variable_struct_get": {
+      "params": [
+        "*",
+        "string"
+      ],
+      "returns": "*"
+    },
+    "getObjectName": {
+      "params": [
+        "*"
+      ],
+      "returns": "string"
+    },
+    "buffer_read": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "steam_current_game_language": {
+      "params": [],
+      "returns": "string"
+    },
+    "steam_ugc_get_subscribed_items": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "steam_lobby_get_lobby_id": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_lobby_get_data": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "string"
+    },
+    "steam_input_get_digital_action_handle": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "string_byte_length": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "struct_get": {
+      "params": [
+        "*",
+        "string"
+      ],
+      "returns": "*"
+    },
+    "struct_get_from_hash": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "tag_get_assets": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "steam_get_user_persona_name_sync": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "steam_get_global_stat_history_int": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_image_get_size": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "steam_lobby_get_member_count": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_lobby_get_chat_message_data": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "surface_get_texture": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "json_parse": {
+      "params": [
+        "string"
+      ],
+      "returns": "*"
+    },
+    "steam_get_persona_name": {
+      "params": [],
+      "returns": "string"
+    },
+    "steam_net_packet_get_sender_id": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_ugc_create_query_user": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "string_byte_at": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "json_decode": {
+      "params": [
+        "string"
+      ],
+      "returns": "*"
+    },
+    "ds_priority_find_max": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "ds_map_keys_to_array": {
+      "params": [
+        "number"
+      ],
+      "returns": "*"
+    },
+    "method_get_self": {
+      "params": [
+        "*"
+      ],
+      "returns": "*"
+    },
+    "layer_vspeed": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "layer_background_sprite": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "texture_get_texel_height": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "texture_get_texel_width": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "struct_get_names": {
+      "params": [
+        "*"
+      ],
+      "returns": "*"
+    },
+    "buffer_peek": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "steam_ugc_start_item_update": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_music_get_status": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_lobby_list_get_lobby_id": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_lobby_list_get_count": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_get_local_file_change_count": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_available_languages": {
+      "params": [],
+      "returns": "string"
+    },
+    "steam_inventory_get_all_items": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "steam_get_quota_total": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_get_global_stat_history_real": {
+      "params": [
+        "string",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_file_read": {
+      "params": [
+        "string"
+      ],
+      "returns": "string"
+    },
+    "steam_user_get_auth_session_ticket": {
+      "params": [
+        "*"
+      ],
+      "returns": "number"
+    },
+    "steam_ugc_num_subscribed_items": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_ugc_create_query_all": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_lobby_list_get_data": {
+      "params": [
+        "number",
+        "string"
+      ],
+      "returns": "string"
+    },
+    "steam_get_quota_free": {
+      "params": [],
+      "returns": "number"
+    },
+    "steam_get_app_ownership_ticket_data": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "steam_utils_get_server_real_time": {
+      "params": [],
+      "returns": "number"
+    },
+    "layer_x": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "layer_y": {
+      "params": [
+        "*",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "psn_get_trophy_unlock_state": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "psn_communication_restriction_status": {
+      "params": [
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_file_get_list": {
+      "params": [],
+      "returns": "*"
+    },
+    "steam_get_achievement_progress_limits_int": {
+      "params": [
+        "string"
+      ],
+      "returns": "*"
+    },
+    "steam_get_global_stat_real": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "steam_get_local_file_change": {
+      "params": [
+        "number"
+      ],
+      "returns": "string"
+    },
+    "steam_input_get_action_origin_from_xbox_origin": {
+      "params": [
+        "number",
+        "number"
+      ],
+      "returns": "number"
+    },
+    "steam_input_get_analog_action_handle": {
+      "params": [
+        "string"
+      ],
+      "returns": "number"
+    },
+    "steam_input_get_connected_controllers": {
+      "params": [],
+      "returns": "*"
+    },
+    "steam_input_get_digital_action_origins": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "*"
+    },
+    "steam_input_get_glyph_png_for_action_origin": {
+      "params": [
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "string"
     }
   },
   "function_modules": [
