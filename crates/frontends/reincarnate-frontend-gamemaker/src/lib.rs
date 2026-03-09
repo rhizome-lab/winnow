@@ -146,8 +146,9 @@ impl Frontend for GameMakerFrontend {
         }
         mb.set_room_creation_code(room_creation_code);
 
-        // Extract assets (textures, audio).
-        let mut assets = assets::extract_assets(&dw);
+        // Extract assets (textures, audio, icon from sibling .exe if present).
+        let source_dir = input.source.parent().unwrap_or(std::path::Path::new("."));
+        let mut assets = assets::extract_assets(&dw, source_dir);
         if !assets.assets.is_empty() {
             eprintln!("[gamemaker] extracted {} assets", assets.assets.len());
         }

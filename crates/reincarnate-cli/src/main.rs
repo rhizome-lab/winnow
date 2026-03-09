@@ -578,6 +578,7 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, fixpoint
         };
 
         // Copy icon to output dir and compute the favicon filename.
+        // Priority: manifest `icon` field > icon extracted from game binary.
         let favicon = if let Some(icon_path) = &manifest.icon {
             let icon_src = std::path::Path::new(icon_path);
             if icon_src.exists() {
@@ -594,6 +595,17 @@ fn cmd_emit(manifest_path: &Path, skip_passes: &[String], preset: &str, fixpoint
                 eprintln!("[warn] icon not found, skipping: {icon_path}");
                 None
             }
+        } else if let Some(icon_asset) = output.assets.find_by_kind(&reincarnate_core::project::AssetKind::Icon).into_iter().next() {
+            // Use the icon extracted from the game binary (e.g. Windows .exe PE resources).
+            let favicon_name = icon_asset.path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("favicon.ico")
+                .to_string();
+            fs::create_dir_all(&target.output_dir)?;
+            fs::write(target.output_dir.join(&favicon_name), &icon_asset.data)
+                .with_context(|| format!("failed to write extracted icon: {favicon_name}"))?;
+            eprintln!("[emit] extracted icon from game binary -> {favicon_name}");
+            Some(favicon_name)
         } else {
             None
         };
