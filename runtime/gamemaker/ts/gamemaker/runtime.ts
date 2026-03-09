@@ -1227,23 +1227,29 @@ export class GameRuntime {
   // ---- Instance field helpers ----
 
   /** Get a field value from a specific instance or the first instance of a given class. */
-  getInstanceField(cls: GMLObject | typeof GMLObject, field: string): any {
+  getInstanceField(cls: GMLObject | typeof GMLObject | number, field: string): any {
     if (cls instanceof GMLObject) return (cls as any)[field];
-    const inst = this.roomVariables.find((o) => o instanceof cls);
+    const clazz = typeof cls === 'number' ? this.classes[cls] : cls;
+    if (!clazz) return undefined;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
     return inst ? (inst as any)[field] : undefined;
   }
 
   /** Set a field value on a specific instance or the first instance of a given class. */
-  setInstanceField(cls: GMLObject | typeof GMLObject, field: string, value: unknown): void {
+  setInstanceField(cls: GMLObject | typeof GMLObject | number, field: string, value: unknown): void {
     if (cls instanceof GMLObject) { (cls as any)[field] = value; return; }
-    const inst = this.roomVariables.find((o) => o instanceof cls);
+    const clazz = typeof cls === 'number' ? this.classes[cls] : cls;
+    if (!clazz) return;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
     if (inst) (inst as any)[field] = value;
   }
 
   /** Set an indexed element of a field on a specific instance or the first instance of a given class. */
-  setInstanceFieldIndex(cls: GMLObject | typeof GMLObject, field: string, index: number, value: unknown): void {
+  setInstanceFieldIndex(cls: GMLObject | typeof GMLObject | number, field: string, index: number, value: unknown): void {
     if (cls instanceof GMLObject) { (cls as any)[field][index] = value; return; }
-    const inst = this.roomVariables.find((o) => o instanceof cls);
+    const clazz = typeof cls === 'number' ? this.classes[cls] : cls;
+    if (!clazz) return;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
     if (inst) (inst as any)[field][index] = value;
   }
 
