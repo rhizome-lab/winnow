@@ -322,6 +322,40 @@
       ],
       "returns": "number"
     },
+    "point_in_rectangle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "boolean"
+    },
+    "point_in_circle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "boolean"
+    },
+    "point_in_triangle": {
+      "params": [
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number",
+        "number"
+      ],
+      "returns": "boolean"
+    },
     "lengthdir_x": {
       "params": [
         "number",
@@ -1239,6 +1273,14 @@
       "params": [
         "int"
       ],
+      "returns": "boolean"
+    },
+    "mouse_wheel_up": {
+      "params": [],
+      "returns": "boolean"
+    },
+    "mouse_wheel_down": {
+      "params": [],
       "returns": "boolean"
     },
     "sprite_get_width": {
