@@ -7,7 +7,7 @@ import type { GameRuntime } from "./runtime";
 const UINT32_MAX = 4294967295;
 const UINT32_OFFSET = 2147483648;
 
-class XorGen {
+export class XorGen {
   x: number[];
   i: number;
 

@@ -11,10 +11,11 @@ import { requestFrame, cancelFrame } from "../shared/platform";
 import type { FrameHandle } from "../shared/platform";
 import { PersistenceState, init as initPersistence, store, fetch as fetchItem, remove } from "../shared/platform/persistence";
 import type { RenderRoot } from "../shared/render-root";
-import { DrawState, createDrawAPI } from "./draw";
-import { InputState, createInputAPI } from "./input";
-import { gmlColorToCss } from "./color";
-import { StorageState, createStorageAPI } from "./storage";
+import { DrawState } from "./draw";
+import { InputState } from "./input";
+import { InputState as PlatformInputState, onMouseMove, onMouseDown, onMouseUp, onKeyDown, onKeyUp, onScroll } from "../shared/platform";
+import { Colors, HAligns, VAligns, gmlColorToCss } from "./color";
+import { StorageState } from "./storage";
 import {
   AudioState, loadAudio,
   play as audioPlay, stop as audioStop, stopAll as audioStopAll,
@@ -28,9 +29,7 @@ import {
   bufferDuration as audioBufferDuration,
   setNodeParam as audioSetNodeParam,
 } from "../shared/platform/audio";
-import { MathState, createMathAPI } from "./math";
-import { createGlobalAPI } from "./global";
-import { createInstanceAPI } from "./instance";
+import { MathState, XorGen } from "./math";
 import { ACTIVE, noop } from "./constants";
 import type { Sprite } from "../../data/sprites";
 import type { Texture } from "../../data/textures";
@@ -42,7 +41,7 @@ import { compileProgram, orthoMatrix, makeFullscreenQuad } from "./webgl";
 import type { ShaderProgram } from "./webgl";
 
 // Re-exports for class_preamble
-export { Colors, HAligns, VAligns } from "./color";
+export { Colors, HAligns, VAligns };
 export { ACTIVE } from "./constants";
 
 // ---- GMLObject ----
@@ -393,6 +392,10 @@ function bufferTypeSize(type: number): number {
   }
 }
 
+// ---- PRNG constants (used by Math API methods) ----
+const _UINT32_MAX = 4294967295;
+const _UINT32_OFFSET = 2147483648;
+
 // ---- GameRuntime ----
 
 export class GameRuntime {
@@ -504,83 +507,7 @@ export class GameRuntime {
   // Sprites enum (per-runtime)
   Sprites: Record<string, number> = {};
 
-  // ---- API functions populated by factories ----
-  // Explicitly declare internally-used factory functions for type safety.
-  getInstanceField!: (objId: number, field: string) => any;
-  setInstanceField!: (objId: number, field: string, value: any) => void;
-  setInstanceFieldIndex!: (objId: number, field: string, index: number, value: any) => void;
-  getAllField!: (field: string) => any;
-  setAllField!: (field: string, value: any) => void;
-  withInstances!: <T extends GMLObject>(target: (new(...args: any[]) => T) | T | number, callback: (inst: T) => void) => void;
-  drawSprite!: (
-    spriteIndex: number, imageIndex: number, x: number, y: number,
-    opts?: { image_alpha?: number; image_xscale?: number; image_yscale?: number },
-  ) => void;
-  resetFrameInput!: () => void;
-  activateMouse!: (ax: number, ay: number, override?: boolean) => void;
-  setupInput!: () => void;
-  mouse_x!: () => number;
-  mouse_y!: () => number;
-
-  // Math API (from createMathAPI)
-  random!: (max: number) => number;
-  randomize!: () => void;
-  random_range!: (min: number, max: number) => number;
-  irandom!: (max: number) => number;
-  irandom_range!: (min: number, max: number) => number;
-  choose!: (...args: any[]) => any;
-
-  // Draw API (from createDrawAPI)
-  draw_set_color!: (color: number) => void;
-  draw_set_font!: (font: number) => void;
-  draw_set_halign!: (halign: number) => void;
-  draw_set_valign!: (valign: number) => void;
-  draw_set_alpha!: (alpha: number) => void;
-  draw_get_alpha!: () => number;
-  draw_sprite!: (spriteIndex: number, imageIndex: number, x: number, y: number) => void;
-  draw_sprite_ext!: (spriteIndex: number, imageIndex: number, x: number, y: number, xscale: number, yscale: number, rot: number, color: number, alpha: number) => void;
-  draw_self!: () => void;
-  draw_rectangle!: (x1: number, y1: number, x2: number, y2: number, outline: boolean) => void;
-  draw_text!: (x: number, y: number, text: string) => void;
-  draw_text_color!: (x: number, y: number, text: string, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
-  draw_text_transformed!: (x: number, y: number, text: string, xscale: number, yscale: number, angle: number) => void;
-  draw_text_ext!: (x: number, y: number, text: string, sep: number, w: number) => void;
-  draw_text_ext_color!: (x: number, y: number, text: string, sep: number, w: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
-  draw_text_ext_transformed!: (x: number, y: number, text: string, sep: number, w: number, xscale: number, yscale: number, angle: number) => void;
-  draw_text_transformed_color!: (x: number, y: number, text: string, xscale: number, yscale: number, angle: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
-  draw_text_ext_transformed_color!: (x: number, y: number, text: string, sep: number, w: number, xscale: number, yscale: number, angle: number, c1: number, c2: number, c3: number, c4: number, alpha: number) => void;
-  sprite_get_width!: (spriteIndex: number) => number;
-  sprite_get_height!: (spriteIndex: number) => number;
-  string_height_ext!: (text: string, sep: number, w: number) => number;
-
-  // Input API (from createInputAPI)
-  mouse_check_button!: (button: number) => boolean;
-  mouse_check_button_pressed!: (button: number) => boolean;
-  mouse_check_button_released!: (button: number) => boolean;
-  mouse_wheel_up!: () => boolean;
-  mouse_wheel_down!: () => boolean;
-
-  // Storage API (from createStorageAPI)
-  ini_open!: (path: string) => void;
-  ini_close!: () => string;
-  ini_write_real!: (section: string, key: string, value: number) => void;
-  ini_read_real!: (section: string, key: string, defaultVal: number) => number;
-  ini_read_string!: (section: string, key: string, defaultVal: string) => string;
-  ini_write_string!: (section: string, key: string, value: string) => void;
-
-  // Global API (from createGlobalAPI)
-  variable_global_exists!: (key: string) => boolean;
-  variable_global_get!: (key: string) => any;
-  variable_global_set!: (key: string, value: any) => void;
-
   constructor() {
-    Object.assign(this, createDrawAPI(this));
-    Object.assign(this, createInputAPI(this));
-    Object.assign(this, createStorageAPI(this));
-    Object.assign(this, createMathAPI(this));
-    Object.assign(this, createGlobalAPI(this));
-    Object.assign(this, createInstanceAPI(this));
-
     // Bind core methods for destructuring
     this.instance_create = this.instance_create.bind(this);
     this.instance_destroy = this.instance_destroy.bind(this);
@@ -591,6 +518,783 @@ export class GameRuntime {
     this.room_goto_previous = this.room_goto_previous.bind(this);
     this.room_restart = this.room_restart.bind(this);
     this.game_restart = this.game_restart.bind(this);
+  }
+
+  // ---- Draw API helpers ----
+
+  private _getFontLookup(fontIdx: number): Map<number, any> {
+    const draw = this._draw;
+    if (!draw.fontLookups[fontIdx]) {
+      const map = new Map<number, any>();
+      const font = this.fonts[fontIdx];
+      if (font) {
+        for (const c of font.chars) {
+          map.set(c.char, c);
+        }
+      }
+      draw.fontLookups[fontIdx] = map;
+    }
+    return draw.fontLookups[fontIdx]!;
+  }
+
+  private _wrapLines(lines: string[], lookup: Map<number, any>, maxWidth: number): void {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      let j = 0;
+      let width = 0;
+      for (; j < line.length; j++) {
+        const g = lookup.get(line.charCodeAt(j));
+        if (g) width += g.shift;
+        if (width > maxWidth) {
+          let breakAt = j;
+          while (breakAt > 0 && line[breakAt] !== " ") breakAt--;
+          if (breakAt === 0) break;
+          lines[i] = line.slice(0, breakAt);
+          lines.splice(i + 1, 0, line.slice(breakAt + 1));
+          break;
+        }
+      }
+    }
+  }
+
+  private _getCachedColorFont(
+    fontIdx: number, color: number,
+    sheet: CanvasImageSource, tex: any,
+  ): ImageBitmap | null {
+    const draw = this._draw;
+    if (!draw.colorFontCache[fontIdx]) draw.colorFontCache[fontIdx] = [];
+    const cached = draw.colorFontCache[fontIdx]![color as any] as ImageBitmap | undefined;
+    if (cached) return cached;
+
+    const tc = this._gfx.tcanvas;
+    const tcx = this._gfx.tctx;
+    const w = (sheet as any).width ?? tex.src.w;
+    const h = (sheet as any).height ?? tex.src.h;
+    if ("width" in tc) (tc as any).width = w;
+    if ("height" in tc) (tc as any).height = h;
+    tcx.clearRect(0, 0, w, h);
+    tcx.drawImage(
+      sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h,
+      0, 0, tex.dest.w, tex.dest.h,
+    );
+    const imageData = tcx.getImageData(0, 0, tex.src.w, tex.src.h);
+    const data = imageData.data;
+    const r = color & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color >> 16;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = data[i]! * r / 255;
+      data[i + 1] = data[i + 1]! * g / 255;
+      data[i + 2] = data[i + 2]! * b / 255;
+    }
+    tcx.clearRect(0, 0, w, h);
+    tcx.putImageData(imageData, 0, 0);
+    if ("transferToImageBitmap" in tc) {
+      const bm = (tc as OffscreenCanvas).transferToImageBitmap();
+      (draw.colorFontCache[fontIdx] as any)[color] = bm;
+      return bm;
+    }
+    return null;
+  }
+
+  // ---- Draw config setters ----
+
+  draw_set_color(color: number): void { this._draw.config.color = color; }
+  draw_set_font(font: number): void { this._draw.config.font = font; }
+  draw_set_halign(halign: number): void { this._draw.config.halign = halign; }
+  draw_set_valign(valign: number): void { this._draw.config.valign = valign; }
+  draw_set_alpha(alpha: number): void { this._draw.alpha = alpha; }
+  draw_get_alpha(): number { return this._draw.alpha; }
+  draw_get_colour(): number { return this._draw.config.color; }
+
+  // ---- Sprite drawing ----
+
+  drawSprite(
+    spriteIndex: number, imageIndex: number, x: number, y: number,
+    opts?: { image_alpha?: number; image_xscale?: number; image_yscale?: number },
+  ): void {
+    const ctx = this._gfx.ctx;
+    const alpha = opts?.image_alpha ?? 1;
+    if (alpha !== this._draw.alpha) {
+      ctx.globalAlpha = this._draw.alpha = alpha;
+    }
+    const sprite = this.sprites[spriteIndex];
+    if (!sprite) return;
+    const texIdx = sprite.textures[imageIndex] ?? sprite.textures[0];
+    if (texIdx === undefined) return;
+    const tex = this.textures[texIdx];
+    if (!tex) return;
+    const sheet = this.textureSheets[tex.sheetId];
+    if (!sheet) return;
+
+    const xscale = opts?.image_xscale;
+    const yscale = opts?.image_yscale;
+    if (xscale !== undefined || yscale !== undefined) {
+      const sx = xscale ?? 1;
+      const sy = yscale ?? 1;
+      ctx.save();
+      ctx.scale(sx, sy);
+      ctx.drawImage(
+        sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h,
+        x / sx - sprite.origin.x, y / sy - sprite.origin.y,
+        tex.dest.w, tex.dest.h,
+      );
+      ctx.restore();
+    } else {
+      ctx.drawImage(
+        sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h,
+        x - sprite.origin.x, y - sprite.origin.y,
+        tex.dest.w, tex.dest.h,
+      );
+    }
+  }
+
+  draw_sprite(spriteIndex: number, imageIndex: number, x: number, y: number): void {
+    this.drawSprite(spriteIndex, imageIndex, x, y);
+  }
+
+  draw_sprite_ext(
+    spriteIndex: number, imageIndex: number, x: number, y: number,
+    xscale: number, yscale: number, rot: number, _color: number, alpha: number,
+  ): void {
+    const ctx = this._gfx.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(xscale, yscale);
+    if (rot !== 0) ctx.rotate(-rot * Math.PI / 180);
+    if (alpha !== this._draw.alpha) ctx.globalAlpha = this._draw.alpha = alpha;
+    const sprite = this.sprites[spriteIndex];
+    if (sprite) {
+      const texIdx = sprite.textures[imageIndex] ?? sprite.textures[0];
+      if (texIdx !== undefined) {
+        const tex = this.textures[texIdx];
+        if (tex) {
+          const sheet = this.textureSheets[tex.sheetId];
+          if (sheet) {
+            ctx.drawImage(
+              sheet, tex.src.x, tex.src.y, tex.src.w, tex.src.h,
+              -sprite.origin.x, -sprite.origin.y,
+              tex.dest.w, tex.dest.h,
+            );
+          }
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  draw_self(): void {}
+
+  sprite_get_width(spriteIndex: number): number {
+    return this.sprites[spriteIndex]?.size.width ?? 0;
+  }
+
+  sprite_get_height(spriteIndex: number): number {
+    return this.sprites[spriteIndex]?.size.height ?? 0;
+  }
+
+  // ---- Text drawing ----
+
+  draw_text(x: number, y: number, text: string): void {
+    const ctx = this._gfx.ctx;
+    const draw = this._draw;
+    const font = this.fonts[draw.config.font];
+    if (!font) return;
+    const lookup = this._getFontLookup(draw.config.font);
+    const lines = String(text).split("#");
+    const mGlyph = lookup.get(77); // 'M'
+    const lineHeight = draw.config.ext.sep === -1
+      ? (mGlyph?.frame.height ?? 16)
+      : draw.config.ext.sep;
+    const height = lineHeight * lines.length;
+
+    if (draw.alpha !== 1) {
+      ctx.globalAlpha = draw.alpha = 1;
+    }
+
+    let y2 = y;
+    if (draw.config.valign === VAligns.fa_middle) y2 -= Math.ceil(height / 2);
+    else if (draw.config.valign === VAligns.fa_bottom) y2 -= height;
+
+    // Word-wrap if w > 0
+    if (draw.config.ext.w > 0) {
+      this._wrapLines(lines, lookup, draw.config.ext.w);
+    }
+
+    const texIdx = font.texture;
+    const tex = this.textures[texIdx];
+    if (!tex) return;
+    let sheet: CanvasImageSource | undefined = this.textureSheets[tex.sheetId];
+    if (!sheet) return;
+    let bx = tex.src.x;
+    let by = tex.src.y;
+
+    // Color tinting
+    if (draw.config.color !== 0xffffff) {
+      bx = 0;
+      by = 0;
+      const cached = this._getCachedColorFont(draw.config.font, draw.config.color, sheet, tex);
+      if (cached) sheet = cached;
+    }
+
+    for (const line of lines) {
+      let width = 0;
+      for (const ch of line) {
+        const g = lookup.get(ch.charCodeAt(0));
+        if (g) width += g.shift;
+      }
+      let x2 = x;
+      if (draw.config.halign === HAligns.fa_center) x2 -= Math.ceil(width / 2);
+      else if (draw.config.halign === HAligns.fa_right) x2 -= width;
+
+      for (const ch of line) {
+        const g = lookup.get(ch.charCodeAt(0));
+        if (g) {
+          ctx.drawImage(
+            sheet, bx + g.frame.x, by + g.frame.y, g.frame.width, g.frame.height,
+            x2 + g.offset, y2, g.frame.width, g.frame.height,
+          );
+          x2 += g.shift;
+        }
+      }
+      y2 += lineHeight;
+    }
+  }
+
+  draw_text_ext(x: number, y: number, text: string, sep: number, w: number): void {
+    const old = this._draw.config.ext;
+    this._draw.config.ext = { sep, w };
+    this.draw_text(x, y, text);
+    this._draw.config.ext = old;
+  }
+
+  draw_text_color(
+    x: number, y: number, text: string,
+    c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+  ): void {
+    const oldColor = this._draw.config.color;
+    const oldAlpha = this._draw.alpha;
+    this._draw.config.color = c1;
+    this._draw.alpha = alpha;
+    this.draw_text(x, y, text);
+    this._draw.config.color = oldColor;
+    this._draw.alpha = oldAlpha;
+  }
+
+  draw_text_transformed(
+    x: number, y: number, text: string,
+    xscale: number, yscale: number, angle: number,
+  ): void {
+    const ctx = this._gfx.ctx;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(xscale, yscale);
+    if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+    this.draw_text(0, 0, text);
+    ctx.restore();
+  }
+
+  draw_text_ext_color(
+    x: number, y: number, text: string, sep: number, w: number,
+    c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+  ): void {
+    const oldColor = this._draw.config.color;
+    const oldAlpha = this._draw.alpha;
+    const oldExt = this._draw.config.ext;
+    this._draw.config.color = c1;
+    this._draw.alpha = alpha;
+    this._draw.config.ext = { sep, w };
+    this.draw_text(x, y, text);
+    this._draw.config.color = oldColor;
+    this._draw.alpha = oldAlpha;
+    this._draw.config.ext = oldExt;
+  }
+
+  draw_text_ext_transformed(
+    x: number, y: number, text: string, sep: number, w: number,
+    xscale: number, yscale: number, angle: number,
+  ): void {
+    const ctx = this._gfx.ctx;
+    const oldExt = this._draw.config.ext;
+    this._draw.config.ext = { sep, w };
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(xscale, yscale);
+    if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+    this.draw_text(0, 0, text);
+    ctx.restore();
+    this._draw.config.ext = oldExt;
+  }
+
+  draw_text_transformed_color(
+    x: number, y: number, text: string,
+    xscale: number, yscale: number, angle: number,
+    c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+  ): void {
+    const ctx = this._gfx.ctx;
+    const oldColor = this._draw.config.color;
+    const oldAlpha = this._draw.alpha;
+    this._draw.config.color = c1;
+    this._draw.alpha = alpha;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(xscale, yscale);
+    if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+    this.draw_text(0, 0, text);
+    ctx.restore();
+    this._draw.config.color = oldColor;
+    this._draw.alpha = oldAlpha;
+  }
+
+  draw_text_ext_transformed_color(
+    x: number, y: number, text: string, sep: number, w: number,
+    xscale: number, yscale: number, angle: number,
+    c1: number, _c2: number, _c3: number, _c4: number, alpha: number,
+  ): void {
+    const ctx = this._gfx.ctx;
+    const oldColor = this._draw.config.color;
+    const oldAlpha = this._draw.alpha;
+    const oldExt = this._draw.config.ext;
+    this._draw.config.color = c1;
+    this._draw.alpha = alpha;
+    this._draw.config.ext = { sep, w };
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(xscale, yscale);
+    if (angle !== 0) ctx.rotate(-angle * Math.PI / 180);
+    this.draw_text(0, 0, text);
+    ctx.restore();
+    this._draw.config.color = oldColor;
+    this._draw.alpha = oldAlpha;
+    this._draw.config.ext = oldExt;
+  }
+
+  string_height_ext(text: string, sep: number, w: number): number {
+    const font = this.fonts[this._draw.config.font];
+    if (!font) return 0;
+    const lookup = this._getFontLookup(this._draw.config.font);
+    const mGlyph = lookup.get(77);
+    const h = sep === -1 ? (mGlyph?.frame.height ?? 16) : sep;
+    const lines = String(text).split("#");
+    if (w > 0) this._wrapLines(lines, lookup, w);
+    return lines.length * h;
+  }
+
+  // ---- Rectangle drawing ----
+
+  draw_rectangle(x1: number, y1: number, x2: number, y2: number, outline: boolean): void {
+    const ctx = this._gfx.ctx;
+    const css = gmlColorToCss(this._draw.config.color);
+    if (outline) {
+      ctx.strokeStyle = css;
+      ctx.strokeRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    } else {
+      ctx.fillStyle = css;
+      ctx.fillRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
+    }
+  }
+
+  draw_set_ext(sep: number, w: number): void {
+    this._draw.config.ext = { sep, w };
+  }
+
+  // ---- Input API helpers ----
+
+  private _codeToGmlKeyCode(code: string, key: string): number {
+    if (code.startsWith("Key")) {
+      const ch = code.slice(3);
+      if (ch.length === 1) return ch.charCodeAt(0);
+    }
+    if (code.startsWith("Digit")) return code.charCodeAt(5);
+    if (code.startsWith("Numpad")) {
+      const rest = code.slice(6);
+      if (rest >= "0" && rest <= "9") return 96 + parseInt(rest);
+      switch (rest) {
+        case "Add": return 107;
+        case "Subtract": return 109;
+        case "Multiply": return 106;
+        case "Divide": return 111;
+        case "Decimal": return 110;
+        case "Enter": return 13;
+      }
+    }
+    if (code.startsWith("F") && code.length <= 3) {
+      const n = parseInt(code.slice(1));
+      if (n >= 1 && n <= 12) return 111 + n;
+    }
+    switch (code) {
+      case "Backspace": return 8;
+      case "Tab": return 9;
+      case "Enter": return 13;
+      case "ShiftLeft": case "ShiftRight": return 16;
+      case "ControlLeft": case "ControlRight": return 17;
+      case "AltLeft": case "AltRight": return 18;
+      case "Pause": return 19;
+      case "CapsLock": return 20;
+      case "Escape": return 27;
+      case "Space": return 32;
+      case "PageUp": return 33;
+      case "PageDown": return 34;
+      case "End": return 35;
+      case "Home": return 36;
+      case "ArrowLeft": return 37;
+      case "ArrowUp": return 38;
+      case "ArrowRight": return 39;
+      case "ArrowDown": return 40;
+      case "Insert": return 45;
+      case "Delete": return 46;
+      case "MetaLeft": case "MetaRight": return 91;
+      case "ContextMenu": return 93;
+      case "NumLock": return 144;
+      case "ScrollLock": return 145;
+      case "Semicolon": return 186;
+      case "Equal": return 187;
+      case "Comma": return 188;
+      case "Minus": return 189;
+      case "Period": return 190;
+      case "Slash": return 191;
+      case "Backquote": return 192;
+      case "BracketLeft": return 219;
+      case "Backslash": return 220;
+      case "BracketRight": return 221;
+      case "Quote": return 222;
+    }
+    if (key.length === 1) return key.toUpperCase().charCodeAt(0);
+    return 0;
+  }
+
+  // ---- Input API ----
+
+  mouse_x(): number { return this._input.mouse.x; }
+  mouse_y(): number { return this._input.mouse.y; }
+  mouse_wheel_up(): boolean { return this._input.mouse.wheelUp; }
+  mouse_wheel_down(): boolean { return this._input.mouse.wheelDown; }
+
+  mouse_check_button(button: number): boolean {
+    return this._input.mouse.buttons[button - 1]?.held ?? false;
+  }
+
+  mouse_check_button_pressed(button: number): boolean {
+    return this._input.mouse.buttons[button - 1]?.pressed ?? false;
+  }
+
+  mouse_check_button_released(button: number): boolean {
+    return this._input.mouse.buttons[button - 1]?.released ?? false;
+  }
+
+  keyboard_check(key: number): boolean {
+    return this._input.keysDown.has(key);
+  }
+
+  keyboard_check_pressed(key: number): boolean {
+    return this._input.keysPressed.has(key);
+  }
+
+  keyboard_check_released(key: number): boolean {
+    return this._input.keysReleased.has(key);
+  }
+
+  resetFrameInput(): void {
+    for (const b of this._input.mouse.buttons) {
+      b.pressed = false;
+      b.released = false;
+    }
+    this._input.mouse.wheelUp = false;
+    this._input.mouse.wheelDown = false;
+    this._input.keysPressed.clear();
+    this._input.keysReleased.clear();
+  }
+
+  activateMouse(ax: number, ay: number, override = false): void {
+    for (const obj of this.roomVariables) {
+      if (obj.sprite_index === undefined) continue;
+      const sprite = this.sprites[obj.sprite_index];
+      if (!sprite) continue;
+      const bx = obj.x;
+      const by = obj.y;
+      const lx = (ax - bx + sprite.origin.x) / obj.image_xscale;
+      const ly = (ay - by + sprite.origin.y) / obj.image_yscale;
+      if (lx >= 0 && ly >= 0 && lx < sprite.size.width && ly < sprite.size.height) {
+        if (override || !obj[ACTIVE]) {
+          obj[ACTIVE] = true;
+          obj.mouseenter();
+        }
+      } else {
+        if (override || obj[ACTIVE]) {
+          obj[ACTIVE] = false;
+          obj.mouseleave();
+        }
+      }
+    }
+  }
+
+  setupInput(): void {
+    const canvas = this._gfx.canvas;
+    const platformInput = new PlatformInputState();
+
+    onMouseMove(platformInput, canvas, (_device, x, y) => {
+      this._input.mouse.x = x;
+      this._input.mouse.y = y;
+      this.activateMouse(x, y);
+    });
+
+    onMouseDown(platformInput, canvas, (_device, button) => {
+      const b = this._input.mouse.buttons[this._input.domButtonMap[button]!];
+      if (b) { b.pressed = true; b.held = true; }
+    });
+
+    onMouseUp(platformInput, canvas, (_device, button) => {
+      const b = this._input.mouse.buttons[this._input.domButtonMap[button]!];
+      if (b) { b.released = true; b.held = false; }
+    });
+
+    onKeyDown(platformInput, canvas, (_device, code, key) => {
+      const keyCode = this._codeToGmlKeyCode(code, key);
+      this._input.keysPressed.add(keyCode);
+      this._input.keysDown.add(keyCode);
+      if (key.length === 1) {
+        this._input.keyboard_string += key;
+        if (this._input.keyboard_string.length > 1024) {
+          this._input.keyboard_string = this._input.keyboard_string.slice(this._input.keyboard_string.length - 1024);
+        }
+      } else if (keyCode === 8) {
+        if (this._input.keyboard_string.length > 0) {
+          this._input.keyboard_string = this._input.keyboard_string.slice(0, -1);
+        }
+      }
+      this._dispatchKeyPress(keyCode);
+    });
+
+    onKeyUp(platformInput, canvas, (_device, code, key) => {
+      const keyCode = this._codeToGmlKeyCode(code, key);
+      this._input.keysReleased.add(keyCode);
+      this._input.keysDown.delete(keyCode);
+    });
+
+    onScroll(platformInput, canvas, (_device, _dx, dy) => {
+      if (dy < 0) this._input.mouse.wheelUp = true;
+      else this._input.mouse.wheelDown = true;
+    });
+  }
+
+  private _dispatchKeyPress(keyCode: number): void {
+    const id = "keypress" + keyCode;
+    for (const obj of this.roomVariables) {
+      if ((obj as any)[id] !== noop) {
+        (obj as any)[id]();
+      }
+    }
+  }
+
+  // ---- Storage API ----
+
+  setGameName(name: string): void {
+    this._storage.gameName = name;
+  }
+
+  ini_open(path: string): void {
+    this._storage.iniPath = path;
+    const raw = localStorage.getItem("__gml_fs_" + this._storage.gameName + "_" + path);
+    this.ini_open_from_string(raw);
+  }
+
+  ini_open_from_string(str: string | null): void {
+    if (!str) {
+      this._storage.iniContents = {};
+      return;
+    }
+    const sections: Record<string, Record<string, string>> = {};
+    const sectionList = str.split(/\s+(?=\[[^\]]+\])/g);
+    for (const sectionStr of sectionList) {
+      const m = sectionStr.match(/^(?:\[([^\]]+)\])([\s\S]+)/);
+      if (!m) continue;
+      const [, name, contents] = m;
+      const section: Record<string, string> = {};
+      const keyList = contents!.trim().split(/\s+(?=.+=.+)/g);
+      for (const kv of keyList) {
+        const km = kv.match(/(.+?)=(.+)/);
+        if (km) section[km[1]!] = km[2]!;
+      }
+      sections[name!] = section;
+    }
+    this._storage.iniContents = sections;
+  }
+
+  ini_read_real(section: string, key: string, defaultVal: number): number {
+    return +this.ini_read_string(section, key, String(defaultVal));
+  }
+
+  ini_read_string(section: string, key: string, defaultVal: string): string {
+    const val = (this._storage.iniContents[section] || {})[key];
+    return val === undefined ? defaultVal : val;
+  }
+
+  ini_write_real(section: string, key: string, value: number): void {
+    this.ini_write_string(section, key, String(value));
+  }
+
+  ini_write_string(section: string, key: string, value: string): void {
+    if (this._storage.iniContents[section] === undefined) {
+      this._storage.iniContents[section] = {};
+    }
+    this._storage.iniContents[section]![key] = String(value);
+  }
+
+  ini_section_exists(section: string): boolean {
+    return this._storage.iniContents[section] !== undefined;
+  }
+
+  ini_key_exists(section: string, key: string): boolean {
+    return this._storage.iniContents[section] !== undefined && this._storage.iniContents[section][key] !== undefined;
+  }
+
+  ini_section_delete(section: string): void {
+    delete this._storage.iniContents[section];
+  }
+
+  ini_key_delete(section: string, key: string): void {
+    if (this._storage.iniContents[section]) {
+      delete this._storage.iniContents[section]![key];
+    }
+  }
+
+  ini_close(): string {
+    let result = "";
+    for (const section in this._storage.iniContents) {
+      result += `[${section}]\n`;
+      for (const key in this._storage.iniContents[section]) {
+        result += `${key}=${this._storage.iniContents[section]![key]}\n`;
+      }
+      result += "\n";
+    }
+    localStorage.setItem("__gml_fs_" + this._storage.gameName + "_" + this._storage.iniPath, result);
+    this._storage.iniPath = "";
+    this._storage.iniContents = {};
+    return result;
+  }
+
+  // ---- Math API ----
+
+  random_set_seed(seed: number): void {
+    this._math.prng = new XorGen(seed);
+  }
+
+  randomize(): void {
+    this._math.prng = new XorGen(Date.now());
+  }
+
+  random(max: number): number {
+    return (this._math.prng.next() + _UINT32_OFFSET) * max / _UINT32_MAX;
+  }
+
+  random_range(min: number, max: number): number {
+    return min + (this._math.prng.next() + _UINT32_OFFSET) * (max - min) / _UINT32_MAX;
+  }
+
+  irandom(max: number): number {
+    if (max < 0 || !isFinite(max)) return 0;
+    const maxp1 = max + 1;
+    let res: number;
+    do {
+      res = Math.floor((this._math.prng.next() + _UINT32_OFFSET) * maxp1 / _UINT32_MAX);
+    } while (res > max);
+    return res;
+  }
+
+  irandom_range(min: number, max: number): number {
+    if (max < min || !isFinite(min) || !isFinite(max)) return 0;
+    const deltap1 = max - min + 1;
+    let res: number;
+    do {
+      res = min + Math.floor((this._math.prng.next() + _UINT32_OFFSET) * deltap1 / _UINT32_MAX);
+    } while (res > max);
+    return res;
+  }
+
+  choose(...args: any[]): any {
+    return args[this.irandom(args.length - 1)];
+  }
+
+  // ---- Global variable API ----
+
+  variable_global_exists(key: string): boolean {
+    return key in this.global;
+  }
+
+  variable_global_get(key: string): any {
+    return this.global[key];
+  }
+
+  variable_global_set(key: string, value: any): void {
+    this.global[key] = value;
+  }
+
+  // ---- Instance field helpers ----
+
+  /** Get a field value from the first instance of a given object type. */
+  getInstanceField(cls: typeof GMLObject | number, field: string): any {
+    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
+    if (!clazz) return undefined;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
+    return inst ? (inst as any)[field] : undefined;
+  }
+
+  /** Set a field value on the first instance of a given object type. */
+  setInstanceField(cls: typeof GMLObject | number, field: string, value: any): void {
+    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
+    if (!clazz) return;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
+    if (inst) (inst as any)[field] = value;
+  }
+
+  /** Set an indexed element of a field on the first instance of a given object type. */
+  setInstanceFieldIndex(cls: typeof GMLObject | number, field: string, index: number, value: any): void {
+    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
+    if (!clazz) return;
+    const inst = this.roomVariables.find((o) => o instanceof clazz);
+    if (inst) (inst as any)[field][index] = value;
+  }
+
+  /** Get a field value from ALL instances. */
+  getAllField(field: string): any {
+    for (const inst of this.roomVariables) {
+      return (inst as any)[field];
+    }
+    return undefined;
+  }
+
+  /** Set a field value on ALL instances. */
+  setAllField(field: string, value: any): void {
+    for (const inst of this.roomVariables) {
+      (inst as any)[field] = value;
+    }
+  }
+
+  /** Execute a block for each instance of a given type (or all).
+   * Sets _self to the current with-target so alarm_set/event_user work correctly. */
+  withInstances<T extends GMLObject>(
+    target: (new(...args: any[]) => T) | T | number,
+    callback: (inst: T) => void,
+  ): void {
+    const prevSelf = this._self;
+    if (typeof target === 'function') {
+      // class constructor — iterate all instances of this class
+      for (const inst of this.roomVariables.slice()) {
+        if (inst instanceof (target as Function)) {
+          this._self = inst; callback(inst as T);
+        }
+      }
+    } else if (target === -1) {
+      for (const inst of this.roomVariables.slice()) {
+        this._self = inst; callback(inst as T);
+      }
+    } else if (target === -2) {
+      // other — handled by caller
+    } else if (target instanceof GMLObject) {
+      // specific instance
+      this._self = target; callback(target as T);
+    }
+    this._self = prevSelf;
   }
 
   // ---- Per-runtime instance tracking ----
@@ -1580,10 +2284,7 @@ export class GameRuntime {
   layer_background_get_sprite(id: number): number { return this._layerBackgroundSprites.get(id) ?? -1; }
   layer_background_set_sprite(id: number, spr: number): void { this._layerBackgroundSprites.set(id, spr); }
 
-  // ---- Keyboard (delegated to createInputAPI) ----
-  keyboard_check!: (key: number) => boolean;
-  keyboard_check_pressed!: (key: number) => boolean;
-  keyboard_check_released!: (key: number) => boolean;
+  // ---- Keyboard (implemented in Input API section above) ----
 
   // ---- Window ----
   window_get_width(): number { return window.innerWidth; }
@@ -3003,7 +3704,6 @@ export class GameRuntime {
   video_get_position(): number { return this._video?.currentTime ?? 0; }
   video_set_volume(vol: number): void { if (this._video) this._video.volume = Math.max(0, Math.min(1, vol)); }
 
-  // mouse_wheel_up / mouse_wheel_down delegated to createInputAPI
 
   // ---- struct alias ----
   struct_exists(struct: any, name: string): boolean {
