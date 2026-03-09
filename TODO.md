@@ -478,6 +478,15 @@ generic unknown-call spam.
   The remaining 16 new TS2339s are `string.push` errors — array params narrowed to `string`
   from a control-flow path that initialises as a string. Likely game author bugs surfaced by
   narrowing.
+- [ ] **Derive `function_signatures` from `runtime.ts` at build time** — `runtime.json` function
+  signatures are manually maintained and drift from `runtime.ts` as the source of truth. The fix:
+  add a build step (e.g. `bun` script or `build.rs`) that parses `runtime.ts` with `oxc` or
+  `ts-morph`, extracts all public method names + parameter/return types, and generates the
+  `function_signatures` section of `runtime.json` automatically. The manual entries then become
+  the generated baseline; overrides for special cases (e.g. `classref` params) can be a separate
+  `function_signature_overrides` map. This eliminates the gap where new runtime methods are typed
+  Dynamic until someone notices.
+
 - [ ] **Frontend-controlled pass ordering** — `extra_passes` are currently appended after the
   entire default pipeline. Frontends should be able to specify where their passes run (e.g.
   "after constraint-solve but before mem2reg"). Current approach works for IntToBoolPromotion
