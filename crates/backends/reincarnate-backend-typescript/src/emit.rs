@@ -1696,7 +1696,7 @@ fn collect_type_refs_from_function(
         })
         .collect();
 
-    let const_ints: HashMap<_, _> = func
+    let direct_const_ints: HashMap<_, _> = func
         .insts
         .iter()
         .filter_map(|(_id, inst)| {
@@ -1707,6 +1707,19 @@ fn collect_type_refs_from_function(
             }
         })
         .collect();
+
+    // Also track integers reachable through Coerce-to-Dynamic (`coerce v_int, dyn`).
+    // GML bytecode sometimes widens a const integer to `dyn` before passing it
+    // to a SystemCall; the coerced ValueId is the actual syscall argument, but
+    // the integer value lives on the source ValueId one step earlier.
+    let mut const_ints = direct_const_ints.clone();
+    for (_id, inst) in func.insts.iter() {
+        if let Op::Cast(src, Type::Dynamic, CastKind::Coerce) = &inst.op {
+            if let (Some(result), Some(&n)) = (inst.result, direct_const_ints.get(src)) {
+                const_ints.insert(result, n);
+            }
+        }
+    }
 
     // Instructions.
     for (_inst_id, inst) in func.insts.iter() {
@@ -1768,21 +1781,20 @@ fn collect_type_refs_from_function(
                             static_method_owners, static_field_owners, global_names, refs,
                         );
                     }
+                    // getField / setField / getOn / setOn with a const-int first arg:
+                    // the rewrite resolves the integer index to a class constructor
+                    // reference `ObjName` (via resolve_instance_target + strip_int_coerce).
+                    // Register the class as a value import so it is available.
+                    // Also handles dyn-coerced integers (tracked in the extended const_ints).
+                    //
+                    // For getOn/setOn also handle the string-name case (→ instances[0]!).
                     EngineKind::GameMaker if system == "GameMaker.Instance"
-                        && (method == "getOn" || method == "setOn")
+                        && (method == "getField" || method == "setField"
+                            || method == "getOn" || method == "setOn")
                         && !args.is_empty() =>
                     {
-                        crate::rewrites::gamemaker::collect_gamemaker_instance_refs(
-                            args, &const_strings, self_name, registry, external_imports, refs,
-                        );
-                    }
-                    // getField with a const-int first arg: the rewrite resolves
-                    // the integer to ObjName.instances[0]!.field — register the
-                    // class name as a value import.
-                    EngineKind::GameMaker if system == "GameMaker.Instance"
-                        && method == "getField"
-                        && !args.is_empty() =>
-                    {
+                        // Integer class-index case: first arg is a const int
+                        // (possibly dyn-coerced — covered by the extended const_ints).
                         if let Some(&obj_idx) = args.first().and_then(|v| const_ints.get(v)) {
                             if obj_idx >= 0 {
                                 if let Some(obj_name) = object_names.get(obj_idx as usize) {
@@ -1795,6 +1807,13 @@ fn collect_type_refs_from_function(
                                     }
                                 }
                             }
+                        }
+                        // String object-name case (getOn/setOn only): first arg
+                        // is a const string naming the class → instances[0]!.
+                        if method == "getOn" || method == "setOn" {
+                            crate::rewrites::gamemaker::collect_gamemaker_instance_refs(
+                                args, &const_strings, self_name, registry, external_imports, refs,
+                            );
                         }
                     }
                     _ => {}
