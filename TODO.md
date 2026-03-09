@@ -85,19 +85,40 @@ All of the following violate it and need to move to the respective frontend crat
   `crates/formats/datawin/Cargo.toml`: crate name is `datawin`. CLAUDE.md: "All crates use the
   `reincarnate-` prefix." Rename to `reincarnate-formats-datawin` (or `reincarnate-datawin`).
 
-- [ ] **`generate_data_files` in GML frontend bypasses the pipeline entirely.**
-  `crates/frontends/reincarnate-frontend-gamemaker/src/data.rs` writes TypeScript source files
-  (`data/objects.ts`, `data/asset_ids.d.ts`, `data/textures.ts`, etc.) as raw blobs into
-  `AssetCatalog` before any transform or emit phase runs. The TypeScript backend copies them
-  verbatim — never processing them. A Rust backend would get TypeScript files in its output.
+- [ ] **IR lacks aggregate constants — root cause of all "data file" pipeline bypasses.**
 
-  The correct design: the object name→index mapping (and sprite/sound/font tables) belongs
-  in the module IR as metadata (e.g., `Module::class_registry: Vec<(String, u32)>`). The
-  TypeScript backend renders `data/objects.ts`; a Rust backend renders its own equivalent.
+  The IR `Constant` enum only has scalar values: `Null`, `Bool`, `Int`, `Float`, `String`.
+  There is no `Constant::Array` or `Constant::Map`. Because frontends can't express structured
+  compile-time data as IR, they fall back to writing raw TypeScript source blobs into
+  `AssetCatalog` and bypassing the entire backend.
 
-  Immediate symptom: GML object names that are invalid TypeScript identifiers (e.g. `3platgen`)
-  cannot be sanitized by the backend — worked around by using quoted string keys in
-  `generate_objects` (2026-03-10). The correct fix requires moving generation to the backend.
+  **The correct design:**
+
+  1. Add `Constant::Array(Vec<Constant>)` and `Constant::Map(Vec<(String, Constant)>)` to the
+     core IR. These are plain typed data — no engine knowledge required.
+
+  2. Frontends emit compile-time tables as IR constants. GML frontend: instead of calling
+     `generate_objects` to write `data/objects.ts`, it emits an IR constant:
+     `module.add_const("Classes", Type::ConstMap(String, u32), Constant::Map(pairs))`.
+     The GML-specific knowledge (OBJT indices, sprite metadata, room tables) stays in the
+     frontend. The IR just sees a typed constant.
+
+  3. The TypeScript backend, when it encounters a `ConstMap<String, u32>` module constant,
+     emits `export const Name = { "key": value, ... } as const`. No GML knowledge needed.
+     A Rust backend emits `static NAME: &[(&str, u32)] = &[...]`. Neither backend is
+     engine-specific.
+
+  4. `AssetCatalog` returns to binary-only (textures, audio). TypeScript source files are
+     never stored as blobs — they're always emitted by the backend from IR.
+
+  **What goes away:** `module.object_names: Vec<String>`, `module.sprite_names: Vec<String>`,
+  `generate_data_files` in the GML frontend, and all the intermediate "metadata" fields that
+  exist only because the IR can't hold the data directly. The `AssetCatalog` TypeScript blob
+  hack (`data/objects.ts`, `data/asset_ids.d.ts`, `data/textures.ts`, etc.) is deleted.
+
+  **Current workaround (2026-03-10):** `generate_objects` uses quoted string keys
+  (`"3platgen": 515`) to handle GML names that aren't valid TypeScript identifiers. This is
+  a local fix; the real fix requires this whole design change.
 
 ---
 
