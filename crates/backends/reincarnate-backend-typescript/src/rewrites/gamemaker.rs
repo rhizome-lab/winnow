@@ -13,6 +13,35 @@ use crate::emit::{ClassRegistry, RefSets};
 use crate::js_ast::{JsExpr, JsFunction, JsStmt};
 
 /// Build `ObjName.instances[0]!` — non-null asserted singleton instance access.
+/// Strip an `int(x)` coerce wrapper if present, returning `x`.
+///
+/// GML bytecode emits `Conv.v.i32` before cross-instance field operands,
+/// which the backend lowers to `JsExpr::Cast { ty: Int(32), kind: Coerce }`.
+/// Instance field helpers accept `GMLObject` directly, so the coercion must
+/// be removed.
+fn strip_int_coerce(expr: JsExpr) -> JsExpr {
+    use reincarnate_core::ir::{CastKind, Type};
+    if let JsExpr::Cast { expr: inner, ty: Type::Int(32), kind: CastKind::Coerce } = expr {
+        *inner
+    } else {
+        expr
+    }
+}
+
+/// After stripping an `int()` coerce, resolve a constant integer class index
+/// to the class constructor (`JsExpr::Var(obj_name)`). GMLObject instance
+/// references and already-resolved names pass through unchanged.
+fn resolve_instance_target(expr: JsExpr, object_names: &[String]) -> JsExpr {
+    if let JsExpr::Literal(reincarnate_core::ir::value::Constant::Int(idx)) = expr {
+        if idx >= 0 {
+            if let Some(obj_name) = object_names.get(idx as usize) {
+                return JsExpr::Var(obj_name.clone());
+            }
+        }
+    }
+    expr
+}
+
 fn instances_0(obj_name: String) -> JsExpr {
     JsExpr::NonNull(Box::new(JsExpr::Index {
         collection: Box::new(JsExpr::Field {
@@ -754,7 +783,7 @@ fn try_rewrite_system_call(
         ("GameMaker.Instance", "setOn") if args.len() == 3 => {
             let val = args.pop().unwrap();
             let field = args.pop().unwrap();
-            let obj_id = args.pop().unwrap();
+            let obj_id = resolve_instance_target(strip_int_coerce(args.pop().unwrap()), object_names);
             Some(JsExpr::Call {
                 callee: Box::new(JsExpr::Var("setInstanceField".into())),
                 args: vec![obj_id, field, val],
@@ -766,7 +795,7 @@ fn try_rewrite_system_call(
             let val = args.pop().unwrap();
             let index = args.pop().unwrap();
             let field = args.pop().unwrap();
-            let obj_id = args.pop().unwrap();
+            let obj_id = resolve_instance_target(strip_int_coerce(args.pop().unwrap()), object_names);
             Some(JsExpr::Call {
                 callee: Box::new(JsExpr::Var("setInstanceFieldIndex".into())),
                 args: vec![obj_id, field, index, val],
@@ -811,7 +840,7 @@ fn try_rewrite_system_call(
         //   Otherwise → target[field]
         ("GameMaker.Instance", "getField") if args.len() == 2 => {
             let field = args.pop().unwrap();
-            let target = args.pop().unwrap();
+            let target = strip_int_coerce(args.pop().unwrap());
             if let JsExpr::Literal(Constant::Int(idx)) = &target {
                 let idx = *idx;
                 if idx >= 0 {
@@ -843,7 +872,7 @@ fn try_rewrite_system_call(
                     })
                 }
             } else {
-                // Non-constant target (e.g. int(this.inst)) — use runtime lookup.
+                // Non-constant target (dynamic instance reference) — use runtime lookup.
                 Some(JsExpr::Call {
                     callee: Box::new(JsExpr::Var("getInstanceField".into())),
                     args: vec![target, field],
@@ -854,7 +883,7 @@ fn try_rewrite_system_call(
         ("GameMaker.Instance", "setField") if args.len() == 3 => {
             let val = args.pop().unwrap();
             let field = args.pop().unwrap();
-            let target = args.pop().unwrap();
+            let target = resolve_instance_target(strip_int_coerce(args.pop().unwrap()), object_names);
             Some(JsExpr::Call {
                 callee: Box::new(JsExpr::Var("setInstanceField".into())),
                 args: vec![target, field, val],
