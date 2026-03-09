@@ -631,9 +631,9 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 186 as of 2026-03-09
+### 7. Dead Estate remaining TS errors — 186 as of 2026-03-09 (post resolve_classref_args)
 
-Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution) → 181 (reverted instance_exists(number): those errors are correct diagnostics of instance_place/instance_find returning number instead of GMLObject|null — fix belongs in type inference, not runtime signature) → 206 (2026-03-09 session: instance_type_flow Ne fix, record_depth min, runtime physics/particles/string/irandom fixes, NullableCoerce rename, GetField on Union; count increased due to newly-surfaced IR from br() arg mismatch warnings + record_depth changes) → 192 (2026-03-09: (as any) instanceof prevents TS never-narrowing in Wall class; scan_body_local_names uses live locals map fixing on-the-fly capture gap for TS2304) → 191 (2026-03-09: `(target as unknown) === -4` in instance_exists suppresses TS2367) → 186 (2026-03-09: CallSiteArityWiden pass — GML loose calling convention; 5 TS2554 eliminated).
+Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution) → 181 (reverted instance_exists(number): those errors are correct diagnostics of instance_place/instance_find returning number instead of GMLObject|null — fix belongs in type inference, not runtime signature) → 206 (2026-03-09 session: instance_type_flow Ne fix, record_depth min, runtime physics/particles/string/irandom fixes, NullableCoerce rename, GetField on Union; count increased due to newly-surfaced IR from br() arg mismatch warnings + record_depth changes) → 192 (2026-03-09: (as any) instanceof prevents TS never-narrowing in Wall class; scan_body_local_names uses live locals map fixing on-the-fly capture gap for TS2304) → 191 (2026-03-09: `(target as unknown) === -4` in instance_exists suppresses TS2367) → 186 (2026-03-09: CallSiteArityWiden pass — GML loose calling convention; 5 TS2554 eliminated) → 186 (2026-03-09: resolve_classref_args backend rewrite — GMS1 integer object indices → class names; 31 classref params in runtime.json; Bounty 48→13 TS errors. Fixed regression: parse_type_notation("classref") now maps to Dynamic instead of Struct("classref"), preventing `argument0: classref` TS type annotations in callee params).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -967,34 +967,40 @@ Fixed in previous sessions (2026-02-24):
   join point has inconsistent depths. Consider: (a) asserting stack depth consistency at join
   points, (b) using a worklist-based depth propagation instead of linear walk.
 
-### 10. GMS1 integer object indices not resolved to class references (Bounty: 15 TS2345)
+### 10. GMS1 integer object indices not resolved to class references — FIXED 2026-03-09
 
-In GMS1, object type names are compile-time integer constants (no `pushref`/Break -11 mechanism).
-When game code calls `instance_create(x, y, 2)` or `instance_number(4)`, the integer literal is
-emitted as `Int64(2)`, not as a `ClassRef`. Our runtime signatures expect `new() => T` / `typeof
-GMLObject`, so TypeScript raises TS2345.
+**Fixed.** Bounty TS2345 errors dropped from 48 → 13 (all TS2345 eliminated; 13 remaining are
+pre-existing game-author type errors: TS2322/TS2362/TS2365/TS2366). Dead Estate also improved
+from 248 → 186 (GMS2.3+ games sometimes use integer literals for object indices too).
 
-Root cause: the GMS1 translator never resolves plain integer pushes to named object references. The
-OBJT table provides the index → name mapping (same data used by `build_asset_ref_names` for GMS2.3+
-pushref), but GMS1 uses inline integers without the Break -11 signal.
+**Secondary fix:** `parse_type_notation("classref")` in `ir/ty.rs` now maps to `Type::Dynamic`
+(not the default `Type::Struct("classref")`). The `"classref"` string in runtime.json param types
+was leaking into IR via `ConstraintSolve`'s `external_function_sigs` table → `parse_type_notation`
+→ `Type::Struct("classref")` → callee params typed as `classref` → `ts_type` rendering as the TS
+type annotation `classref` (e.g. `argument0: classref = 0.0`). Fix: treat `"classref"` as a
+backend-only annotation, mapping to `Dynamic` at IR level.
 
-Fix direction: resolve the integer via the OBJT name table at translation time — emit a named
-`ClassRef("Enemy")` directly, exactly the same as GMS2.3+ pushref does via `build_asset_ref_names`.
-`asset_ref_names` already contains the full OBJT index → name map; `Push Int32(4)` in an
-object-index context just needs the same lookup. Fall back to `_rt.classes[N]` only for indices
-not found in the table (should be rare).
+**Root cause:** In GMS1, object type names are compile-time integer constants. `Push Int32(4)` +
+`Conv v->v` creates `Cast(Const(Int(4)), Dynamic)` in the IR — no ClassRef type. Backend rewrite
+had no mechanism to resolve these to class names.
 
-The translation challenge is knowing at push-time that `Push Int32(4)` is an object index, not a
-plain number. Options:
-- Two-pass: scan call arguments against known `function_signatures` (instance_create arg2,
-  instance_number arg0, etc.) and rewrite integer constants to named ClassRef post-translation.
-- Lookahead: at the push site, peek at how the value will be consumed (similar to how 2D array reads
-  use `lookahead_next_af_is_pushaf`).
-- Post-IR pass: a GML-specific IR transform that rewrites `Int64(N)` → `ClassRef("Name")` when the
-  value flows into a `ClassRef`-typed parameter (using `function_signatures` + `CallSiteTypeFlow`).
+**Fix:** Backend rewrite pass `resolve_classref_args` in `rewrites/gamemaker.rs`:
+- Runs after `coerce_bool_args` in `emit.rs` for both free functions and class methods
+- Reads `function_signatures` (runtime.json) for params typed `"classref"`
+- Replaces `JsExpr::Literal(Int(N))` or `JsExpr::Cast { Literal(Int(N)), Dynamic }` at those
+  positions with `JsExpr::Var(object_names[N])`
+- Import scanner in `collect_type_refs_from_function` extended with `cast_const_ints` map and
+  `Op::Call` handler to register newly-introduced class names as import refs
 
-Affected Bounty errors: ~15 TS2345 (`number` not assignable to `typeof GMLObject` / `new () => GMLObject`).
-Also affects `AdvReader.ts:18` where literal `4` is passed as `GMLObject | typeof GMLObject | null`.
+**runtime.json changes:** Updated 31 functions with `"classref"` param type:
+- instance_create/depth/layer (param[2]/[3])
+- instance_number/find/change/nearest/furthest (param[0]/[0]/[0]/[2]/[2])
+- instance_exists/activate_object/deactivate_object
+- object_is_ancestor/get_name/exists/get_sprite/get_parent
+- distance_to_object, place_meeting/position_meeting
+- instance_place/position/place_list/position_list
+- collision_point/rectangle/line/circle/ellipse + *_list variants
+- mp_grid_add_instances
 
 ### 9. Pushref type_tag mapping is version-dependent — wrong for pre-2024.4 games
 

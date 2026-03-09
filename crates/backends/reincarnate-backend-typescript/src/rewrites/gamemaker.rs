@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use reincarnate_core::ir::value::Constant;
-use reincarnate_core::ir::{CmpKind, ExternalImport, Type, ValueId};
+use reincarnate_core::ir::{CastKind, CmpKind, ExternalImport, Type, ValueId};
 use reincarnate_core::project::ExternalMethodSig;
 
 use crate::emit::{ClassRegistry, RefSets};
@@ -1019,6 +1019,222 @@ fn coerce_bool_expr(expr: &mut JsExpr, sigs: &BTreeMap<String, ExternalMethodSig
             }
         }
         JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This | JsExpr::Activation | JsExpr::SuperGet(_) => {}
+    }
+}
+
+/// Resolve integer-literal arguments to class-reference identifiers at call sites
+/// where the function signature declares the parameter as `"classref"`.
+///
+/// In GMS1 games, object type indices are plain integer constants — there is no
+/// `pushref` (Break -11) instruction.  So `instance_create(x, y, 2)` emits an
+/// `Int(2)` literal rather than a `GlobalRef("Enemy", ClassRef)`.  This pass
+/// replaces those integer literals with the corresponding class name (e.g. `Enemy`)
+/// using the OBJT index table that was passed to the emitter as `object_names`.
+///
+/// Only non-negative integer literals are replaced.  Negative sentinel values
+/// (-1 all, -2 noone, -3 other, etc.) and non-literal expressions are left alone.
+pub fn resolve_classref_args(
+    func: &mut JsFunction,
+    sigs: &BTreeMap<String, ExternalMethodSig>,
+    object_names: &[String],
+) {
+    if sigs.is_empty() || object_names.is_empty() {
+        return;
+    }
+    resolve_classref_stmts(&mut func.body, sigs, object_names);
+}
+
+fn resolve_classref_stmts(
+    stmts: &mut [JsStmt],
+    sigs: &BTreeMap<String, ExternalMethodSig>,
+    object_names: &[String],
+) {
+    for stmt in stmts.iter_mut() {
+        resolve_classref_stmt(stmt, sigs, object_names);
+    }
+}
+
+fn resolve_classref_stmt(
+    stmt: &mut JsStmt,
+    sigs: &BTreeMap<String, ExternalMethodSig>,
+    object_names: &[String],
+) {
+    match stmt {
+        JsStmt::VarDecl { init, .. } => {
+            if let Some(e) = init {
+                resolve_classref_expr(e, sigs, object_names);
+            }
+        }
+        JsStmt::Assign { target, value } | JsStmt::CompoundAssign { target, value, .. } => {
+            resolve_classref_expr(target, sigs, object_names);
+            resolve_classref_expr(value, sigs, object_names);
+        }
+        JsStmt::Expr(e) | JsStmt::Throw(e) => resolve_classref_expr(e, sigs, object_names),
+        JsStmt::Return(Some(e)) => resolve_classref_expr(e, sigs, object_names),
+        JsStmt::Return(None) | JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {}
+        JsStmt::If { cond, then_body, else_body } => {
+            resolve_classref_expr(cond, sigs, object_names);
+            resolve_classref_stmts(then_body, sigs, object_names);
+            resolve_classref_stmts(else_body, sigs, object_names);
+        }
+        JsStmt::While { cond, body } => {
+            resolve_classref_expr(cond, sigs, object_names);
+            resolve_classref_stmts(body, sigs, object_names);
+        }
+        JsStmt::For { init, cond, update, body } => {
+            resolve_classref_stmts(init, sigs, object_names);
+            resolve_classref_expr(cond, sigs, object_names);
+            resolve_classref_stmts(update, sigs, object_names);
+            resolve_classref_stmts(body, sigs, object_names);
+        }
+        JsStmt::Loop { body } => resolve_classref_stmts(body, sigs, object_names),
+        JsStmt::ForOf { iterable, body, .. } => {
+            resolve_classref_expr(iterable, sigs, object_names);
+            resolve_classref_stmts(body, sigs, object_names);
+        }
+        JsStmt::Dispatch { blocks, .. } => {
+            for (_, stmts) in blocks {
+                resolve_classref_stmts(stmts, sigs, object_names);
+            }
+        }
+        JsStmt::Switch { value, cases, default_body } => {
+            resolve_classref_expr(value, sigs, object_names);
+            for (_, stmts) in cases {
+                resolve_classref_stmts(stmts, sigs, object_names);
+            }
+            resolve_classref_stmts(default_body, sigs, object_names);
+        }
+    }
+}
+
+fn resolve_classref_expr(
+    expr: &mut JsExpr,
+    sigs: &BTreeMap<String, ExternalMethodSig>,
+    object_names: &[String],
+) {
+    // Recurse into children first so nested calls are also processed.
+    match expr {
+        JsExpr::Call { callee, args } => {
+            resolve_classref_expr(callee, sigs, object_names);
+            // Check if this is a direct call to a function with classref params.
+            if let JsExpr::Var(name) = callee.as_ref() {
+                if let Some(sig) = sigs.get(name.as_str()) {
+                    for (i, arg) in args.iter_mut().enumerate() {
+                        resolve_classref_expr(arg, sigs, object_names);
+                        if sig.params.get(i).is_some_and(|t| t == "classref") {
+                            try_resolve_int_to_classref(arg, object_names);
+                        }
+                    }
+                    return;
+                }
+            }
+            for arg in args.iter_mut() {
+                resolve_classref_expr(arg, sigs, object_names);
+            }
+        }
+        JsExpr::Binary { lhs, rhs, .. } | JsExpr::Cmp { lhs, rhs, .. } => {
+            resolve_classref_expr(lhs, sigs, object_names);
+            resolve_classref_expr(rhs, sigs, object_names);
+        }
+        JsExpr::LogicalOr { lhs, rhs } | JsExpr::LogicalAnd { lhs, rhs } => {
+            resolve_classref_expr(lhs, sigs, object_names);
+            resolve_classref_expr(rhs, sigs, object_names);
+        }
+        JsExpr::Unary { expr: inner, .. }
+        | JsExpr::Not(inner)
+        | JsExpr::PostIncrement(inner)
+        | JsExpr::Spread(inner)
+        | JsExpr::NonNull(inner)
+        | JsExpr::TypeOf(inner)
+        | JsExpr::GeneratorResume(inner) => resolve_classref_expr(inner, sigs, object_names),
+        JsExpr::Field { object, .. } => resolve_classref_expr(object, sigs, object_names),
+        JsExpr::Index { collection, index } => {
+            resolve_classref_expr(collection, sigs, object_names);
+            resolve_classref_expr(index, sigs, object_names);
+        }
+        JsExpr::Ternary { cond, then_val, else_val } => {
+            resolve_classref_expr(cond, sigs, object_names);
+            resolve_classref_expr(then_val, sigs, object_names);
+            resolve_classref_expr(else_val, sigs, object_names);
+        }
+        JsExpr::ArrayInit(items) | JsExpr::TupleInit(items) => {
+            for item in items {
+                resolve_classref_expr(item, sigs, object_names);
+            }
+        }
+        JsExpr::ObjectInit(fields) => {
+            for (_, val) in fields {
+                resolve_classref_expr(val, sigs, object_names);
+            }
+        }
+        JsExpr::New { callee, args } => {
+            resolve_classref_expr(callee, sigs, object_names);
+            for arg in args.iter_mut() {
+                resolve_classref_expr(arg, sigs, object_names);
+            }
+        }
+        JsExpr::SuperMethodCall { args, .. } | JsExpr::GeneratorCreate { args, .. } => {
+            for arg in args.iter_mut() {
+                resolve_classref_expr(arg, sigs, object_names);
+            }
+        }
+        JsExpr::In { key, object } | JsExpr::Delete { object, key } => {
+            resolve_classref_expr(key, sigs, object_names);
+            resolve_classref_expr(object, sigs, object_names);
+        }
+        JsExpr::Cast { expr: inner, .. } | JsExpr::TypeCheck { expr: inner, .. } => {
+            resolve_classref_expr(inner, sigs, object_names);
+        }
+        JsExpr::ArrowFunction { body, .. } => resolve_classref_stmts(body, sigs, object_names),
+        JsExpr::SuperCall(args) => {
+            for arg in args {
+                resolve_classref_expr(arg, sigs, object_names);
+            }
+        }
+        JsExpr::SuperSet { value, .. } => resolve_classref_expr(value, sigs, object_names),
+        JsExpr::Yield(inner) => {
+            if let Some(e) = inner {
+                resolve_classref_expr(e, sigs, object_names);
+            }
+        }
+        JsExpr::SystemCall { args, .. } => {
+            for arg in args {
+                resolve_classref_expr(arg, sigs, object_names);
+            }
+        }
+        JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This | JsExpr::Activation | JsExpr::SuperGet(_) => {}
+    }
+}
+
+/// If `arg` is a non-negative integer literal (or a dynamic-coerce Cast thereof)
+/// and there is a matching entry in `object_names`, replace it with a
+/// `JsExpr::Var(class_name)` reference.
+///
+/// The GML VM wraps most pushed values in a `Conv` (coerce-to-Variable) instruction,
+/// which translates to `Cast { expr: Literal(Int(N)), ty: Dynamic, kind: Coerce }` in
+/// the JS AST.  We unwrap one level of coerce-cast to reach the integer literal.
+///
+/// Negative values (-1 all, -2 noone, -3 other, etc.) are sentinel constants
+/// that must not be replaced.
+fn try_resolve_int_to_classref(arg: &mut JsExpr, object_names: &[String]) {
+    // Unwrap a single Dynamic coerce-cast to expose the inner literal.
+    let inner_int = match arg {
+        JsExpr::Literal(Constant::Int(idx)) => Some(*idx),
+        JsExpr::Cast { expr, ty: Type::Dynamic, kind: CastKind::Coerce } => {
+            if let JsExpr::Literal(Constant::Int(idx)) = expr.as_ref() {
+                Some(*idx)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(idx) = inner_int {
+        if idx >= 0 {
+            if let Some(name) = object_names.get(idx as usize) {
+                *arg = JsExpr::Var(name.clone());
+            }
+        }
     }
 }
 
