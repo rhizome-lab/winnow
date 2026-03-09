@@ -984,13 +984,17 @@ backend-only annotation, mapping to `Dynamic` at IR level.
 `Conv v->v` creates `Cast(Const(Int(4)), Dynamic)` in the IR — no ClassRef type. Backend rewrite
 had no mechanism to resolve these to class names.
 
-**Fix:** Backend rewrite pass `resolve_classref_args` in `rewrites/gamemaker.rs`:
-- Runs after `coerce_bool_args` in `emit.rs` for both free functions and class methods
-- Reads `function_signatures` (runtime.json) for params typed `"classref"`
-- Replaces `JsExpr::Literal(Int(N))` or `JsExpr::Cast { Literal(Int(N)), Dynamic }` at those
-  positions with `JsExpr::Var(object_names[N])`
-- Import scanner in `collect_type_refs_from_function` extended with `cast_const_ints` map and
-  `Op::Call` handler to register newly-introduced class names as import refs
+**Fix (initial, 2026-03-09):** Backend rewrite pass `resolve_classref_args` in `rewrites/gamemaker.rs`
+ran after `coerce_bool_args` for both free functions and class methods, replacing `JsExpr::Literal(Int(N))`
+or `JsExpr::Cast { Literal(Int(N)), Dynamic }` at classref positions with `JsExpr::Var(object_names[N])`.
+Import scanner in `collect_type_refs_from_function` extended with `cast_const_ints` map and `Op::Call`
+handler to register newly-introduced class names.
+
+**Architectural fix (2026-03-09):** Replaced backend rewrite with `GmlClassRefResolve` IR transform
+pass in `crates/frontends/reincarnate-frontend-gamemaker/src/classref_resolve.rs`. The IR pass inserts
+`Op::GlobalRef(name)` instructions typed `Type::ClassRef(name)` at classref-typed argument positions,
+so every backend sees already-resolved class references in the IR. Backend `resolve_classref_args`,
+`cast_const_ints` map, and associated import-scanner code removed from TypeScript backend.
 
 **runtime.json changes:** Updated 31 functions with `"classref"` param type:
 - instance_create/depth/layer (param[2]/[3])

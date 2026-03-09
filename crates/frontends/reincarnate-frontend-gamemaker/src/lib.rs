@@ -1,4 +1,5 @@
 mod assets;
+mod classref_resolve;
 mod data;
 mod default_arg;
 mod instance_type_flow;
@@ -179,6 +180,7 @@ impl Frontend for GameMakerFrontend {
                 Box::new(instance_type_flow::GmlInstanceTypeFlow {
                     obj_names: obj_names_set,
                 }),
+                Box::new(classref_resolve::GmlClassRefResolve),
             ],
         })
     }

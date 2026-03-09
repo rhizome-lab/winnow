@@ -950,7 +950,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let smo = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let sfo = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        let refs = collect_class_references(group, module, &registry, &module.external_imports, smo, sfo, &global_names, engine, func_sigs);
+        let refs = collect_class_references(group, module, &registry, &module.external_imports, smo, sfo, &global_names, engine);
         direct_value_imports.insert(
             sanitize_ident(&group.class_def.name),
             refs.value_refs,
@@ -1020,7 +1020,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
         let empty_smo = HashMap::new();
         let static_method_owners = class_meta.static_method_owner_map.get(&qualified).unwrap_or(&empty_smo);
         let static_field_owners = class_meta.static_field_owner_map.get(&qualified).unwrap_or(&empty_smo);
-        let late_bound = emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, module_exports, &transitive_value_imports, &short_to_qualified, depth, engine, func_sigs, &mut out);
+        let late_bound = emit_intra_imports(group, module, &segments, &registry, static_method_owners, static_field_owners, &global_names, &mutable_global_names, module_exports, &transitive_value_imports, &short_to_qualified, depth, engine, &mut out);
 
         // Always emit the Sprites import; strip_unused_namespace_imports removes
         // it when no `Sprites.` reference appears in the output.
@@ -1086,7 +1086,7 @@ pub fn emit_module_to_dir(module: &mut Module, output_dir: &Path, lowering_confi
             let func = &module.functions[fid];
             collect_type_refs_from_function(
                 func, "", &registry, &module.external_imports,
-                &HashMap::new(), &HashMap::new(), &global_names, &module.object_names, engine, func_sigs, &mut refs,
+                &HashMap::new(), &HashMap::new(), &global_names, &module.object_names, engine, &mut refs,
             );
         }
         emit_external_imports(&refs.ext_value_refs, &refs.ext_type_refs, &module.external_imports, module_exports, "..", &mut out);
@@ -1609,7 +1609,6 @@ fn collect_class_references(
     static_field_owners: &HashMap<String, String>,
     global_names: &HashSet<String>,
     engine: EngineKind,
-    func_sigs: &BTreeMap<String, ExternalMethodSig>,
 ) -> RefSets {
     let self_name = &group.class_def.name;
     let mut refs = RefSets::default();
@@ -1646,7 +1645,7 @@ fn collect_class_references(
     // Scan all method bodies for type references.
     for &fid in &group.methods {
         let func = &module.functions[fid];
-        collect_type_refs_from_function(func, self_name, registry, external_imports, static_method_owners, static_field_owners, global_names, &module.object_names, engine, func_sigs, &mut refs);
+        collect_type_refs_from_function(func, self_name, registry, external_imports, static_method_owners, static_field_owners, global_names, &module.object_names, engine, &mut refs);
     }
 
     refs
@@ -1664,7 +1663,6 @@ fn collect_type_refs_from_function(
     global_names: &HashSet<String>,
     object_names: &[String],
     engine: EngineKind,
-    func_sigs: &BTreeMap<String, ExternalMethodSig>,
     refs: &mut RefSets,
 ) {
     use reincarnate_core::ir::Constant;
@@ -1694,22 +1692,6 @@ fn collect_type_refs_from_function(
         .filter_map(|(_id, inst)| {
             if let Op::Const(Constant::Int(n)) = &inst.op {
                 inst.result.map(|v| (v, *n))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Map Cast(int_val, Dynamic, Coerce).result → integer value.
-    // The GML VM wraps most pushed values in Conv v->v, so classref integer args
-    // appear as Cast nodes in the IR — not as plain Const nodes.
-    let cast_const_ints: HashMap<_, _> = func
-        .insts
-        .iter()
-        .filter_map(|(_id, inst)| {
-            if let Op::Cast(inner, Type::Dynamic, CastKind::Coerce) = &inst.op {
-                let n = const_ints.get(inner).copied()?;
-                inst.result.map(|v| (v, n))
             } else {
                 None
             }
@@ -1819,36 +1801,6 @@ fn collect_type_refs_from_function(
                     &mut refs.value_refs,
                     &mut refs.ext_value_refs,
                 );
-            }
-            // In GMS1, integer object indices appear as plain Push Int / Conv.
-            // The backend rewrite resolves them to class-name Var references at
-            // call sites whose signature declares the parameter as "classref".
-            // Register those class names here so the import scanner produces the
-            // correct `import { ClassName }` statement.
-            Op::Call { func: callee_name, args } if engine == EngineKind::GameMaker => {
-                if let Some(sig) = func_sigs.get(callee_name.as_str()) {
-                    for (i, arg_val) in args.iter().enumerate() {
-                        if sig.params.get(i).is_some_and(|t| t == "classref") {
-                            // Resolve plain Const(Int) or Cast(Const(Int), Dynamic) to object name.
-                            let obj_idx = const_ints.get(arg_val)
-                                .copied()
-                                .or_else(|| cast_const_ints.get(arg_val).copied());
-                            if let Some(n) = obj_idx {
-                                if n >= 0 {
-                                    if let Some(obj_name) = object_names.get(n as usize) {
-                                        if obj_name != self_name {
-                                            if let Some(entry) = registry.lookup(obj_name) {
-                                                refs.value_refs.insert(entry.short_name.clone());
-                                            } else if external_imports.contains_key(obj_name.as_str()) {
-                                                refs.ext_value_refs.insert(obj_name.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
             _ => {}
         }
@@ -2088,10 +2040,9 @@ fn emit_intra_imports(
     short_to_qualified: &HashMap<String, String>,
     depth: usize,
     engine: EngineKind,
-    func_sigs: &BTreeMap<String, ExternalMethodSig>,
     out: &mut String,
 ) -> HashSet<String> {
-    let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners, static_field_owners, global_names, engine, func_sigs);
+    let refs = collect_class_references(group, module, registry, &module.external_imports, static_method_owners, static_field_owners, global_names, engine);
 
     // Compute late-bound set: typecheck refs whose targets transitively import
     // this class (i.e. adding a static import would create a cycle), and that
@@ -2656,15 +2607,12 @@ fn emit_function(
         EngineKind::Twine => crate::rewrites::twine::rewrite_twine_function(js_func, closure_bodies),
     };
     // Coerce numeric arguments to boolean at call sites where the signature expects boolean.
-    // Resolve integer-literal arguments to class-reference identifiers at call sites
-    // where the signature declares the parameter as "classref" (GMS1 integer object indices).
     if engine == EngineKind::GameMaker {
         let empty_sigs = BTreeMap::new();
         let func_sigs = runtime_config
             .map(|c| &c.function_signatures)
             .unwrap_or(&empty_sigs);
         crate::rewrites::gamemaker::coerce_bool_args(&mut js_func, func_sigs);
-        crate::rewrites::gamemaker::resolve_classref_args(&mut js_func, func_sigs, object_names);
     }
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     crate::ast_passes::recover_switch_statements(&mut js_func.body);
@@ -3170,11 +3118,8 @@ fn emit_class_method(
         EngineKind::Twine => crate::rewrites::twine::rewrite_twine_function(js_func, closure_bodies),
     };
     // Coerce numeric arguments to boolean at call sites where the signature expects boolean.
-    // Resolve integer-literal arguments to class-reference identifiers at call sites
-    // where the signature declares the parameter as "classref" (GMS1 integer object indices).
     if engine == EngineKind::GameMaker {
         crate::rewrites::gamemaker::coerce_bool_args(&mut js_func, func_sigs);
-        crate::rewrites::gamemaker::resolve_classref_args(&mut js_func, func_sigs, object_names);
     }
     rewrite_global_assignments(&mut js_func.body, mutable_global_names);
     rewrite_late_bound_types(&mut js_func.body, late_bound, short_to_qualified);
