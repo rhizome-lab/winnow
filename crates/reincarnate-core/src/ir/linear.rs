@@ -1325,6 +1325,10 @@ struct EmitCtx<'a> {
     entry_params: HashSet<ValueId>,
     /// Names shared by 2+ ValueIds (out-of-SSA coalesced variables).
     shared_names: HashSet<String>,
+    /// Types for names hoisted from cross-scope SE inlines (used by
+    /// collect_block_param_decls to emit `let name!: ty;` with the definite
+    /// assignment assertion so TypeScript doesn't flag TS2454).
+    cross_scope_hoisted_types: HashMap<String, Type>,
     /// Deferred single-use pure instructions (from Phase 2's lazy_inlines).
     pending_lazy: HashMap<ValueId, InstId>,
     /// Always-rebuild instructions (from Phase 2's always_inlines).
@@ -1552,6 +1556,7 @@ impl<'a> EmitCtx<'a> {
             value_names,
             entry_params,
             shared_names,
+            cross_scope_hoisted_types: HashMap::new(),
             pending_lazy: HashMap::new(),
             always_inline_map: HashMap::new(),
             side_effecting_inlines: HashMap::new(),
@@ -2111,9 +2116,15 @@ impl<'a> EmitCtx<'a> {
         sorted_shared.sort();
         for name in sorted_shared {
             if declared.insert(name.clone()) {
+                // Use stored type (if any) so the printer emits `let name!: ty;`
+                // with the definite-assignment assertion. Without a type, the
+                // printer emits `let name;` which TypeScript then flags as
+                // TS2454 ("used before assigned") when the assignment is
+                // conditional.
+                let ty = self.cross_scope_hoisted_types.get(name).cloned();
                 decls.push(Stmt::VarDecl {
                     name: name.clone(),
-                    ty: None,
+                    ty,
                     init: None,
                     mutable: true,
                 });
@@ -2335,6 +2346,11 @@ impl<'a> EmitCtx<'a> {
                 // scope.
                 let name = self.value_name(result);
                 self.shared_names.insert(name.clone());
+                // Record the type so collect_block_param_decls can emit
+                // `let name!: ty;` (with definite-assignment assertion) instead
+                // of the untyped `let name;` that would trigger TS2454.
+                let ty = self.func.value_types[result].clone();
+                self.cross_scope_hoisted_types.insert(name.clone(), ty);
                 stmts.push(Stmt::Assign {
                     target: Expr::Var(name),
                     value: expr,
