@@ -902,6 +902,12 @@ fn print_expr(expr: &JsExpr) -> String {
 
         JsExpr::NonNull(inner) => format!("{}!", print_expr(inner)),
 
+        // GML array auto-init: `(this.field ??= [])`.
+        // Parenthesized so it can appear as the collection of an index expr.
+        JsExpr::NullCoalesceAssign { target, value } => {
+            format!("({} ??= {})", print_expr(target), print_expr(value))
+        }
+
         JsExpr::Activation => "({})".to_string(),
 
         JsExpr::ArrowFunction {

@@ -149,6 +149,18 @@ pub enum JsExpr {
     },
     /// Non-null assertion: `expr!`.
     NonNull(Box<JsExpr>),
+    /// Null-coalescing assignment: `(target ??= value)`.
+    ///
+    /// Emitted as a parenthesized expression so it can appear as the collection
+    /// in an index expression: `(this.field ??= [])[i] = v`.
+    ///
+    /// Used by the GML rewrite pass to auto-initialize fields that are first
+    /// written via array indexing — GML auto-creates arrays on first indexed
+    /// write; TypeScript requires explicit initialization.
+    NullCoalesceAssign {
+        target: Box<JsExpr>,
+        value: Box<JsExpr>,
+    },
     /// Activation object: `({})`.
     Activation,
     /// Arrow function: `(params) => { body }`.

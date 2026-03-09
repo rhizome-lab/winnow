@@ -2348,6 +2348,10 @@ fn rewrite_late_bound_expr(
                 rewrite_late_bound_expr(arg, late_bound, short_to_qualified);
             }
         }
+        JsExpr::NullCoalesceAssign { target, value } => {
+            rewrite_late_bound_expr(target, late_bound, short_to_qualified);
+            rewrite_late_bound_expr(value, late_bound, short_to_qualified);
+        }
         JsExpr::ArrowFunction { body, .. } => {
             rewrite_late_bound_types(body, late_bound, short_to_qualified);
         }
@@ -2634,18 +2638,19 @@ fn emit_function(
     if !free_func_names.is_empty() {
         prepend_rt_arg_to_free_calls(&mut js_func.body, free_func_names, false);
     }
-    // Build preamble and prepend `_rt` parameter for stateful free functions.
-    let preamble = if !stateful_names.is_empty() {
-        // GameMaker: destructure stateful function-module names from `_rt`.
+    // Rewrite stateful runtime calls: `foo(args)` → `_rt.foo(args)`.
+    // Also prepend `_rt` parameter when any stateful names are used.
+    if !stateful_names.is_empty() {
         let rt_type_name = runtime_config
             .and_then(|c| c.runtime_type.as_ref())
             .map(|t| t.name.as_str())
             .unwrap_or("GameRuntime");
         js_func.params.insert(0, ("_rt".into(), Type::Struct(rt_type_name.into())));
         js_func.param_defaults.insert(0, None);
-        let names: Vec<&str> = stateful_names.iter().map(|s| s.as_str()).collect();
-        Some(format!("const {{ {} }} = _rt;", names.join(", ")))
-    } else if !stateful_system_aliases.is_empty() {
+        rewrite_stateful_calls(&mut js_func.body, stateful_names, false);
+    }
+    // Build preamble for Twine stateful system aliases (unrelated to GML _rt.foo pattern).
+    let preamble = if !stateful_system_aliases.is_empty() {
         // Twine: alias stateful system modules from `_rt` properties.
         let rt_type_name = runtime_config
             .and_then(|c| c.runtime_type.as_ref())
@@ -3158,13 +3163,11 @@ fn emit_class_method(
     if !free_func_names.is_empty() {
         prepend_rt_arg_to_free_calls(&mut js_func.body, free_func_names, true);
     }
-    // Build destructure preamble for stateful runtime functions.
-    let preamble = if !stateful_names.is_empty() && !is_cinit && !matches!(func.method_kind, MethodKind::Static) {
-        let names: Vec<&str> = stateful_names.iter().map(|s| s.as_str()).collect();
-        Some(format!("const {{ {} }} = this._rt;", names.join(", ")))
-    } else {
-        None
-    };
+    // Rewrite stateful runtime calls: `foo(args)` → `this._rt.foo(args)`.
+    if !stateful_names.is_empty() && !is_cinit && !matches!(func.method_kind, MethodKind::Static) {
+        rewrite_stateful_calls(&mut js_func.body, stateful_names, true);
+    }
+    let preamble: Option<String> = None;
     // A method needs `override` if a parent class defines a method with the same name.
     // Constructors and cinit blocks are excluded — TypeScript forbids `override` on them.
     let is_override = !is_cinit
@@ -3187,6 +3190,201 @@ fn emit_class_method(
     crate::ast_printer::print_class_method(&js_func, &raw_name, skip_self, preamble.as_deref(), is_override, flash_ctor_extra_param.as_deref(), out);
     Ok(())
 }
+/// Rewrite bare stateful runtime calls to qualified `_rt.foo(args)` form.
+///
+/// Walks the statement tree and replaces every `JsExpr::Call { callee: JsExpr::Var(name), ... }`
+/// where `name` is in `stateful_names` with a qualified call:
+/// - `from_class = false`: `_rt.foo(args)` (free function context, `_rt` is a parameter)
+/// - `from_class = true`: `this._rt.foo(args)` (class method context)
+fn rewrite_stateful_calls(
+    stmts: &mut [JsStmt],
+    stateful_names: &BTreeSet<String>,
+    from_class: bool,
+) {
+    for stmt in stmts.iter_mut() {
+        rewrite_stateful_calls_stmt(stmt, stateful_names, from_class);
+    }
+}
+
+fn rewrite_stateful_calls_stmt(
+    stmt: &mut JsStmt,
+    stateful_names: &BTreeSet<String>,
+    from_class: bool,
+) {
+    match stmt {
+        JsStmt::VarDecl { init, .. } => {
+            if let Some(expr) = init {
+                rewrite_stateful_calls_expr(expr, stateful_names, from_class);
+            }
+        }
+        JsStmt::Assign { target, value } => {
+            rewrite_stateful_calls_expr(target, stateful_names, from_class);
+            rewrite_stateful_calls_expr(value, stateful_names, from_class);
+        }
+        JsStmt::CompoundAssign { target, value, .. } => {
+            rewrite_stateful_calls_expr(target, stateful_names, from_class);
+            rewrite_stateful_calls_expr(value, stateful_names, from_class);
+        }
+        JsStmt::Expr(e) => rewrite_stateful_calls_expr(e, stateful_names, from_class),
+        JsStmt::Return(Some(e)) => rewrite_stateful_calls_expr(e, stateful_names, from_class),
+        JsStmt::Return(None) => {}
+        JsStmt::If { cond, then_body, else_body } => {
+            rewrite_stateful_calls_expr(cond, stateful_names, from_class);
+            rewrite_stateful_calls(then_body, stateful_names, from_class);
+            rewrite_stateful_calls(else_body, stateful_names, from_class);
+        }
+        JsStmt::While { cond, body } => {
+            rewrite_stateful_calls_expr(cond, stateful_names, from_class);
+            rewrite_stateful_calls(body, stateful_names, from_class);
+        }
+        JsStmt::For { init, cond, update, body } => {
+            rewrite_stateful_calls(init, stateful_names, from_class);
+            rewrite_stateful_calls_expr(cond, stateful_names, from_class);
+            rewrite_stateful_calls(update, stateful_names, from_class);
+            rewrite_stateful_calls(body, stateful_names, from_class);
+        }
+        JsStmt::Loop { body } => {
+            rewrite_stateful_calls(body, stateful_names, from_class);
+        }
+        JsStmt::ForOf { iterable, body, .. } => {
+            rewrite_stateful_calls_expr(iterable, stateful_names, from_class);
+            rewrite_stateful_calls(body, stateful_names, from_class);
+        }
+        JsStmt::Throw(e) => rewrite_stateful_calls_expr(e, stateful_names, from_class),
+        JsStmt::Dispatch { blocks, .. } => {
+            for (_, stmts) in blocks {
+                rewrite_stateful_calls(stmts, stateful_names, from_class);
+            }
+        }
+        JsStmt::Switch { value, cases, default_body } => {
+            rewrite_stateful_calls_expr(value, stateful_names, from_class);
+            for (_, stmts) in cases {
+                rewrite_stateful_calls(stmts, stateful_names, from_class);
+            }
+            rewrite_stateful_calls(default_body, stateful_names, from_class);
+        }
+        JsStmt::Break | JsStmt::Continue | JsStmt::LabeledBreak { .. } => {}
+    }
+}
+
+fn rewrite_stateful_calls_expr(
+    expr: &mut JsExpr,
+    stateful_names: &BTreeSet<String>,
+    from_class: bool,
+) {
+    match expr {
+        JsExpr::Binary { lhs, rhs, .. } | JsExpr::Cmp { lhs, rhs, .. } => {
+            rewrite_stateful_calls_expr(lhs, stateful_names, from_class);
+            rewrite_stateful_calls_expr(rhs, stateful_names, from_class);
+        }
+        JsExpr::LogicalOr { lhs, rhs } | JsExpr::LogicalAnd { lhs, rhs } => {
+            rewrite_stateful_calls_expr(lhs, stateful_names, from_class);
+            rewrite_stateful_calls_expr(rhs, stateful_names, from_class);
+        }
+        JsExpr::Unary { expr: inner, .. }
+        | JsExpr::Not(inner)
+        | JsExpr::PostIncrement(inner)
+        | JsExpr::Spread(inner)
+        | JsExpr::TypeOf(inner)
+        | JsExpr::NonNull(inner)
+        | JsExpr::Cast { expr: inner, .. }
+        | JsExpr::TypeCheck { expr: inner, .. } => {
+            rewrite_stateful_calls_expr(inner, stateful_names, from_class);
+        }
+        JsExpr::Field { object, .. } => rewrite_stateful_calls_expr(object, stateful_names, from_class),
+        JsExpr::Index { collection, index } => {
+            rewrite_stateful_calls_expr(collection, stateful_names, from_class);
+            rewrite_stateful_calls_expr(index, stateful_names, from_class);
+        }
+        JsExpr::Ternary { cond, then_val, else_val } => {
+            rewrite_stateful_calls_expr(cond, stateful_names, from_class);
+            rewrite_stateful_calls_expr(then_val, stateful_names, from_class);
+            rewrite_stateful_calls_expr(else_val, stateful_names, from_class);
+        }
+        JsExpr::ArrayInit(items) | JsExpr::TupleInit(items) => {
+            for item in items.iter_mut() {
+                rewrite_stateful_calls_expr(item, stateful_names, from_class);
+            }
+        }
+        JsExpr::ObjectInit(fields) => {
+            for (_, val) in fields.iter_mut() {
+                rewrite_stateful_calls_expr(val, stateful_names, from_class);
+            }
+        }
+        JsExpr::New { callee, args } => {
+            rewrite_stateful_calls_expr(callee, stateful_names, from_class);
+            for arg in args.iter_mut() {
+                rewrite_stateful_calls_expr(arg, stateful_names, from_class);
+            }
+        }
+        JsExpr::In { key, object } => {
+            rewrite_stateful_calls_expr(key, stateful_names, from_class);
+            rewrite_stateful_calls_expr(object, stateful_names, from_class);
+        }
+        JsExpr::Delete { object, key } => {
+            rewrite_stateful_calls_expr(object, stateful_names, from_class);
+            rewrite_stateful_calls_expr(key, stateful_names, from_class);
+        }
+        JsExpr::ArrowFunction { body, .. } => {
+            rewrite_stateful_calls(body, stateful_names, from_class);
+        }
+        JsExpr::SuperCall(args) | JsExpr::SuperMethodCall { args, .. } => {
+            for arg in args.iter_mut() {
+                rewrite_stateful_calls_expr(arg, stateful_names, from_class);
+            }
+        }
+        JsExpr::SuperSet { value, .. } => rewrite_stateful_calls_expr(value, stateful_names, from_class),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            rewrite_stateful_calls_expr(target, stateful_names, from_class);
+            rewrite_stateful_calls_expr(value, stateful_names, from_class);
+        }
+        JsExpr::GeneratorCreate { args, .. } => {
+            for arg in args.iter_mut() {
+                rewrite_stateful_calls_expr(arg, stateful_names, from_class);
+            }
+        }
+        JsExpr::GeneratorResume(inner) => rewrite_stateful_calls_expr(inner, stateful_names, from_class),
+        JsExpr::Yield(inner) => {
+            if let Some(e) = inner {
+                rewrite_stateful_calls_expr(e, stateful_names, from_class);
+            }
+        }
+        JsExpr::SystemCall { args, .. } => {
+            for arg in args.iter_mut() {
+                rewrite_stateful_calls_expr(arg, stateful_names, from_class);
+            }
+        }
+        JsExpr::Call { callee, args } => {
+            // If the callee is a bare Var that names a stateful runtime function,
+            // replace it with a qualified method call: `_rt.foo(args)` or `this._rt.foo(args)`.
+            if let JsExpr::Var(name) = callee.as_ref() {
+                if stateful_names.contains(name) {
+                    let rt_expr = if from_class {
+                        JsExpr::Field {
+                            object: Box::new(JsExpr::This),
+                            field: "_rt".into(),
+                        }
+                    } else {
+                        JsExpr::Var("_rt".into())
+                    };
+                    *callee = Box::new(JsExpr::Field {
+                        object: Box::new(rt_expr),
+                        field: name.clone(),
+                    });
+                }
+            }
+            // Recurse into callee and args (callee may have been replaced, recurse anyway).
+            rewrite_stateful_calls_expr(callee, stateful_names, from_class);
+            for arg in args.iter_mut() {
+                rewrite_stateful_calls_expr(arg, stateful_names, from_class);
+            }
+        }
+        // Leaf nodes — nothing to recurse into.
+        JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This
+        | JsExpr::SuperGet(_) | JsExpr::Activation => {}
+    }
+}
+
 /// Prepend a runtime argument to calls to free functions.
 ///
 /// When `from_class` is true, prepends `this._rt`; when false, prepends `_rt`.
@@ -3329,6 +3527,10 @@ fn prepend_rt_arg_expr(
             }
         }
         JsExpr::SuperSet { value, .. } => prepend_rt_arg_expr(value, free_func_names, from_class),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            prepend_rt_arg_expr(target, free_func_names, from_class);
+            prepend_rt_arg_expr(value, free_func_names, from_class);
+        }
         JsExpr::GeneratorCreate { args, .. } => {
             for arg in args.iter_mut() {
                 prepend_rt_arg_expr(arg, free_func_names, from_class);

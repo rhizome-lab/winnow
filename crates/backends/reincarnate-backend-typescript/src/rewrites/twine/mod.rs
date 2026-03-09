@@ -215,6 +215,10 @@ fn rewrite_expr_children(expr: &mut JsExpr, closures: &HashMap<String, JsFunctio
             }
         }
         JsExpr::NonNull(inner) => rewrite_expr(inner, closures),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            rewrite_expr(target, closures);
+            rewrite_expr(value, closures);
+        }
         JsExpr::Activation => {}
         JsExpr::SystemCall { args, .. } => {
             for arg in args {

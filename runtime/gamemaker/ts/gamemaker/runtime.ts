@@ -507,17 +507,7 @@ export class GameRuntime {
   // Sprites enum (per-runtime)
   Sprites: Record<string, number> = {};
 
-  constructor() {
-    // Bind all prototype methods so they work when destructured off _rt.
-    // Game code does `const { randomize, draw_sprite, ... } = _rt` and calls
-    // them without a receiver — auto-binding ensures `this` is always correct.
-    const proto = Object.getPrototypeOf(this);
-    for (const key of Object.getOwnPropertyNames(proto)) {
-      if (key !== 'constructor' && typeof (this as any)[key] === 'function') {
-        (this as any)[key] = (this as any)[key].bind(this);
-      }
-    }
-  }
+  constructor() {}
 
   // ---- Draw API helpers ----
 

@@ -113,11 +113,17 @@ fn rewrite_stmt(
             rewrite_expr(target, sprite_names, object_names, closure_bodies, event_name);
             rewrite_expr(value, sprite_names, object_names, closure_bodies, event_name);
             try_resolve_sprite_assign(target, value, sprite_names);
+            // GML auto-creates arrays on first indexed write; TypeScript requires
+            // explicit initialization.  When the target is `this.field[i]`, wrap
+            // the collection as `(this.field ??= [])` so the field is initialized
+            // to an empty array if it is undefined at the time of the write.
+            try_null_coalesce_self_array_collection(target);
         }
         JsStmt::CompoundAssign { target, value, .. } => {
             rewrite_expr(target, sprite_names, object_names, closure_bodies, event_name);
             rewrite_expr(value, sprite_names, object_names, closure_bodies, event_name);
             try_resolve_sprite_assign(target, value, sprite_names);
+            try_null_coalesce_self_array_collection(target);
         }
         JsStmt::Expr(e) => {
             // Intercept global set with constant key → global.field = val
@@ -295,6 +301,37 @@ fn try_resolve_sprite_assign(target: &JsExpr, value: &mut JsExpr, sprite_names: 
             };
         }
     }
+}
+
+/// If `target` is `this.field[i]`, wrap `collection` as `(this.field ??= [])`.
+///
+/// GML auto-creates arrays on first indexed write: `self.arr[0] = v` works
+/// even when `arr` is undefined.  TypeScript requires the field to already be
+/// an array; reading `undefined[0]` throws at runtime.  We rewrite the index
+/// target so that the field is lazily initialized to `[]` on the first write.
+///
+/// The rewrite turns `this.field[i] = v` into `(this.field ??= [])[i] = v`,
+/// matching GML semantics without requiring a separate initializer statement.
+///
+/// Only applies when:
+/// - The target is an `Index` expression.
+/// - The collection of that index is a `Field` on `This` (not an arbitrary expr).
+/// - The collection has not already been wrapped (idempotent guard).
+fn try_null_coalesce_self_array_collection(target: &mut JsExpr) {
+    let JsExpr::Index { collection, .. } = target else { return };
+    // Already wrapped — idempotent.
+    if matches!(collection.as_ref(), JsExpr::NullCoalesceAssign { .. }) {
+        return;
+    }
+    // Only rewrite direct `this.field` access, not arbitrary sub-expressions.
+    if !matches!(collection.as_ref(), JsExpr::Field { object, .. } if matches!(object.as_ref(), JsExpr::This)) {
+        return;
+    }
+    let field_expr = std::mem::replace(collection, Box::new(JsExpr::Literal(reincarnate_core::ir::value::Constant::Int(0))));
+    *collection = Box::new(JsExpr::NullCoalesceAssign {
+        target: field_expr,
+        value: Box::new(JsExpr::ArrayInit(vec![])),
+    });
 }
 
 fn rewrite_expr(
@@ -543,6 +580,10 @@ fn rewrite_expr_children(
             }
         }
         JsExpr::NonNull(inner) => rewrite_expr(inner, sprite_names, object_names, closure_bodies, event_name),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            rewrite_expr(target, sprite_names, object_names, closure_bodies, event_name);
+            rewrite_expr(value, sprite_names, object_names, closure_bodies, event_name);
+        }
         JsExpr::Activation => {}
         JsExpr::SystemCall { args, .. } => {
             for arg in args {
@@ -1017,6 +1058,10 @@ fn coerce_bool_expr(expr: &mut JsExpr, sigs: &BTreeMap<String, ExternalMethodSig
             for arg in args {
                 coerce_bool_expr(arg, sigs);
             }
+        }
+        JsExpr::NullCoalesceAssign { target, value } => {
+            coerce_bool_expr(target, sigs);
+            coerce_bool_expr(value, sigs);
         }
         JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This | JsExpr::Activation | JsExpr::SuperGet(_) => {}
     }

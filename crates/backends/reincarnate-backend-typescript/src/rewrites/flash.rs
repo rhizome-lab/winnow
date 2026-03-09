@@ -398,6 +398,10 @@ fn collect_expr_vars(expr: &JsExpr, out: &mut HashSet<String>) {
         JsExpr::ArrowFunction { body, .. } => {
             collect_stmts_vars(body, out);
         }
+        JsExpr::NullCoalesceAssign { target, value } => {
+            collect_expr_vars(target, out);
+            collect_expr_vars(value, out);
+        }
     }
 }
 
@@ -574,6 +578,10 @@ fn rewrite_this_to_prototype(expr: &mut JsExpr, class_name: &str) {
         }
         // Arrow functions in super() args are extremely rare; skip recursion.
         JsExpr::ArrowFunction { .. } => {}
+        JsExpr::NullCoalesceAssign { target, value } => {
+            rewrite_this_to_prototype(target, class_name);
+            rewrite_this_to_prototype(value, class_name);
+        }
         // Leaves: no recursion needed.
         JsExpr::Literal(_)
         | JsExpr::Var(_)
@@ -1015,6 +1023,13 @@ fn rewrite_expr(expr: JsExpr, ctx: &FlashRewriteCtx) -> JsExpr {
             cast_as,
             infer_param_types,
         },
+
+        // NullCoalesceAssign is a GML-only construct emitted by the GML rewrite pass.
+        // Flash never emits it — pass through unchanged.
+        JsExpr::NullCoalesceAssign { target, value } => JsExpr::NullCoalesceAssign {
+            target: Box::new(rewrite_expr(*target, ctx)),
+            value: Box::new(rewrite_expr(*value, ctx)),
+        },
     }
 }
 
@@ -1418,6 +1433,10 @@ fn bind_method_refs_expr(expr: &mut JsExpr, bindable: &HashSet<String>, in_calle
         JsExpr::ArrowFunction { body, .. } => {
             bind_method_refs_stmts(body, bindable);
         }
+        JsExpr::NullCoalesceAssign { target, value } => {
+            bind_method_refs_expr(target, bindable, false);
+            bind_method_refs_expr(value, bindable, false);
+        }
         JsExpr::Literal(_)
         | JsExpr::Var(_)
         | JsExpr::This
@@ -1488,6 +1507,9 @@ fn expr_references_var(expr: &JsExpr, name: &str) -> bool {
         JsExpr::SuperSet { value, .. } => expr_references_var(value, name),
         JsExpr::Yield(opt) => opt.as_ref().is_some_and(|e| expr_references_var(e, name)),
         JsExpr::ArrowFunction { body, .. } => stmts_reference_var(body, name),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            expr_references_var(target, name) || expr_references_var(value, name)
+        }
     }
 }
 
@@ -1723,6 +1745,10 @@ fn eliminate_dead_activations_in_expr(expr: &mut JsExpr) {
         }
         JsExpr::SuperSet { value, .. } => eliminate_dead_activations_in_expr(value),
         JsExpr::Yield(Some(e)) => eliminate_dead_activations_in_expr(e),
+        JsExpr::NullCoalesceAssign { target, value } => {
+            eliminate_dead_activations_in_expr(target);
+            eliminate_dead_activations_in_expr(value);
+        }
         JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This | JsExpr::Activation
         | JsExpr::SuperGet(_) | JsExpr::Yield(None) => {}
     }
