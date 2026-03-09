@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::cursor::Cursor;
 use crate::error::Result;
 
@@ -33,8 +35,14 @@ pub struct TexturePageItem {
 /// Parsed TPAG chunk.
 #[derive(Debug)]
 pub struct Tpag {
-    /// Texture page items.
+    /// Texture page items, in order.
     pub items: Vec<TexturePageItem>,
+    /// Maps absolute file pointer → 0-based item index.
+    ///
+    /// GMS1 SPRT entries reference TPAG items by their absolute file offset (pointer),
+    /// not by 0-based index. Use this map to convert a raw SPRT `tpag_indices` value
+    /// to the corresponding index into `items`.
+    pub pointer_to_index: HashMap<u32, u32>,
 }
 
 impl Tpag {
@@ -50,9 +58,11 @@ impl Tpag {
         let pointers = c.read_pointer_list()?;
 
         let mut items = Vec::with_capacity(pointers.len());
-        for ptr in pointers {
+        let mut pointer_to_index = HashMap::with_capacity(pointers.len());
+        for (idx, ptr) in pointers.iter().enumerate() {
+            pointer_to_index.insert(*ptr, idx as u32);
             let mut ec = Cursor::new(data);
-            ec.seek(ptr as usize);
+            ec.seek(*ptr as usize);
 
             let source_x = ec.read_u16()?;
             let source_y = ec.read_u16()?;
@@ -81,7 +91,7 @@ impl Tpag {
             });
         }
 
-        Ok(Self { items })
+        Ok(Self { items, pointer_to_index })
     }
 
     /// Entry size in bytes (useful for serialization).

@@ -77,6 +77,10 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
         Ok(s) => s,
         Err(_) => return,
     };
+    // In GMS1, SPRT frame entries store raw absolute file offsets (pointers) into the TPAG
+    // chunk, not 0-based indices. Resolve them via the pointer_to_index map so that emitted
+    // `textures` arrays contain the correct 0-based index into `textures[]`.
+    let tpag_ptr_map = dw.tpag().ok().map(|t| &t.pointer_to_index);
 
     let mut out = String::new();
     out.push_str("export interface Sprite {\n");
@@ -90,7 +94,15 @@ fn generate_sprites(dw: &DataWin, catalog: &mut AssetCatalog) {
 
     for sprite in &sprt.sprites {
         let name = dw.resolve_string(sprite.name).unwrap_or_else(|_| "???".into());
-        let tpag_str: Vec<String> = sprite.tpag_indices.iter().map(|i| i.to_string()).collect();
+        // Convert each raw pointer to a 0-based TPAG index.
+        // If the map is missing (no TPAG chunk, unlikely) fall back to the raw value.
+        let tpag_str: Vec<String> = sprite.tpag_indices.iter().map(|ptr| {
+            let idx = tpag_ptr_map
+                .and_then(|m| m.get(ptr))
+                .copied()
+                .unwrap_or(*ptr);
+            idx.to_string()
+        }).collect();
         let _ = writeln!(
             out,
             "  {{ name: {:?}, size: {{ width: {}, height: {} }}, origin: {{ x: {}, y: {} }}, bbox: {{ left: {}, right: {}, top: {}, bottom: {} }}, textures: [{}] }},",
@@ -185,8 +197,13 @@ fn generate_fonts(dw: &DataWin, catalog: &mut AssetCatalog) {
 
     for entry in &font.fonts {
         let name = dw.resolve_string(entry.name).unwrap_or_else(|_| "???".into());
-        // The font's tpag_index points into TPAG which tells us which texture sheet.
-        let texture_idx = entry.tpag_index;
+        // The font's tpag_index is a raw absolute file pointer to a TPAG entry (GMS1).
+        // Resolve it to a 0-based index via the pointer_to_index map.
+        let texture_idx = tpag
+            .pointer_to_index
+            .get(&entry.tpag_index)
+            .copied()
+            .unwrap_or(entry.tpag_index);
 
         let _ = writeln!(out, "  {{ name: {:?}, size: {}, texture: {texture_idx}, chars: [", name, entry.size);
         for glyph in &entry.glyphs {
@@ -204,9 +221,6 @@ fn generate_fonts(dw: &DataWin, catalog: &mut AssetCatalog) {
     }
 
     out.push_str("];\n");
-
-    // Suppress unused variable warning for tpag
-    let _ = &tpag;
 
     catalog.add(Asset {
         id: "data_fonts".into(),
