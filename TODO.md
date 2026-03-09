@@ -657,7 +657,7 @@ Batch-emitting 7 new games from the Steam library exposed 4 distinct bugs:
   pushac target, or (b) the TS printer detecting integer-as-collection in SetIndex and routing
   to a GameMaker.setIndex runtime call. Only 6 errors in Schism, low priority.
 
-### 7. Dead Estate remaining TS errors — 125 as of 2026-03-10 (after GmlBoolArithCoerce)
+### 7. Dead Estate remaining TS errors — 117 as of 2026-03-10 (after GmlBoolArithCoerce + Fix A/C)
 
 Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 → 2108 → 946 (cross-obj 2D read fix) → 883 (ClassRef + OBJT constructor type fix) → 596 (CallSiteTypeWiden: −284 TS2345) → 573 (BoolAnd/BoolOr IR ops) → 561 (BrIf cascade via reachability-aware const map) → 559 (fold_cast Bool→Bool + ends_with_terminal fall-through switch) → 472 (wrap ClassRef GlobalRef with `as any`) → 345 (also fix lazy-inline ClassRef path) → 335 (ClassRef→any in ts_type + GlobalRef always-inline) → 282 (CallSiteTypeWiden zero-caller: `_self: number` in closures fixed) → 307 (NorthPassage regression from Switch SE inline fix; 3 TS2304 fixed) → 285 (arith_val: Bool→Number coercion in arithmetic ops; 22 fixed) → 281 (runtime createCanvas/resizeCanvas stale calls fixed) → 248 (collect_block_param_decls reads value_types instead of BlockParam.ty; removed arith_val and all Bool-coercion hacks from core linearizer; TS2362 now correctly surfaces as intended diagnostics) → 222 (GmlLogicalOpNormalize: `else_target == merge_target` guard prevents if-then mis-identified as `||`; TS2322 38→6) → 183 (Uint8Array TS5.9 compat + steam/psn persistence string↔bytes + sprite_index sentinel + loadImage local def) → 176 (object_exists accepts number; z/mask_index in GMLObject; initialRoom template substitution) → 181 (reverted instance_exists(number): those errors are correct diagnostics of instance_place/instance_find returning number instead of GMLObject|null — fix belongs in type inference, not runtime signature) → 206 (2026-03-09 session: instance_type_flow Ne fix, record_depth min, runtime physics/particles/string/irandom fixes, NullableCoerce rename, GetField on Union; count increased due to newly-surfaced IR from br() arg mismatch warnings + record_depth changes) → 192 (2026-03-09: (as any) instanceof prevents TS never-narrowing in Wall class; scan_body_local_names uses live locals map fixing on-the-fly capture gap for TS2304) → 191 (2026-03-09: `(target as unknown) === -4` in instance_exists suppresses TS2367) → 186 (2026-03-09: CallSiteArityWiden pass — GML loose calling convention; 5 TS2554 eliminated) → 186 (2026-03-09: resolve_classref_args backend rewrite — GMS1 integer object indices → class names; 31 classref params in runtime.json; Bounty 48→13 TS errors. Fixed regression: parse_type_notation("classref") now maps to Dynamic instead of Struct("classref"), preventing `argument0: classref` TS type annotations in callee params).
 → 6199 (af06ab3 preamble removal regression: `global`/`other`/`__SetStatic__` etc. no longer rewritten)
@@ -670,6 +670,7 @@ Progress: 12350 → 4151 → 3341 → 2112 → 879 → 743 → 2927 → 1622 →
 → 172 (2026-03-10: return X inside with — TS2367; has_exit_popenv + with_body_has_return in TranslateCtx; withInstances returns any).
 → 140 (2026-03-10: widen getInstanceField/setInstanceField/setInstanceFieldIndex to accept number; −32 TS2345).
 → 125 (2026-03-10: GmlBoolArithCoerce pass — Cast(Bool→Float) before bool arithmetic operands → Number(expr); −15).
+→ 117 (2026-03-10: GmlBoolArithCoerce Fix A (Bool-returning callee in arithmetic) + Fix C (Br/BrIf bool→numeric block-param args) + IntToBoolPromotion ordered before coerce pass; −8).
 
 CallSiteTypeWiden: ConstraintSolve narrows params via body constraints (e.g. `cmp.eq(i64_val, param)`)
 but callers may pass incompatible types (ClassRef vs Int). The widening pass detects these conflicts
@@ -678,17 +679,15 @@ sig.params, because ConstraintSolve only updates entry.params[i].ty and value_ty
 
 | Code | Count | Root cause |
 |------|-------|------------|
-| TS2345 | 108 | 32 number→GMLObject; 18 string→number; 12 GMLObject\|null→number; 12 GMLObject→number; 10 number→string; 7 bool→number; rest misc. All game-author GML weak-typing bugs. |
+| TS2345 | 76 | Game-author GML weak-typing bugs (number↔GMLObject, string↔number, bool↔number, etc.). |
 | TS2322 | 14 | 7 bool→number; 2 GMLObject→number; 2 number[]→number; 1 string→number; 1 number→any[]; 1 bool→number\|GMLObject. All game-author type bugs from GML's weak typing. |
 | TS2339 | 14 | `length` on type `number` or `-4` — variable typed as number but treated as array/string |
-| TS2362 | 15 | Bool-typed operand in arithmetic — **intended diagnostic** (game author using bool in arithmetic) |
-| TS2365 | 13 | Operator `+` on bool/GMLObject — **intended diagnostic** (game author using bool/obj in arithmetic) |
-| TS2367 | 5 | Comparison with void — functions that use `return` inside `with` block inferred as void |
-| TS2554 | 0 | Fixed by CallSiteArityWiden pass (2026-03-09) |
-| TS2363 | 4 | Right side of arithmetic — Bool in operator context (intended diagnostic) |
+| TS2362 | 7 | Bool-typed operand in arithmetic — **intended diagnostic** (game author using bool in arithmetic). Remaining: `point_in_rectangle` not in function_signatures so call result is `dyn`. |
+| TS2365 | 1 | Operator `+` on bool/GMLObject — **intended diagnostic**. Remaining: `point_in_rectangle` return type. |
+| TS2363 | 1 | Right side of arithmetic — Bool in operator context (intended diagnostic) |
 | TS2872 | 2 | Always truthy expression (emitter `!(!const)` pattern — pre-existing) |
 | TS2304 | 0 | Fixed: scan_body_local_names; global/other/SetStatic/etc. rewritten to _rt.X (2026-03-09) |
-| TS2552 | 1 | Cannot find name — `sarr` (SSA name leakage) |
+| TS2552 | 0 | Fixed: cross-scope SE inline hoisting |
 | TS7027 | 2 | Unreachable code — game-author bugs (pre-existing) |
 
 **TS2345 integer class index resolution (fixed 2026-03-09):** The 91 "number not assignable to GMLObject" diagnostics introduced at 278 were a pipeline bug: `strip_int_coerce` only stripped `Cast{ty:Int(32), kind:Coerce}` but GML bytecode also emits `coerce i64_const, dyn` (`Cast{ty:Dynamic}`), hiding the constant integer from `resolve_instance_target`. Fixed by widening `strip_int_coerce` to also strip `Cast{ty:Dynamic,kind:Coerce}`, extending the import collector's `const_ints` map to follow dyn-coerce chains, and fixing `getOn` to call `resolve_instance_target` for integer args (was missing entirely). 50 errors fixed (278→228).
@@ -1078,7 +1077,7 @@ Reference: UndertaleModTool `AdaptAssetType` / `AdaptAssetTypeId` in `UndertaleC
 | 12 is Better Than 6 | `game.unx` 179MB | ⚠️ emits (TS errors TBD) |
 | Cauldron | `data.win` 169MB | ❌ YYC |
 | CookServeDelicious2 | `game.unx` 805MB | ❌ EOF parse error in CODE (same as Forager) |
-| Dead Estate | `data.win` 192MB | ⚠️ 178 TS errors + 1 translation error (2026-03-10) |
+| Dead Estate | `data.win` 192MB | ⚠️ 117 TS errors + 1 translation error (2026-03-10) |
 | Downwell | `data.win` 27MB | ❌ TXTR external textures |
 | Forager | `game.unx` 78MB | ❌ EOF parse error in CODE |
 | Just Hit The Button | `data.win` 1MB | ✅ emits (TS errors TBD) |
