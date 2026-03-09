@@ -177,8 +177,8 @@ impl Frontend for GameMakerFrontend {
             runtime_variant: None,
             extra_passes: vec![
                 Box::new(default_arg::GmlDefaultArgRecovery),
-                Box::new(bool_arith_coerce::GmlBoolArithCoerce),
                 Box::new(reincarnate_core::transforms::IntToBoolPromotion),
+                Box::new(bool_arith_coerce::GmlBoolArithCoerce),
                 Box::new(logical_op::GmlLogicalOpNormalize),
                 Box::new(instance_type_flow::GmlInstanceTypeFlow {
                     obj_names: obj_names_set,
