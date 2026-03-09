@@ -44,30 +44,33 @@ export function createInstanceAPI(rt: GameRuntime) {
   }
 
   /** Execute a block for each instance of a given type (or all).
-   * Sets rt._self to the current with-target so alarm_set/event_user work correctly. */
+   * Sets rt._self to the current with-target so alarm_set/event_user work correctly.
+   * Returns the last callback return value (supports GML `return X` inside `with`). */
   function withInstances<T extends GMLObject>(
     target: (new(...args: any[]) => T) | T | number,
-    callback: (inst: T) => void,
-  ): void {
+    callback: (inst: T) => any,
+  ): any {
     const prevSelf = rt._self;
+    let result: any;
     if (typeof target === 'function') {
       // class constructor — iterate all instances of this class
       for (const inst of rt.roomVariables.slice()) {
         if (inst instanceof (target as Function)) {
-          rt._self = inst; callback(inst as T);
+          rt._self = inst; result = callback(inst as T);
         }
       }
     } else if (target === -1) {
       for (const inst of rt.roomVariables.slice()) {
-        rt._self = inst; callback(inst as T);
+        rt._self = inst; result = callback(inst as T);
       }
     } else if (target === -2) {
       // other — handled by caller
     } else if (target instanceof GMLObject) {
       // specific instance
-      rt._self = target; callback(target as T);
+      rt._self = target; result = callback(target as T);
     }
     rt._self = prevSelf;
+    return result;
   }
 
   return {

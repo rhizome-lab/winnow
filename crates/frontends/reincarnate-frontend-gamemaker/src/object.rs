@@ -122,6 +122,7 @@ pub fn translate_objects(
                         ancestor_indices: build_ancestor_chain(&objt.objects, obj_idx),
                         script_names,
                         is_with_body: false,
+                        with_body_has_return: false,
                         bytecode_version: bc_version,
                     };
 

@@ -293,6 +293,7 @@ fn translate_scripts(
             ancestor_indices: HashSet::new(),
             script_names,
             is_with_body: false,
+            with_body_has_return: false,
             bytecode_version: bc_version,
         };
 
@@ -370,6 +371,7 @@ fn translate_global_inits(
             ancestor_indices: HashSet::new(),
             script_names,
             is_with_body: false,
+            with_body_has_return: false,
             bytecode_version: bc_version,
         };
 
@@ -447,6 +449,7 @@ fn translate_room_creation(
             ancestor_indices: HashSet::new(),
             script_names,
             is_with_body: false,
+            with_body_has_return: false,
             bytecode_version: bc_version,
         };
 

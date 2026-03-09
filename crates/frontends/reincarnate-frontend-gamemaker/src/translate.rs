@@ -58,6 +58,12 @@ pub struct TranslateCtx<'a> {
     /// In this context, a PopEnv instruction is an early-exit signal — the outer with-loop
     /// is managed by `withInstances`, so we do NOT emit `withEnd()` for PopEnv.
     pub is_with_body: bool,
+    /// True when the with-body closure uses the "return X inside with" pattern
+    /// (the closure has a sentinel-offset exit PopEnv as its *sole* exit path).
+    /// When set, sentinel-offset PopEnv inside the closure falls through to the
+    /// continuation block (which loads the return value and emits `return v`)
+    /// instead of emitting `return void`.
+    pub with_body_has_return: bool,
     /// Bytecode version from GEN8. Used to guard version-specific behaviours
     /// (GMS2.3+ Break signals, Dup swap-mode encoding, etc.).
     pub bytecode_version: reincarnate_datawin::BytecodeVersion,
@@ -984,6 +990,31 @@ struct WithBodyCtx<'a> {
     /// Class name of the `with`-target if it was a typed OBJT pushref.
     /// When set, the `_self` parameter and `inner_ctx.class_name` are typed accordingly.
     instance_class: Option<&'a str>,
+    /// True when `body_insts` contains an exit PopEnv (sentinel Branch offset ≈ -4194304).
+    /// This is the GML `return X inside with` pattern: the closure should return Dynamic
+    /// and the outer function should `return withInstances(...)`.
+    has_return_in_with: bool,
+}
+
+/// Detect GML "return X inside with" pattern.
+///
+/// True when `body_insts` contains an exit PopEnv (sentinel branch offset ≈ -4194304)
+/// AND has no conditional branches (Bt/Bf).  The latter condition ensures the exit
+/// PopEnv is the *sole* exit from the body — every code path ends there — so the
+/// closure's return type can safely be narrowed from void to Dynamic.
+///
+/// When conditional branches exist (loops, if/else), other code paths may fall
+/// through without returning a value.  Changing the closure's return type in that
+/// case causes TypeScript TS2366 ("function lacks ending return statement").
+fn has_exit_popenv(body_insts: &[Instruction]) -> bool {
+    let has_sentinel = body_insts.iter().any(|inst| {
+        inst.opcode == Opcode::PopEnv
+            && matches!(inst.operand, Operand::Branch(off) if off < -1_000_000)
+    });
+    let has_branches = body_insts
+        .iter()
+        .any(|inst| matches!(inst.opcode, Opcode::Bt | Opcode::Bf));
+    has_sentinel && !has_branches
 }
 
 fn translate_with_body(
@@ -996,9 +1027,16 @@ fn translate_with_body(
         .instance_class
         .map(|n| Type::Struct(n.to_string()))
         .unwrap_or(Type::Dynamic);
+    // Use Dynamic return type when the body contains "return X inside with" pattern
+    // (exit PopEnv with sentinel Branch offset). TypeInference will refine further.
+    let closure_return_ty = if wctx.has_return_in_with {
+        Type::Dynamic
+    } else {
+        Type::Void
+    };
     let sig = FunctionSig {
         params: vec![self_ty], // _self
-        return_ty: Type::Void,
+        return_ty: closure_return_ty,
         ..Default::default()
     };
     let mut fb = FunctionBuilder::new(wctx.inner_name, sig, Visibility::Public);
@@ -1064,6 +1102,7 @@ fn translate_with_body(
         // This IS a with-body closure — PopEnv inside is an early-exit signal,
         // not a loop-control instruction (the loop is managed by withInstances).
         is_with_body: true,
+        with_body_has_return: wctx.has_return_in_with,
         bytecode_version: ctx.bytecode_version,
     };
 
@@ -1229,6 +1268,11 @@ fn run_translation_loop(
                 let instance_class: Option<&str> =
                     obj_ref_values.get(&target_obj).map(String::as_str);
 
+                // Detect "return X inside with" pattern: an exit PopEnv with sentinel
+                // branch offset exists in body_insts. In this case the closure should
+                // return Dynamic and the outer function should return withInstances(…).
+                let has_return_in_with = has_exit_popenv(body_insts);
+
                 // Build the inner closure function (may recursively extract nested withs).
                 let inner_name = format!("{func_name}_with_{:04x}", inst.offset);
                 let inner_func = translate_with_body(
@@ -1239,37 +1283,50 @@ fn run_translation_loop(
                         captured_names: &captured_names,
                         has_outer_self,
                         instance_class,
+                        has_return_in_with,
                     },
                     extra_funcs,
                 )?;
                 extra_funcs.push(inner_func);
 
-                // Emit: withInstances(target, closure)
+                // Emit: withInstances(target, closure).
+                // When the closure uses "return X inside with", type the call as Dynamic
+                // so the outer function can propagate the return value.
                 let closure_val =
                     fb.make_closure(&inner_name, &capture_vals, Type::Dynamic);
-                fb.system_call(
+                let with_return_ty = if has_return_in_with {
+                    Type::Dynamic
+                } else {
+                    Type::Void
+                };
+                let with_result = fb.system_call(
                     "GameMaker.Instance",
                     "withInstances",
                     &[target_obj, closure_val],
-                    Type::Void,
+                    with_return_ty,
                 );
 
-                // Branch unconditionally to the post-with block.
-                let post_with_idx = popenv_idx + 1;
-                if post_with_idx < instructions.len() {
-                    let post_with_off = instructions[post_with_idx].offset;
-                    let fall_block =
-                        block_map.get(&post_with_off).copied().ok_or_else(|| {
-                            format!(
-                                "{func_name}: no block at post-with offset {post_with_off:#x}"
-                            )
-                        })?;
-                    let depth =
-                        block_entry_depths.get(&post_with_off).copied().unwrap_or(0);
-                    let args = get_branch_args(&stack, depth);
-                    fb.br(fall_block, &args);
+                if has_return_in_with {
+                    // The closure returns the with-body's return value; propagate it.
+                    fb.ret(Some(with_result));
                 } else {
-                    fb.ret(None);
+                    // Branch unconditionally to the post-with block.
+                    let post_with_idx = popenv_idx + 1;
+                    if post_with_idx < instructions.len() {
+                        let post_with_off = instructions[post_with_idx].offset;
+                        let fall_block =
+                            block_map.get(&post_with_off).copied().ok_or_else(|| {
+                                format!(
+                                    "{func_name}: no block at post-with offset {post_with_off:#x}"
+                                )
+                            })?;
+                        let depth =
+                            block_entry_depths.get(&post_with_off).copied().unwrap_or(0);
+                        let args = get_branch_args(&stack, depth);
+                        fb.br(fall_block, &args);
+                    } else {
+                        fb.ret(None);
+                    }
                 }
                 terminated = true;
                 // Skip the body instructions and the PopEnv; resume after PopEnv.
@@ -2105,13 +2162,34 @@ fn translate_instruction(
             }
         }
         Opcode::PopEnv => {
-            if let Operand::Branch(_) = inst.operand {
+            if let Operand::Branch(off) = inst.operand {
                 if ctx.is_with_body {
-                    // Inside a with-body closure, PopEnv is an early-exit signal
-                    // (e.g., `return` or `break` inside a `with` body). The outer
-                    // iteration is managed by withInstances — just return from the
-                    // closure. Any subsequent RET will be in a dead block (DCE cleans
-                    // it up).
+                    // Inside a with-body closure, PopEnv is an early-exit signal.
+                    //
+                    // Case 1: sentinel branch offset (≈ -4194304) — GML "return X inside
+                    // with". The value was stored to a local before this PopEnv; the
+                    // fall-through block (next instruction in body_insts) loads that local
+                    // and emits the actual return. Branch to it so the closure returns
+                    // the value and withInstances can propagate it to the outer function.
+                    //
+                    // Case 2: normal PopEnv (break/continue) — return void from the
+                    // closure. withInstances handles loop termination.
+                    if ctx.with_body_has_return && off < -1_000_000 {
+                        // Exit PopEnv (return X inside with): fall through to the
+                        // continuation block that loads the return value and returns it.
+                        if let Some(next_inst) = instructions.get(inst_idx + 1) {
+                            if let Some(&fall_block) = block_map.get(&next_inst.offset) {
+                                let depth = block_entry_depths
+                                    .get(&next_inst.offset)
+                                    .copied()
+                                    .unwrap_or(0);
+                                let args = get_branch_args(stack, depth);
+                                fb.br(fall_block, &args);
+                                *terminated = true;
+                                return Ok(());
+                            }
+                        }
+                    }
                     fb.ret(None);
                 } else {
                     // Unmatched PopEnv (sibling of an unmatched PushEnv in the same
@@ -3323,6 +3401,7 @@ mod tests {
             ancestor_indices: HashSet::new(),
             script_names,
             is_with_body: false,
+            with_body_has_return: false,
             // Tests exercise GMS2.3+ bytecode by default (shared blobs, Break signals, etc.).
             bytecode_version: reincarnate_datawin::BytecodeVersion(17),
         }
