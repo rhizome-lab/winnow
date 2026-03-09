@@ -395,6 +395,14 @@ generic unknown-call spam.
 
 ## Future
 
+- [ ] **Game icon extraction → web favicon** — Extract game icon from engine-specific location and
+  set as `<link rel="icon">` in the emitted `index.html`. Current state: nothing exists.
+  - GameMaker: icon stored in OPTN chunk of data.win; OPTN parser reads flags/constants but not icon binary. Needs Win32 .ico / bitmap parsing. ~200 LOC.
+  - Flash: icons are regular image assets (DefineBits/DefineBitsLossless) — no semantic distinction from sprites. Heuristic: smallest/first image.
+  - Phase 1 (trivial): Add favicon tag to HTML scaffold (`scaffold.rs`), accept optional icon path param.
+  - Phase 2 (easy): Add `icon: Option<AssetMapping>` field to `ProjectManifest`; wire through emission.
+  - Phase 3 (medium): Parse GameMaker OPTN icon; add `AssetKind::Icon` variant; mark in Flash extractor.
+
 - [ ] **Split OPFS out of localStorage backend** — `runtime/gamemaker/ts/shared/platform/persistence.ts` currently bakes OPFS in as a fire-and-forget side effect of localStorage writes. Per the persistence design, OPFS should be its own backend composed via `tee(localStorage, opfs)`. Split into `persistence/localstorage.ts` + `persistence/opfs.ts`, wire with `tee()` in `platform/index.ts`. Twine platform (`runtime/twine/ts/platform/persistence.ts`) is localStorage-only and will benefit from the same split.
 
 - [ ] **Cloud save backends** — Platform persistence interface already abstracts save/load/remove; swapping the backend is just a different platform implementation. Candidates: OneDrive, Google Drive, Dropbox, S3/R2/B2. Design: `platform/onedrive.ts`, `platform/gdrive.ts`, etc., each re-exporting the same persistence interface. Config: deployer switches backend by changing re-export in `platform/index.ts`.
