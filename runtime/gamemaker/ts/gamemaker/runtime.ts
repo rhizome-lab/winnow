@@ -672,7 +672,11 @@ export class GameRuntime {
     ctx.restore();
   }
 
-  draw_self(): void {}
+  draw_self(): void {
+    const self = this._self;
+    if (!self || self.sprite_index < 0 || !self.visible) return;
+    this.drawSprite(self.sprite_index, Math.floor(self.image_index), self.x, self.y, self);
+  }
 
   sprite_get_width(spriteIndex: number): number {
     return this.sprites[spriteIndex]?.size.width ?? 0;
@@ -1220,27 +1224,24 @@ export class GameRuntime {
 
   // ---- Instance field helpers ----
 
-  /** Get a field value from the first instance of a given object type. */
-  getInstanceField(cls: typeof GMLObject | number, field: string): any {
-    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
-    if (!clazz) return undefined;
-    const inst = this.roomVariables.find((o) => o instanceof clazz);
+  /** Get a field value from a specific instance or the first instance of a given class. */
+  getInstanceField(cls: GMLObject | typeof GMLObject, field: string): any {
+    if (cls instanceof GMLObject) return (cls as any)[field];
+    const inst = this.roomVariables.find((o) => o instanceof cls);
     return inst ? (inst as any)[field] : undefined;
   }
 
-  /** Set a field value on the first instance of a given object type. */
-  setInstanceField(cls: typeof GMLObject | number, field: string, value: any): void {
-    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
-    if (!clazz) return;
-    const inst = this.roomVariables.find((o) => o instanceof clazz);
+  /** Set a field value on a specific instance or the first instance of a given class. */
+  setInstanceField(cls: GMLObject | typeof GMLObject, field: string, value: unknown): void {
+    if (cls instanceof GMLObject) { (cls as any)[field] = value; return; }
+    const inst = this.roomVariables.find((o) => o instanceof cls);
     if (inst) (inst as any)[field] = value;
   }
 
-  /** Set an indexed element of a field on the first instance of a given object type. */
-  setInstanceFieldIndex(cls: typeof GMLObject | number, field: string, index: number, value: any): void {
-    const clazz = typeof cls === 'function' ? cls : this.classes[cls];
-    if (!clazz) return;
-    const inst = this.roomVariables.find((o) => o instanceof clazz);
+  /** Set an indexed element of a field on a specific instance or the first instance of a given class. */
+  setInstanceFieldIndex(cls: GMLObject | typeof GMLObject, field: string, index: number, value: unknown): void {
+    if (cls instanceof GMLObject) { (cls as any)[field][index] = value; return; }
+    const inst = this.roomVariables.find((o) => o instanceof cls);
     if (inst) (inst as any)[field][index] = value;
   }
 
@@ -1347,18 +1348,21 @@ export class GameRuntime {
   /** GML `other` — the "other" instance in collision/with events. Set by withInstances. */
   other: any = null;
 
-  instance_create<T extends GMLObject>(x: number, y: number, cls: new() => T): T {
-    return this._instanceCreate(x, y, cls);
+  instance_create<T extends GMLObject>(x: number, y: number, cls: (new() => T) | number): T {
+    const resolved = (typeof cls === 'number' ? this.classes[cls] : cls) as new() => T;
+    return this._instanceCreate(x, y, resolved);
   }
 
-  instance_create_depth<T extends GMLObject>(x: number, y: number, depth: number, cls: new() => T): T {
-    const inst = this._instanceCreate(x, y, cls);
+  instance_create_depth<T extends GMLObject>(x: number, y: number, depth: number, cls: (new() => T) | number): T {
+    const resolved = (typeof cls === 'number' ? this.classes[cls] : cls) as new() => T;
+    const inst = this._instanceCreate(x, y, resolved);
     inst.depth = depth;
     return inst;
   }
 
-  instance_create_layer<T extends GMLObject>(x: number, y: number, _layer: any, cls: new() => T): T {
-    return this._instanceCreate(x, y, cls);
+  instance_create_layer<T extends GMLObject>(x: number, y: number, _layer: any, cls: (new() => T) | number): T {
+    const resolved = (typeof cls === 'number' ? this.classes[cls] : cls) as new() => T;
+    return this._instanceCreate(x, y, resolved);
   }
 
   instance_nearest<T extends GMLObject>(x: number, y: number, cls: new() => T): T | null {
