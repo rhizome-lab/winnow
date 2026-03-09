@@ -3357,8 +3357,11 @@ fn rewrite_stateful_calls_expr(
         JsExpr::Call { callee, args } => {
             // If the callee is a bare Var that names a stateful runtime function,
             // replace it with a qualified method call: `_rt.foo(args)` or `this._rt.foo(args)`.
+            // The Var name may be unsanitized (e.g. `@@SetStatic@@`) while `stateful_names`
+            // holds sanitized names (`__SetStatic__`) — sanitize before the lookup.
             if let JsExpr::Var(name) = callee.as_ref() {
-                if stateful_names.contains(name) {
+                let sanitized = sanitize_ident(name);
+                if stateful_names.contains(&sanitized) {
                     let rt_expr = if from_class {
                         JsExpr::Field {
                             object: Box::new(JsExpr::This),
@@ -3369,7 +3372,7 @@ fn rewrite_stateful_calls_expr(
                     };
                     *callee = Box::new(JsExpr::Field {
                         object: Box::new(rt_expr),
-                        field: name.clone(),
+                        field: sanitized,
                     });
                 }
             }
@@ -3378,6 +3381,23 @@ fn rewrite_stateful_calls_expr(
             for arg in args.iter_mut() {
                 rewrite_stateful_calls_expr(arg, stateful_names, from_class);
             }
+        }
+        // `global` and `other` are properties on the runtime, not local variables.
+        // Rewrite bare `global` → `_rt.global` / `this._rt.global`
+        //          and `other`  → `_rt.other`  / `this._rt.other`.
+        JsExpr::Var(name) if name == "global" || name == "other" => {
+            let rt_expr = if from_class {
+                JsExpr::Field {
+                    object: Box::new(JsExpr::This),
+                    field: "_rt".into(),
+                }
+            } else {
+                JsExpr::Var("_rt".into())
+            };
+            *expr = JsExpr::Field {
+                object: Box::new(rt_expr),
+                field: "global".into(),
+            };
         }
         // Leaf nodes — nothing to recurse into.
         JsExpr::Literal(_) | JsExpr::Var(_) | JsExpr::This
